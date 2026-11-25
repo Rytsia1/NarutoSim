@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="NarutoSim Emblem">
+  <rect width="128" height="128" rx="20" fill="#11100e" />
+  <circle cx="64" cy="64" r="46" fill="none" stroke="#c84b31" stroke-width="6" />
+  <path d="M64 26 L74 54 L102 64 L74 74 L64 102 L54 74 L26 64 L54 54 Z" fill="#e6dcc8" />
+  <circle cx="64" cy="64" r="10" fill="#11100e" />
+</svg>
