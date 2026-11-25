@@ -31,6 +31,7 @@ import {
   resolveConvictionDuelRound,
   resolveCrisisBossTurn,
   startConvictionRoute,
+  syncCrisisCoalitionAllies,
 } from './crises';
 import { addLeaning, clampStats, killCharacter, pushLog } from './life';
 import { generateWarChronicle, recordWarFact } from './narrative';
@@ -177,6 +178,69 @@ export function getWarDayProgress(war: WarState): number {
   return clamp((seg + sub) / 7, 0, 1);
 }
 
+export function addEnemyIntel(enemy: WarCompetitor, delta: number): void {
+  enemy.intel = clamp(enemy.intel + delta, 0, 100);
+  if (enemy.intel >= 90) {
+    enemy.skillsRevealed = true;
+  }
+}
+
+export function markEnemyDead(war: WarState, victim: WarCompetitor): void {
+  victim.alive = false;
+  victim.hp = 0;
+  victim.intel = 100;
+  victim.skillsRevealed = true;
+  victim.allyId = null;
+  if (war.allyId === victim.id) {
+    war.allyId = null;
+  }
+  for (const other of war.enemies) {
+    if (other.allyId === victim.id) {
+      other.allyId = null;
+    }
+  }
+}
+
+function syncFallenFromWar(state: GameState, war: WarState): void {
+  for (const e of war.enemies) {
+    if (!e.alive && !e.isExTeammateRogue && !state.fallenRosterIds.includes(e.rosterId)) {
+      state.fallenRosterIds.push(e.rosterId);
+    }
+    if (!e.alive && e.isExTeammateRogue && state.team) {
+      const mate = state.team.members.find((m) => `ex_mate_${m.id}` === e.rosterId);
+      if (mate) {
+        mate.alive = false;
+        mate.fateNote = `Fell during Great Shinobi War #${war.warNumber} at age ${mate.age}.`;
+      }
+    }
+  }
+}
+
+function hasActiveCrisis(war: WarState): boolean {
+  return Boolean(war.crisis && !war.crisis.defeated);
+}
+
+function escalateToCrisisBoss(state: GameState, war: WarState): void {
+  const c = war.crisis!;
+  if (c.phase < 3) {
+    c.phase = 3;
+    syncCrisisCoalitionAllies(war);
+    c.guardsActive = c.id === 'mastermind' ? Math.min(3, c.sentinelsLeft) : 0;
+  } else {
+    syncCrisisCoalitionAllies(war);
+  }
+  war.subPhase = 'final';
+  war.beatQueue = [];
+  war.beatClock = 0;
+  pushLog(
+    state,
+    'crisis',
+    `With the rival field cleared, ${c.bossName} descends into the crater for the decisive confrontation!`,
+    { title: `${c.bossName} Descends!` },
+  );
+  state.pending = buildCrisisBossDecision(state);
+}
+
 const BASE_ARCHETYPES: readonly CombatArchetype[] = [
   'vanguard',
   'marksman',
@@ -269,11 +333,20 @@ export function initWarState(
     enemies.push(createCompetitorFromRoster(chosen, scaleMult, idx + 1));
   });
 
-  // 8th Seat: ex-teammate who went missing_nin OR 15% S-Rank special operative (always on Crisis War)
+  // Special S-Rank slot: Fated Thread S-Rank operative, ex-teammate missing_nin, or 15% S-Rank operative (always on Crisis War)
   const rogueMate = state.team?.members.find(
     (m) => m.role === 'teammate' && m.alive && m.specialStatus === 'missing_nin',
   );
-  if (rogueMate && rng.chance(0.55)) {
+  if (fatedDef && fatedDef.archetype === 'rogue_s') {
+    const comp = createCompetitorFromRoster(fatedDef, isCrisisWar ? 1.0 : scaleMult, 8);
+    if (isCrisisWar && state.world.crisisClues > 0) {
+      addEnemyIntel(comp, Math.min(80, state.world.crisisClues * 16));
+    }
+    enemies.push(comp);
+  } else if (rogueMate && rng.chance(0.55)) {
+    const scaledMateRanks = [4.2, 4.4, 3.9, 4.3, 4.2].map((r) =>
+      clamp(Number((r * scaleMult).toFixed(1)), 1.5, 6.0),
+    ) as [number, number, number, number, number];
     enemies.push({
       id: `en_rogue_${rogueMate.id}`,
       rosterId: `ex_mate_${rogueMate.id}`,
@@ -283,16 +356,16 @@ export function initWarState(
       archetype: 'rogue_s',
       tactic: 'hunter',
       element: state.element,
-      ranks: [4.2, 4.4, 3.9, 4.3, 4.2],
+      ranks: scaledMateRanks,
       skills: [
-        { name: 'Familiar Footwork', tag: 'insight', rank: 4 },
-        { name: 'Rogue Resolve', tag: 'power', rank: 3 },
+        { name: 'Familiar Footwork', tag: 'insight', rank: Math.max(1, Math.round(4 * scaleMult)) },
+        { name: 'Rogue Resolve', tag: 'power', rank: Math.max(1, Math.round(3 * scaleMult)) },
       ],
       ultimate: {
         name: 'Severed Bond Flash',
         role: 'attack',
         scope: 'single',
-        rankVal: 4.8,
+        rankVal: clamp(Number((4.8 * scaleMult).toFixed(1)), 2.8, 5.8),
         cost: 28,
         desc: 'A bitter high-speed strike forged after abandoning the village.',
       },
@@ -321,7 +394,7 @@ export function initWarState(
     const chosenS = rng.pick(sPool.length > 0 ? sPool : fallbackS);
     const comp = createCompetitorFromRoster(chosenS, isCrisisWar ? 1.0 : scaleMult, 8);
     if (isCrisisWar && state.world.crisisClues > 0) {
-      comp.intel = Math.min(80, state.world.crisisClues * 16);
+      addEnemyIntel(comp, Math.min(80, state.world.crisisClues * 16));
     }
     enemies.push(comp);
   }
@@ -434,9 +507,22 @@ export function openDayPhase(state: GameState, rng: SeededRng): void {
   const living = getLivingEnemies(war);
   war.subPhase = 'day';
 
-  // Priority 0: Final Two with Living Ally!
+  // Priority 0: All rivals eliminated or Final Two with Living Ally!
+  if (living.length === 0) {
+    if (hasActiveCrisis(war)) {
+      escalateToCrisisBoss(state, war);
+    } else {
+      concludeWar(state, rng, 'victor');
+    }
+    return;
+  }
+
   if (living.length === 1 && war.allyId === living[0].id) {
-    state.pending = buildAllyFinalDecision(state, living[0]);
+    if (hasActiveCrisis(war)) {
+      escalateToCrisisBoss(state, war);
+    } else {
+      state.pending = buildAllyFinalDecision(state, living[0]);
+    }
     return;
   }
 
@@ -735,15 +821,25 @@ export function buildWarDayDecision(state: GameState): PendingDecision {
       autoEligible: !onStrategicDay && war.fort < 40,
     },
     {
-      id: 'day_outpost',
-      label: 'Visit Neutral Field Outpost / Black Market (-6 Ryo)',
-      sublabel: 'Buy +35 Intel on a rival or claim a Bounty Contract (+1 Resolve on kill).',
+      id: 'day_outpost_intel',
+      label: 'Buy Frontier Dossier at Neutral Outpost (-6 Ryo)',
+      sublabel: 'Acquire +35 Intel on the least-known rival shinobi.',
       statHints: ['Ryo', 'Intel'],
-      disabled: state.stats.ryo < 6 && war.bountyActive,
-      disabledReason: 'Not enough Ryo (needs 6)',
-      autoEligible: state.stats.ryo >= 12 && !war.bountyActive,
+      disabled: state.stats.ryo < 6 || living === 0,
+      disabledReason: state.stats.ryo < 6 ? 'Not enough Ryo (needs 6)' : 'No living rivals',
+      autoEligible: state.stats.ryo >= 12,
     },
   ];
+
+  if (!war.bountyActive && living > 0) {
+    options.push({
+      id: 'day_outpost_bounty',
+      label: 'Claim Outpost Elimination Bounty (Free)',
+      sublabel: 'Your next rival elimination grants +1 Limit Break Resolve token.',
+      statHints: ['Resolve'],
+      autoEligible: true,
+    });
+  }
 
   if (hasSquadNearby) {
     options.push({
@@ -852,7 +948,7 @@ export function buildWarNightDecision(state: GameState): PendingDecision {
   if (hasWorkshop && war.workshop < 100) {
     options.push({
       id: 'night_workshop',
-      label: `[Build Action] Build Seal & Trap Workshop (${war.workshop}/100, -4 Ryo)`,
+      label: `[Build Action] Build Perimeter Barrier Network (${war.workshop}/100, -4 Ryo)`,
       sublabel: 'At 100: permanent +15 Fort and +10 camp defense for this war.',
       statHints: ['Artificer'],
       disabled: state.stats.ryo < 4,
@@ -864,7 +960,7 @@ export function buildWarNightDecision(state: GameState): PendingDecision {
     options.push({
       id: 'night_infiltrate',
       label: '[Build Action] Silent Infiltration',
-      sublabel: 'Slip past enemy wards to expose True Identity & Skills or inflict a critical wound.',
+      sublabel: 'Slip past enemy wards to expose Identity & Skills or inflict a critical wound.',
       statHints: ['Infiltrator'],
       autoEligible: true,
     });
@@ -884,7 +980,7 @@ export function buildWarNightDecision(state: GameState): PendingDecision {
     options.push({
       id: 'night_senjutsu',
       label: '[Build Action] Gather Nature Energy (+30 CP, +8 Next Fight)',
-      sublabel: 'Draws dense nature chakra (+6 Exposure).',
+      sublabel: 'Draws dense nature chakra (+6 Exposure). Bonus persists until your next battle.',
       statHints: ['Senjutsu'],
       autoEligible: war.cp < 50,
     });
@@ -892,25 +988,30 @@ export function buildWarNightDecision(state: GameState): PendingDecision {
 
   // Endgame Crisis Night Actions
   if (war.crisis && !war.crisis.defeated) {
-    if (war.crisis.id === 'calamity' && war.crisis.echoesLeft > 0) {
+    if (war.crisis.id === 'calamity' && war.crisis.phase >= 2 && war.crisis.echoesLeft > 0) {
       options.push({
         id: 'night_hunt_echo',
-        label: `[Crisis Action] Hunt Corrupted Echo (${war.crisis.echoesLeft} left | +1 Resolve)`,
-        sublabel: 'Purge a fallen chakra echo before Calamity Phase 3.',
+        label: `[Crisis Action] Hunt Corrupted Echo (${war.crisis.echoesLeft} left | -12 CP, +1 Resolve)`,
+        sublabel: 'Purge a fallen chakra echo before Calamity Phase 3 (risks 10 to 18 HP).',
         statHints: ['Crisis'],
-        autoEligible: war.hp >= 60,
+        disabled: war.cp < 12 || war.hp <= 20,
+        disabledReason: war.cp < 12 ? 'Requires 12 CP' : 'HP too low (needs > 20 HP)',
+        autoEligible: war.hp >= 60 && war.cp >= 12,
       });
     }
-    if (war.crisis.id === 'mastermind' && war.crisis.sentinelsLeft > 0) {
+    if (war.crisis.id === 'mastermind' && war.crisis.phase >= 2 && war.crisis.sentinelsLeft > 0) {
       options.push({
         id: 'night_hunt_sentinel',
-        label: `[Crisis Action] Hunt Relic Sentinel (${war.crisis.sentinelsLeft}/5 left | Weaken Boss +1 Resolve)`,
+        label: `[Crisis Action] Hunt Relic Sentinel (${war.crisis.sentinelsLeft}/5 left | -14 CP, +1 Resolve)`,
         sublabel: `Current Boss Divisor: x${getMastermindDivisor(state, war.crisis)}. Shattering Sentinels weakens the Mastermind permanently!`,
         statHints: ['Crisis'],
-        autoEligible: war.hp >= 55,
+        disabled: war.cp < 14 || war.hp <= 22,
+        disabledReason: war.cp < 14 ? 'Requires 14 CP' : 'HP too low (needs > 22 HP)',
+        autoEligible: war.hp >= 55 && war.cp >= 14,
       });
     }
     if (war.crisis.phase === 3) {
+      syncCrisisCoalitionAllies(war);
       options.push({
         id: 'night_boss_raid',
         label: `[Crisis Climax] Confront ${war.crisis.bossName} (HP ${war.crisis.bossHp}/${war.crisis.bossMaxHp})`,
@@ -952,7 +1053,7 @@ function buildTargetSelectDecision(
     kind: 'war_target',
     eventId: 'war_target',
     title: titleMap[actionMode],
-    body: 'Choose a rival shinobi in the sector. Higher Intel reveals their element, true name, and strategic intent.',
+    body: 'Choose a rival shinobi in the sector. Higher Intel reveals their element, identity, and strategic intent.',
     manual: false,
     meta: { actionMode },
     options: living.map((e) => {
@@ -976,18 +1077,26 @@ function buildTargetSelectDecision(
 export function startWarBattle(
   state: GameState,
   enemyId: string,
-  opts: { isFinal: boolean; isAmbush: boolean; isDefense: boolean },
+  opts: {
+    isFinal: boolean;
+    isAmbush: boolean;
+    isDefense: boolean;
+    startedInPhase?: 'day' | 'night';
+    rewardTag?: 'strategic_ridge';
+  },
 ): void {
   const war = state.war!;
   const enemy = war.enemies.find((e) => e.id === enemyId)!;
+  const startedInPhase = opts.startedInPhase ?? (war.subPhase === 'day' ? 'day' : 'night');
   war.subPhase = 'battle';
   war.daysWithoutFight = 0;
   if (!opts.isDefense) war.strikes += 1;
 
-  // Attacking your own ally breaks the pact!
+  // Attacking your own ally breaks the pact cleanly on both sides!
   if (war.allyId === enemyId && !opts.isDefense && !opts.isFinal) {
     war.allyId = null;
     war.allyBetrayed = true;
+    enemy.allyId = null;
     modRel(war, enemy.id, 'player', { trust: -40, grudge: 35, slight: 2 });
     recordWarFact(war, {
       type: 'ally_betray',
@@ -1031,6 +1140,8 @@ export function startWarBattle(
     isFinal: opts.isFinal,
     isAmbush: opts.isAmbush,
     isDefense: opts.isDefense,
+    startedInPhase,
+    rewardTag: opts.rewardTag,
     sceneLine,
     enemyQuip,
     playerWardRounds: 0,
@@ -1262,7 +1373,7 @@ export function runDawnTick(state: GameState, rng: SeededRng): void {
   const war = state.war!;
   war.activeBattle = null;
   war.hidTonight = false;
-  war.nextBattleBonus = 0;
+  // NOTE: war.nextBattleBonus persists until the player actually enters and finishes a battle!
 
   const hasMedical = state.disciplines.some((d) => d.id === 'medical');
   const hasUzumaki = state.bloodline?.id === 'uzumaki_chains' && state.bloodline.stage !== 'latent';
@@ -1300,13 +1411,21 @@ export function runDawnTick(state: GameState, rng: SeededRng): void {
 
   const living = getLivingEnemies(war);
   if (living.length === 0) {
-    concludeWar(state, rng, 'victor');
+    if (hasActiveCrisis(war)) {
+      escalateToCrisisBoss(state, war);
+    } else {
+      concludeWar(state, rng, 'victor');
+    }
     return;
   }
 
   // Final Two with Ally check!
   if (living.length === 1 && war.allyId === living[0].id) {
-    state.pending = buildAllyFinalDecision(state, living[0]);
+    if (hasActiveCrisis(war)) {
+      escalateToCrisisBoss(state, war);
+    } else {
+      state.pending = buildAllyFinalDecision(state, living[0]);
+    }
     return;
   }
 
@@ -1344,19 +1463,24 @@ function runDayOpenBeat(state: GameState, rng: SeededRng): void {
   const war = state.war!;
   const living = getLivingEnemies(war);
   if (living.length === 0) {
-    concludeWar(state, rng, 'victor');
+    if (hasActiveCrisis(war)) {
+      escalateToCrisisBoss(state, war);
+    } else {
+      concludeWar(state, rng, 'victor');
+    }
     return;
   }
 
   // Day 14 Final Night resolution
   if (war.day >= war.maxDays) {
-    if (war.crisis && !war.crisis.defeated) {
-      war.crisis.phase = 3;
+    if (hasActiveCrisis(war)) {
+      war.crisis!.phase = 3;
+      syncCrisisCoalitionAllies(war);
       war.subPhase = 'final';
       pushLog(
         state,
         'crisis',
-        `DAY 14 FINAL RECKONING: ${war.crisis.bossName} threatens to consume the Five Great Nations unless stopped tonight!`,
+        `DAY 14 FINAL RECKONING: ${war.crisis!.bossName} threatens to consume the Five Great Nations unless stopped tonight!`,
         { title: 'Final Night Crisis Confrontation' },
       );
       state.pending = buildCrisisBossDecision(state);
@@ -1369,10 +1493,18 @@ function runDayOpenBeat(state: GameState, rng: SeededRng): void {
       const b = pool[1];
       const res = resolveNpcSkirmish(a, b, rng, war);
       if (a.alive && b.alive) {
-        if (a.hp >= b.hp) b.alive = false;
-        else a.alive = false;
+        const culled = a.hp >= b.hp ? b : a;
+        const survivor = culled === b ? a : b;
+        markEnemyDead(war, culled);
+        survivor.kills += 1;
+        pushLog(
+          state,
+          'war',
+          `Final Night culling: ${culled.intel >= 80 ? culled.name : `a rival ${culled.archetype}`} falls in the desperate valley clash.`,
+        );
+      } else {
+        pushLog(state, 'war', res.logLine);
       }
-      pushLog(state, 'war', res.logLine);
     }
 
     const finalist = getLivingEnemies(war)[0];
@@ -1389,7 +1521,7 @@ function runDayOpenBeat(state: GameState, rng: SeededRng): void {
     finalist.hp = Math.max(55, finalist.hp);
     finalist.cp = Math.max(60, finalist.cp);
     war.subPhase = 'final';
-    startWarBattle(state, finalist.id, { isFinal: true, isAmbush: false, isDefense: false });
+    startWarBattle(state, finalist.id, { isFinal: true, isAmbush: false, isDefense: false, startedInPhase: 'night' });
     return;
   }
 
@@ -1508,24 +1640,12 @@ export function concludeWar(
 
   // Trigger hidden Extreme Conviction Route on non-Crisis victory when Leaning >= 8!
   if (!skipConviction && (outcome === 'victor' || outcome === 'shared') && canTriggerConvictionRoute(state, war)) {
-    state.pending = startConvictionRoute(state, war);
+    state.pending = startConvictionRoute(state, war, outcome);
     return;
   }
 
   const chronicle = generateWarChronicle(state, war, outcome);
-
-  for (const e of war.enemies) {
-    if (!e.alive && !e.isExTeammateRogue && !state.fallenRosterIds.includes(e.rosterId)) {
-      state.fallenRosterIds.push(e.rosterId);
-    }
-    if (!e.alive && e.isExTeammateRogue && state.team) {
-      const mate = state.team.members.find((m) => `ex_mate_${m.id}` === e.rosterId);
-      if (mate) {
-        mate.alive = false;
-        mate.fateNote = `Fell during Great Shinobi War #${war.warNumber} at age ${mate.age}.`;
-      }
-    }
-  }
+  syncFallenFromWar(state, war);
 
   const wear = Math.max(0, Math.round((100 - war.hp) * 0.28));
   state.stats.health = clamp(state.stats.health - wear, 8, 100);
@@ -1612,6 +1732,8 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       return;
     }
     if (res === 'player_dead') {
+      const bossName = war.crisis?.bossName ?? 'the Crisis';
+      syncFallenFromWar(state, war);
       state.warHistory.push({
         warNumber: war.warNumber,
         ageAtStart: state.age,
@@ -1619,11 +1741,12 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
         isCrisisWar: true,
         crisisId: war.crisisId,
         outcome: 'dead',
-        title: `Fell Against ${war.crisis?.bossName ?? 'the Crisis'}`,
+        title: `Fell Against ${bossName}`,
         fieldPromoted: false,
         summary: `Gave everything on Day ${war.day} facing the Endgame Crisis.`,
       });
       state.war = null;
+      killCharacter(state, `slain fighting ${bossName} during Crisis War #${war.warNumber}`);
       return;
     }
     if (res === 'boss_down') {
@@ -1662,6 +1785,7 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       state.stats.health = Math.max(12, state.stats.health - 14);
       state.stats.will = Math.max(10, state.stats.will - 10);
       state.legacyScar = true;
+      state.flags.crisis_claimed = true;
       addLeaning(state, 'ruthless', 3);
       addLeaning(state, 'forbidden', 2);
       clampStats(state);
@@ -1677,6 +1801,17 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
     if (optionId === 'crisis_shatter') {
       if (war.resolves > 0) war.resolves -= 1;
       else war.cp = Math.max(0, war.cp - 25);
+    } else if (optionId === 'crisis_seal') {
+      const sealScore = Math.round((state.stats.chakra + state.stats.intel) / 2);
+      if (sealScore < 50) {
+        state.stats.health = Math.max(10, state.stats.health - 12);
+        clampStats(state);
+        pushLog(
+          state,
+          'danger',
+          `Your sealing array nearly tears open (avg ${sealScore} < 50), forcing you to channel life force (-12 HP) to close the core!`,
+        );
+      }
     }
     state.world.crisisStage = 3;
     state.world.truePeace = true;
@@ -1694,6 +1829,7 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
 
   // === EXTREME CONVICTION ROUTE ===
   if (decision.kind === 'war_conviction') {
+    const convOutcome = war.conviction?.triggerOutcome ?? 'victor';
     const res = resolveConvictionBeat(state, optionId);
     if (res === 'next_beat') {
       state.pending = buildConvictionBeatDecision(state);
@@ -1703,21 +1839,38 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       state.pending = buildConvictionDuelDecision(state);
       return;
     }
-    concludeWar(state, rng, 'victor', true);
+    concludeWar(state, rng, convOutcome, true);
     return;
   }
 
   if (decision.kind === 'war_conviction_duel') {
+    const conv = war.conviction!;
+    const convOutcome = conv.triggerOutcome ?? 'victor';
     const res = resolveConvictionDuelRound(state, optionId, rng);
     if (res === 'continue') {
       state.pending = buildConvictionDuelDecision(state);
       return;
     }
-    if (state.phase === 'posthumous') {
+    if (res === 'opponent_won_dead') {
+      const chronicle = generateWarChronicle(state, war, 'dead');
+      syncFallenFromWar(state, war);
+      state.warHistory.push({
+        warNumber: war.warNumber,
+        ageAtStart: state.age,
+        rankAtStart: state.rank,
+        isCrisisWar: false,
+        crisisId: 'none',
+        outcome: 'dead',
+        title: chronicle.title,
+        fieldPromoted: false,
+        summary: `Fell at the Valley of the End against ${conv.opponentName} after War #${war.warNumber}.`,
+        narrativeArcs: chronicle.arcs,
+      });
       state.war = null;
+      killCharacter(state, `felled by ${conv.opponentName} in the Final Valley Ideological Duel`);
       return;
     }
-    concludeWar(state, rng, 'victor', true);
+    concludeWar(state, rng, convOutcome, true);
     return;
   }
 
@@ -1800,6 +1953,18 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       if (opt.id === 'poison_well') {
         for (const e of getLivingEnemies(war)) e.hp = Math.max(12, e.hp - 14);
       }
+      if (opt.id === 'take_cipher_honor_letter') {
+        const livingRivals = getLivingEnemies(war);
+        if (livingRivals.length > 0) {
+          const target = [...livingRivals].sort((a, b) => a.intel - b.intel)[0];
+          addEnemyIntel(target, 12);
+        }
+      }
+      if (opt.id === 'disarm_loot' && !rng.chance(clamp(0.65 + state.stats.intel * 0.004, 0.65, 0.92))) {
+        const blast = rng.int(10, 16);
+        war.hp = Math.max(8, war.hp - blast);
+        pushLog(state, 'danger', `A hidden secondary wire snaps inside the cache, scorching you for ${blast} damage as you grab the supplies!`);
+      }
       if (opt.allyTrustDelta && war.allyId) {
         modRel(war, war.allyId, 'player', { trust: opt.allyTrustDelta });
       }
@@ -1832,8 +1997,9 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
     if (pType === 'hostage') {
       if (optionId === 'rescue_fight' && enemy) {
         state.stats.will += 4;
+        clampStats(state);
         if (state.team) state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 6));
-        startWarBattle(state, enemy.id, { isFinal: false, isAmbush: false, isDefense: false });
+        startWarBattle(state, enemy.id, { isFinal: false, isAmbush: false, isDefense: false, startedInPhase: 'day' });
         return;
       }
       if (optionId === 'rescue_resolve' && war.resolves > 0) {
@@ -1860,7 +2026,7 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
 
     if (pType === 'coalition') {
       if (optionId === 'coalition_strike' && enemy) {
-        startWarBattle(state, enemy.id, { isFinal: false, isAmbush: true, isDefense: false });
+        startWarBattle(state, enemy.id, { isFinal: false, isAmbush: true, isDefense: false, startedInPhase: 'day' });
         return;
       }
       if (optionId === 'coalition_brace') {
@@ -1879,6 +2045,7 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
 
     if (pType === 'siege') {
       if (optionId === 'siege_sally' && enemy) {
+        state.flags.had_siege_break = true;
         recordWarFact(war, {
           type: 'siege_broken',
           actorId: 'player',
@@ -1887,7 +2054,7 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
           targetName: enemy.name,
           detail: `Sallied out to break ${enemy.name}'s camp siege`,
         });
-        startWarBattle(state, enemy.id, { isFinal: false, isAmbush: true, isDefense: false });
+        startWarBattle(state, enemy.id, { isFinal: false, isAmbush: true, isDefense: false, startedInPhase: 'day' });
         return;
       }
       if (optionId === 'siege_thicken') {
@@ -1909,7 +2076,12 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
           war.nextBattleBonus += 10;
           war.bountyActive = true;
         }
-        startWarBattle(state, enemy.id, { isFinal: false, isAmbush: optionId === 'hunt_join', isDefense: optionId === 'hunted_fight' });
+        startWarBattle(state, enemy.id, {
+          isFinal: false,
+          isAmbush: optionId === 'hunt_join',
+          isDefense: optionId === 'hunted_fight',
+          startedInPhase: 'day',
+        });
         return;
       }
       if (optionId === 'hunted_evade') {
@@ -1926,9 +2098,14 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
 
     if (pType === 'strategic_point') {
       if (optionId === 'claim_ridge' && enemy) {
-        war.strategicClaimedBy = 'player';
-        pushLog(state, 'milestone', 'You charge onto the Strategic High Ground to seize control of the valley!');
-        startWarBattle(state, enemy.id, { isFinal: false, isAmbush: false, isDefense: false });
+        pushLog(state, 'milestone', 'You charge onto the Strategic High Ground to contest control of the valley!');
+        startWarBattle(state, enemy.id, {
+          isFinal: false,
+          isAmbush: false,
+          isDefense: false,
+          startedInPhase: 'day',
+          rewardTag: 'strategic_ridge',
+        });
         return;
       }
       war.strategicClaimedBy = enemy?.id ?? 'npc';
@@ -1952,13 +2129,13 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       pushLog(state, 'war', 'You blend into supply columns and scrub chakra traces along your approach (Exposure -7).');
     } else if (optionId === 'day_recon' && living.length > 0) {
       const target = [...living].sort((a, b) => a.intel - b.intel)[0];
-      const gain = rng.int(14, 24) + Math.round(state.stats.intel * 0.08);
-      target.intel = clamp(target.intel + gain, 0, 100);
-      if (target.intel >= 90) target.skillsRevealed = true;
+      const cloneBonus = state.disciplines.some((d) => d.id === 'shadow_clone') ? 8 : 0;
+      const gain = rng.int(14, 24) + Math.round(state.stats.intel * 0.08) + cloneBonus;
+      addEnemyIntel(target, gain);
       pushLog(
         state,
         'war',
-        `Daylight recon yields +${gain} Intel on ${target.intel >= 80 ? target.name : `a rival ${target.archetype}`} (now ${target.intel}%).`,
+        `Daylight recon${cloneBonus > 0 ? ' with Shadow Clone scouts' : ''} yields +${gain} Intel on ${target.intel >= 80 ? target.name : `a rival ${target.archetype}`} (now ${target.intel}%).`,
       );
     } else if (optionId === 'day_recover') {
       const hpGain = hasMedical ? 16 : 10;
@@ -1969,21 +2146,18 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       const fGain = rng.int(9, 15) + (hasFortBonus ? 6 : 0);
       war.fort = clamp(war.fort + fGain, 0, 85);
       pushLog(state, 'war', `You string explosive tags and chakra wires across the perimeter (Fort +${fGain}).`);
-    } else if (optionId === 'day_outpost') {
-      if (state.stats.ryo >= 6 && living.length > 0) {
-        state.stats.ryo -= 6;
-        const target = [...living].sort((a, b) => a.intel - b.intel)[0];
-        target.intel = clamp(target.intel + 35, 0, 100);
-        if (target.intel >= 90) target.skillsRevealed = true;
-        pushLog(
-          state,
-          'war',
-          `An information broker trades frontier dossiers for 6 Ryo (+35 Intel on ${target.intel >= 80 ? target.name : `a rival ${target.archetype}`}).`,
-        );
-      } else if (!war.bountyActive) {
-        war.bountyActive = true;
-        pushLog(state, 'war', 'You accept an outpost elimination bounty: your next rival takedown grants +1 Resolve.');
-      }
+    } else if ((optionId === 'day_outpost_intel' || optionId === 'day_outpost') && state.stats.ryo >= 6 && living.length > 0) {
+      state.stats.ryo -= 6;
+      const target = [...living].sort((a, b) => a.intel - b.intel)[0];
+      addEnemyIntel(target, 35);
+      pushLog(
+        state,
+        'war',
+        `An information broker trades frontier dossiers for 6 Ryo (+35 Intel on ${target.intel >= 80 ? target.name : `a rival ${target.archetype}`}).`,
+      );
+    } else if (optionId === 'day_outpost_bounty' && !war.bountyActive) {
+      war.bountyActive = true;
+      pushLog(state, 'war', 'You accept an outpost elimination bounty: your next rival takedown grants +1 Resolve.');
     } else if (optionId === 'day_kizuna' && state.team) {
       const ally = state.team.members.find((m) => m.alive && m.specialStatus !== 'missing_nin');
       if (ally) {
@@ -1991,7 +2165,7 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
         war.hp = clamp(war.hp + 4, 0, 100);
         if (living.length > 0) {
           const target = rng.pick(living);
-          target.intel = clamp(target.intel + 14, 0, 100);
+          addEnemyIntel(target, 14);
         }
         pushLog(state, 'bond', `You meet ${ally.name} briefly behind a cedar ridge, trading supplies and sector notes (+4 HP, +14 Intel).`);
       }
@@ -2042,15 +2216,14 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       war.workshop = clamp(war.workshop + 35, 0, 100);
       if (war.workshop >= 100) {
         war.fort = clamp(war.fort + 15, 0, 85);
-        pushLog(state, 'milestone', 'Your Seal & Trap Workshop is complete! (+15 Fort, +10 Camp Defense).');
+        pushLog(state, 'milestone', 'Your Perimeter Barrier Network is complete! (+15 Fort, +10 Camp Defense).');
       } else {
-        pushLog(state, 'war', `You inscribe layered barrier arrays through the night (Workshop ${war.workshop}/100).`);
+        pushLog(state, 'war', `You inscribe layered barrier arrays through the night (Barrier Network ${war.workshop}/100).`);
       }
     } else if (optionId === 'night_sensory') {
       war.cp = Math.max(0, war.cp - 8);
       for (const e of getLivingEnemies(war)) {
-        e.intel = clamp(e.intel + 25, 0, 100);
-        if (e.intel >= 90) e.skillsRevealed = true;
+        addEnemyIntel(e, 25);
       }
       pushLog(state, 'war', 'Your Sensory Sweep maps chakra signatures across the valley (+25 Intel on all rivals).');
     } else if (optionId === 'night_senjutsu') {
@@ -2058,9 +2231,9 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       war.nextBattleBonus += 8;
       war.exposure = clamp(war.exposure + 6, 0, 100);
       pushLog(state, 'war', 'Dense natural energy floods your coils (+30 CP, +8 next battle power, +6 Exposure).');
-    } else if (optionId === 'night_hunt_echo' && war.crisis && war.crisis.echoesLeft > 0) {
+    } else if (optionId === 'night_hunt_echo' && war.crisis && war.crisis.phase >= 2 && war.crisis.echoesLeft > 0) {
       const dmg = rng.int(10, 18);
-      war.hp = Math.max(8, war.hp - dmg);
+      war.hp = Math.max(4, war.hp - dmg);
       war.cp = Math.max(0, war.cp - 12);
       war.crisis.echoesLeft -= 1;
       war.resolves += 1;
@@ -2069,9 +2242,9 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
         'crisis',
         `You purge a Corrupted Chakra Echo in fierce midnight combat (-${dmg} HP, +1 Resolve | ${war.crisis.echoesLeft} Echoes left).`,
       );
-    } else if (optionId === 'night_hunt_sentinel' && war.crisis && war.crisis.sentinelsLeft > 0) {
+    } else if (optionId === 'night_hunt_sentinel' && war.crisis && war.crisis.phase >= 2 && war.crisis.sentinelsLeft > 0) {
       const dmg = rng.int(12, 20);
-      war.hp = Math.max(8, war.hp - dmg);
+      war.hp = Math.max(4, war.hp - dmg);
       war.cp = Math.max(0, war.cp - 14);
       war.crisis.sentinelsLeft -= 1;
       war.crisis.guardsActive = Math.max(0, war.crisis.guardsActive - 1);
@@ -2149,6 +2322,20 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       }
     } else if (mode === 'snipe') {
       war.cp = Math.max(0, war.cp - 10);
+      if (war.allyId === target.id) {
+        war.allyId = null;
+        war.allyBetrayed = true;
+        target.allyId = null;
+        modRel(war, target.id, 'player', { trust: -45, grudge: 40, slight: 2 });
+        recordWarFact(war, {
+          type: 'ally_betray',
+          actorId: 'player',
+          actorName: state.name,
+          targetId: target.id,
+          targetName: target.name,
+          detail: `Sniped wartime ally ${target.name} from ambush`,
+        });
+      }
       const proj = computeCombatProjection(state);
       const hitScore = proj.spd * 3 + proj.ins * 2 + rng.int(-12, 14) - (target.ranks[1] * 3 + 6);
       if (hitScore >= 0) {
@@ -2157,9 +2344,13 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
         modRel(war, target.id, 'player', { grudge: 14, fear: 8 });
         pushLog(state, 'war', `Your long-range snipe finds its mark through the canopy for ${dmg} damage!`);
         if (target.hp <= 0) {
-          target.alive = false;
-          target.intel = 100;
+          markEnemyDead(war, target);
           war.kills += 1;
+          if (war.bountyActive) {
+            war.bountyActive = false;
+            war.resolves += 1;
+            pushLog(state, 'milestone', 'Outpost bounty fulfilled from long range! You gain +1 Resolve.');
+          }
           recordWarFact(war, {
             type: 'kill',
             actorId: 'player',
@@ -2221,6 +2412,7 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
 
     if (status === 'player_dead') {
       const chronicle = generateWarChronicle(state, war, 'dead');
+      syncFallenFromWar(state, war);
       state.warHistory.push({
         warNumber: war.warNumber,
         ageAtStart: state.age,
@@ -2241,6 +2433,19 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       return;
     }
 
+    // Consume one-battle prep bonus once the fight ends (win/retreat/dawn break)
+    war.nextBattleBonus = 0;
+
+    if (battle.rewardTag === 'strategic_ridge') {
+      if (status === 'player_won' || status === 'dawn_break') {
+        war.strategicClaimedBy = 'player';
+        pushLog(state, 'milestone', 'You secure the Strategic High Ground! (+6 Combat Power & +4 CP every dawn).');
+      } else if (status === 'retreated') {
+        war.strategicClaimedBy = enemy.id;
+        pushLog(state, 'war', 'You disengage from the ridge, ceding the high ground to the enemy.');
+      }
+    }
+
     if (status === 'player_won') {
       if (war.bountyActive) {
         war.bountyActive = false;
@@ -2249,15 +2454,24 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       }
       addLeaning(state, 'ambition', 1);
       if (battle.isFinal || getLivingEnemies(war).length === 0) {
-        concludeWar(state, rng, 'victor');
+        war.activeBattle = null;
+        if (hasActiveCrisis(war)) {
+          escalateToCrisisBoss(state, war);
+        } else {
+          concludeWar(state, rng, 'victor');
+        }
         return;
       }
     }
 
     const wasDefense = battle.isDefense;
+    const startedInDay = battle.startedInPhase === 'day';
     war.activeBattle = null;
-    war.subPhase = 'night';
-    if (wasDefense) {
+    if (startedInDay) {
+      war.subPhase = 'day';
+      queueNightDecision(war);
+    } else if (wasDefense) {
+      war.subPhase = 'night';
       war.beatQueue = [];
       war.beatClock = 0;
       enqueueWarBeat(war, {
@@ -2267,6 +2481,7 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
         timeOfDay: 'dawn',
       });
     } else {
+      war.subPhase = 'night';
       queueNightSequence(war);
     }
   }

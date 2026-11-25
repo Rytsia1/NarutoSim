@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ORIGINS } from '../../data/origins';
+import { ORIGIN_MAP, ORIGINS } from '../../data/origins';
 import { BLOODLINES, DISCIPLINES, ELEMENT_NAMES } from '../../data/powers';
 import { VILLAGES } from '../../data/villages';
 import { CUSTOM_BUDGET, evaluateCustomBuild } from '../../sim/custom';
@@ -13,6 +13,8 @@ import type {
 } from '../../sim/types';
 
 interface CustomBuilderPanelProps {
+  fatedRosterName?: string | null;
+  onClearFated?: () => void;
   onStartCustom: (build: CustomBuildConfig, crisisOverride: 'natural' | CrisisId) => void;
 }
 
@@ -25,7 +27,11 @@ const STAT_KEYS: { key: StatKey; label: string }[] = [
   { key: 'ryo', label: 'Ryo' },
 ];
 
-export function CustomBuilderPanel({ onStartCustom }: CustomBuilderPanelProps) {
+export function CustomBuilderPanel({
+  fatedRosterName,
+  onClearFated,
+  onStartCustom,
+}: CustomBuilderPanelProps) {
   const [mode, setMode] = useState<'points' | 'free'>('points');
   const [name, setName] = useState('');
   const [sex, setSex] = useState<'M' | 'F'>('M');
@@ -59,6 +65,7 @@ export function CustomBuilderPanel({ onStartCustom }: CustomBuilderPanelProps) {
   };
 
   const validation = evaluateCustomBuild(cfg);
+  const selectedOrigin = ORIGIN_MAP[originId];
   const allowedDisciplines = DISCIPLINES.filter((d) => d.id !== 'senjutsu' && d.id !== 'space_time');
 
   return (
@@ -129,17 +136,22 @@ export function CustomBuilderPanel({ onStartCustom }: CustomBuilderPanelProps) {
           </select>
         </div>
         <div className="field">
-          <label htmlFor="cb-cap">Chakra Capacity Tier (1 to 5)</label>
+          <label htmlFor="cb-cap">
+            Chakra Capacity Tier (above origin max {selectedOrigin.capacityRange[1]}: +3 pts/tier)
+          </label>
           <select
             id="cb-cap"
             value={capacity}
             onChange={(e) => setCapacity(Number(e.target.value) as 1 | 2 | 3 | 4 | 5)}
           >
-            {[1, 2, 3, 4, 5].map((c) => (
-              <option key={c} value={c}>
-                Tier {c} (Max Chakra {40 + 12 * c})
-              </option>
-            ))}
+            {[1, 2, 3, 4, 5].map((c) => {
+              const extraCost = c > selectedOrigin.capacityRange[1] ? (c - selectedOrigin.capacityRange[1]) * 3 : 0;
+              return (
+                <option key={c} value={c}>
+                  Tier {c} (Max Chakra {40 + 12 * c}{extraCost > 0 ? ` | +${extraCost} pts` : ' | 0 pts'})
+                </option>
+              );
+            })}
           </select>
         </div>
         <div className="field">
@@ -159,12 +171,15 @@ export function CustomBuilderPanel({ onStartCustom }: CustomBuilderPanelProps) {
             value={startDisciplineId}
             onChange={(e) => setStartDisciplineId(e.target.value)}
           >
-            <option value="">Origin Default</option>
-            {allowedDisciplines.map((d) => (
-              <option key={d.id} value={d.id}>
-                {d.name}
-              </option>
-            ))}
+            <option value="">Origin Default (0 pts)</option>
+            {allowedDisciplines.map((d) => {
+              const isClan = selectedOrigin.familyDisciplines.includes(d.id);
+              return (
+                <option key={d.id} value={d.id}>
+                  {d.name} ({isClan ? '1 pt clan' : '3 pts'})
+                </option>
+              );
+            })}
           </select>
         </div>
         <div className="field">
@@ -199,7 +214,7 @@ export function CustomBuilderPanel({ onStartCustom }: CustomBuilderPanelProps) {
                 <input
                   id={`cb-stat-${key}`}
                   type="range"
-                  min={-15}
+                  min={-20}
                   max={25}
                   step={5}
                   value={val}
@@ -226,6 +241,17 @@ export function CustomBuilderPanel({ onStartCustom }: CustomBuilderPanelProps) {
           <option value="mastermind">Seed Shadow Mastermind</option>
         </select>
       </div>
+
+      {fatedRosterName && (
+        <div className="chip-row" style={{ marginBottom: 14 }}>
+          <span className="chip pos">Active Fated Thread: {fatedRosterName}</span>
+          {onClearFated && (
+            <button type="button" className="btn btn-sm btn-ghost" onClick={onClearFated}>
+              Clear Fated Thread
+            </button>
+          )}
+        </div>
+      )}
 
       {validation.errors.length > 0 && (
         <div className="disc-item" style={{ borderColor: 'var(--accent-crimson)', marginBottom: 14 }}>

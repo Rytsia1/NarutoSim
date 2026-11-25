@@ -15,6 +15,14 @@ export interface ActiveFxEvent {
   subline: string;
 }
 
+const FX_PRIORITY: Record<FxEventKind, number> = {
+  jutsu_clash: 5,
+  crisis_descent: 4,
+  bloodline_awaken: 3,
+  resolve_burst: 2,
+  rank_promotion: 1,
+};
+
 export function detectFxFromLogEntry(entry: LogEntry): ActiveFxEvent | null {
   if (entry.text.includes('JUTSU CLASH!')) {
     return {
@@ -32,7 +40,12 @@ export function detectFxFromLogEntry(entry: LogEntry): ActiveFxEvent | null {
       subline: 'Dormant Kekkei Genkai erupts across your chakra pathways',
     };
   }
-  if (entry.text.includes('Limit Break:') || entry.text.includes('KIZUNA INTERCEPTION!')) {
+  if (
+    entry.text.includes('Limit Break:') ||
+    entry.text.includes('KIZUNA INTERCEPTION!') ||
+    entry.text.includes('Limit Break Body Flicker') ||
+    entry.text.includes('Limit Break Second Wind')
+  ) {
     return {
       id: entry.id,
       kind: 'resolve_burst',
@@ -65,6 +78,17 @@ export function detectFxFromLogEntry(entry: LogEntry): ActiveFxEvent | null {
   return null;
 }
 
+export function pickHighestPriorityFx(entries: LogEntry[]): ActiveFxEvent | null {
+  let best: ActiveFxEvent | null = null;
+  for (const entry of entries) {
+    const fx = detectFxFromLogEntry(entry);
+    if (fx && (!best || FX_PRIORITY[fx.kind] >= FX_PRIORITY[best.kind])) {
+      best = fx;
+    }
+  }
+  return best;
+}
+
 interface CinematicFxOverlayProps {
   fx: ActiveFxEvent | null;
   onFinish: () => void;
@@ -73,37 +97,72 @@ interface CinematicFxOverlayProps {
 const FX_DURATION_MS = 1450;
 
 export function CinematicFxOverlay({ fx, onFinish }: CinematicFxOverlayProps) {
+  const dialogRef = useRef<HTMLDialogElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const onFinishRef = useRef(onFinish);
+  onFinishRef.current = onFinish;
+
+  // Render in Browser Top Layer via native <dialog>.showModal() so FX always sits ABOVE BattleDialog/DecisionDialog
+  useEffect(() => {
+    const dlg = dialogRef.current;
+    if (!dlg) return;
+    if (fx && !dlg.open) {
+      dlg.showModal();
+    } else if (!fx && dlg.open) {
+      dlg.close();
+    }
+  }, [fx]);
 
   useEffect(() => {
     if (!fx) return;
 
+    const finish = () => {
+      const dlg = dialogRef.current;
+      if (dlg?.open) dlg.close();
+      onFinishRef.current();
+    };
+
+    const dlg = dialogRef.current;
+    const onCancel = (e: Event) => {
+      e.preventDefault();
+      finish();
+    };
+    dlg?.addEventListener('cancel', onCancel);
+
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape' || e.code === 'Space') {
         e.preventDefault();
-        onFinish();
+        e.stopImmediatePropagation();
+        finish();
       }
     };
-    window.addEventListener('keydown', onKey);
+    window.addEventListener('keydown', onKey, true);
 
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext('2d');
     if (!canvas || !ctx) {
-      const t = window.setTimeout(onFinish, FX_DURATION_MS);
+      const t = window.setTimeout(finish, FX_DURATION_MS);
       return () => {
-        window.removeEventListener('keydown', onKey);
+        dlg?.removeEventListener('cancel', onCancel);
+        window.removeEventListener('keydown', onKey, true);
         window.clearTimeout(t);
       };
     }
 
-    const dpr = Math.min(2, window.devicePixelRatio || 1);
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    canvas.width = Math.floor(w * dpr);
-    canvas.height = Math.floor(h * dpr);
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    let w = 0;
+    let h = 0;
+    const syncSize = () => {
+      const dpr = Math.min(2, window.devicePixelRatio || 1);
+      w = document.documentElement.clientWidth || window.innerWidth;
+      h = window.innerHeight;
+      canvas.width = Math.floor(w * dpr);
+      canvas.height = Math.floor(h * dpr);
+      canvas.style.width = `${w}px`;
+      canvas.style.height = `${h}px`;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    };
+    syncSize();
+    window.addEventListener('resize', syncSize);
 
     const start = performance.now();
     let rafId = 0;
@@ -114,14 +173,13 @@ export function CinematicFxOverlay({ fx, onFinish }: CinematicFxOverlayProps) {
       const alpha = p < 0.15 ? p / 0.15 : p > 0.78 ? (1 - p) / 0.22 : 1;
 
       ctx.clearRect(0, 0, w, h);
-      ctx.fillStyle = `rgba(12, 10, 9, ${(0.72 * alpha).toFixed(2)})`;
+      ctx.fillStyle = `rgba(12, 10, 9, ${(0.76 * alpha).toFixed(2)})`;
       ctx.fillRect(0, 0, w, h);
 
       const cx = w / 2;
       const cy = h / 2;
 
       if (fx.kind === 'jutsu_clash') {
-        // Dual elemental beams colliding at center
         const reach = Math.min(1, p * 2.4);
         ctx.strokeStyle = `rgba(212, 80, 54, ${alpha.toFixed(2)})`;
         ctx.lineWidth = 10 * (1 - p * 0.4);
@@ -145,7 +203,6 @@ export function CinematicFxOverlay({ fx, onFinish }: CinematicFxOverlayProps) {
           ctx.stroke();
         }
       } else if (fx.kind === 'bloodline_awaken') {
-        // Concentric crimson eye ripples
         for (let i = 0; i < 4; i++) {
           const r = 30 + (p * 260 + i * 55);
           ctx.strokeStyle = `rgba(212, 80, 54, ${(alpha * (1 - i * 0.2)).toFixed(2)})`;
@@ -155,7 +212,6 @@ export function CinematicFxOverlay({ fx, onFinish }: CinematicFxOverlayProps) {
           ctx.stroke();
         }
       } else if (fx.kind === 'resolve_burst') {
-        // Diagonal speed slashes
         ctx.strokeStyle = `rgba(212, 80, 54, ${(alpha * 0.85).toFixed(2)})`;
         ctx.lineWidth = 4;
         for (let i = -3; i <= 3; i++) {
@@ -166,7 +222,6 @@ export function CinematicFxOverlay({ fx, onFinish }: CinematicFxOverlayProps) {
           ctx.stroke();
         }
       } else if (fx.kind === 'crisis_descent') {
-        // Crimson moon eclipsing the center
         const r = Math.min(w, h) * (0.18 + p * 0.08);
         ctx.fillStyle = `rgba(180, 42, 34, ${(alpha * 0.45).toFixed(2)})`;
         ctx.beginPath();
@@ -176,7 +231,6 @@ export function CinematicFxOverlay({ fx, onFinish }: CinematicFxOverlayProps) {
         ctx.lineWidth = 3;
         ctx.stroke();
       } else {
-        // Warm gold horizontal brush sweep
         const barW = w * Math.min(1, p * 2.2);
         ctx.fillStyle = `rgba(214, 163, 74, ${(alpha * 0.22).toFixed(2)})`;
         ctx.fillRect((w - barW) / 2, cy - 58, barW, 116);
@@ -185,32 +239,39 @@ export function CinematicFxOverlay({ fx, onFinish }: CinematicFxOverlayProps) {
       if (elapsed < FX_DURATION_MS) {
         rafId = requestAnimationFrame(frame);
       } else {
-        onFinish();
+        finish();
       }
     };
 
     rafId = requestAnimationFrame(frame);
     return () => {
-      window.removeEventListener('keydown', onKey);
+      dlg?.removeEventListener('cancel', onCancel);
+      window.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('resize', syncSize);
       cancelAnimationFrame(rafId);
     };
-  }, [fx, onFinish]);
-
-  if (!fx) return null;
+  }, [fx]);
 
   return (
-    <div
-      className="fx-overlay"
-      role="status"
-      aria-live="assertive"
-      onClick={onFinish}
+    <dialog
+      ref={dialogRef}
+      className="fx-dialog"
+      aria-label={fx?.headline ?? 'Cinematic Effect'}
+      onClick={() => {
+        if (dialogRef.current?.open) dialogRef.current.close();
+        onFinishRef.current();
+      }}
     >
-      <canvas ref={canvasRef} className="fx-canvas" aria-hidden="true" />
-      <div className="fx-caption">
-        <div className="fx-headline">{fx.headline}</div>
-        <div className="fx-subline">{fx.subline}</div>
-        <div className="fx-skip-hint">Click or press Space / Esc to skip</div>
-      </div>
-    </div>
+      {fx && (
+        <div className="fx-overlay" role="status" aria-live="assertive">
+          <canvas ref={canvasRef} className="fx-canvas" aria-hidden="true" />
+          <div className="fx-caption">
+            <div className="fx-headline">{fx.headline}</div>
+            <div className="fx-subline">{fx.subline}</div>
+            <div className="fx-skip-hint">Click or press Space / Esc to skip</div>
+          </div>
+        </div>
+      )}
+    </dialog>
   );
 }

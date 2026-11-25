@@ -356,7 +356,11 @@ export function tickTeamYear(state: GameState, rng: SeededRng): string[] {
     if (m.role === 'teammate') {
       m.powerScore = clamp(m.powerScore + rng.int(3, 8), 20, 99);
 
-      if (m.rank === 'genin' && m.powerScore >= 56 && rng.chance(0.5)) {
+      if (m.age >= 68 && rng.chance(0.14)) {
+        m.alive = false;
+        m.fateNote = `Passed away peacefully in retirement at age ${m.age}.`;
+        notices.push(`Former squadmate ${m.name} passed away quietly after a long life.`);
+      } else if (m.rank === 'genin' && m.powerScore >= 56 && rng.chance(0.5)) {
         m.rank = 'chunin';
         m.fateNote = `Promoted to Chunin at age ${m.age}.`;
         notices.push(`Word reaches you that former squadmate ${m.name} passed the Chunin Exams.`);
@@ -374,7 +378,7 @@ export function tickTeamYear(state: GameState, rng: SeededRng): string[] {
         m.specialStatus = 'missing_nin';
         m.fateNote = `Defected from the village at age ${m.age} as a Missing-Nin.`;
         notices.push(`Shocking dispatch: your former squadmate ${m.name} has abandoned the village and entered the Bingo Book as a Missing-Nin.`);
-      } else if (m.age >= 18 && rng.chance(0.06)) {
+      } else if (m.age >= 18 && m.age < 60 && rng.chance(0.06)) {
         m.alive = false;
         m.fateNote = `Killed in action during a border assignment at age ${m.age}.`;
         notices.push(`Black borders frame a notice at headquarters: former squadmate ${m.name} fell in action on a frontier mission.`);
@@ -388,7 +392,7 @@ export function tickTeamYear(state: GameState, rng: SeededRng): string[] {
         m.alive = false;
         m.fateNote = `Passed away peacefully at age ${m.age} after decades of service.`;
         notices.push(`Your former mentor ${m.name} passed away quietly after a lifetime of service.`);
-      } else if (m.age >= 38 && rng.chance(0.05)) {
+      } else if (m.age >= 38 && m.age < 60 && rng.chance(0.05)) {
         m.alive = false;
         m.fateNote = `Fell protecting younger shinobi during a border ambush at age ${m.age}.`;
         notices.push(`Tragic news: your former Sensei ${m.name} fell holding a canyon pass so younger shinobi could escape.`);

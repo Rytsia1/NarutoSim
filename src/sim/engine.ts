@@ -8,6 +8,7 @@ import {
   flushWarUntilDecision,
   getWarBeatProgress,
   getWarDayProgress,
+  openDayPhase,
 } from './war';
 
 export interface SimHooks {
@@ -118,7 +119,12 @@ export class ShinobiSim {
     if (s.phase === 'war' && s.war) {
       ensureWarClockDefaults(s.war);
       if (s.war.beatQueue.length === 0) {
-        return false;
+        // Recover migrated/legacy war saves with an empty beat queue
+        const rng = new SeededRng(s.rng.seed, s.rng.state);
+        openDayPhase(s, rng);
+        s.rng = rng.snapshot();
+        this.notify(true);
+        return true;
       }
       s.war.beatClock += dt * s.speed;
       if (s.war.beatClock >= s.war.beatQueue[0].delay) {
@@ -152,7 +158,13 @@ export class ShinobiSim {
     if (s.phase !== 'war' || !s.war || s.pending !== null) return false;
     ensureWarClockDefaults(s.war);
     const rng = new SeededRng(s.rng.seed, s.rng.state);
-    const advanced = advanceWarBeat(s, rng);
+    let advanced = false;
+    if (s.war.beatQueue.length === 0) {
+      openDayPhase(s, rng);
+      advanced = true;
+    } else {
+      advanced = advanceWarBeat(s, rng);
+    }
     s.rng = rng.snapshot();
     if (advanced) {
       this.notify(true);
@@ -215,7 +227,7 @@ export class ShinobiSim {
   }
 
   submitLastWords(lastWords: string): LifeRecord | null {
-    if (this.state.phase !== 'posthumous' && this.state.phase !== 'ended') return null;
+    if (this.state.phase !== 'posthumous') return this.state.record;
     finalizeLifeRecord(this.state, lastWords);
     const rec = this.state.record;
     this.notify(true);

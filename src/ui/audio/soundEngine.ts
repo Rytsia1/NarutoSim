@@ -29,6 +29,7 @@ class ProceduralSoundEngine {
   private tabId = `tab_${Math.random().toString(36).slice(2)}`;
   private channel: BroadcastChannel | null = null;
   private ownsAudio = true;
+  private userHasInteracted = false;
 
   constructor() {
     if (typeof BroadcastChannel !== 'undefined') {
@@ -44,12 +45,25 @@ class ProceduralSoundEngine {
         this.channel = null;
       }
     }
+
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          this.stopLoop();
+        } else if (this.userHasInteracted && this.settings.soundEnabled) {
+          this.claimActiveTab();
+          this.ensureContext();
+          this.startLoop();
+        }
+      });
+    }
   }
 
   private ensureContext(): AudioContext | null {
     if (typeof window === 'undefined') return null;
     if (!this.ctx) {
-      const AudioCtx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+      const AudioCtx =
+        window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!AudioCtx) return null;
       this.ctx = new AudioCtx();
       this.bgmGain = this.ctx.createGain();
@@ -77,23 +91,36 @@ class ProceduralSoundEngine {
 
   applySettings(next: UserSettings): void {
     this.settings = { ...next };
-    this.updateGains();
     if (!this.settings.soundEnabled) {
+      this.updateGains();
       this.stopLoop();
-    } else if (this.ctx && this.timerId === null) {
+      return;
+    }
+    // If user previously interacted while muted and now unmutes, bootstrap AudioContext + BGM immediately!
+    if (this.userHasInteracted) {
+      this.ensureContext();
       this.startLoop();
     }
+    this.updateGains();
   }
 
   private updateGains(): void {
     if (!this.ctx || !this.bgmGain || !this.sfxGain) return;
     const active = this.settings.soundEnabled && this.ownsAudio;
     const now = this.ctx.currentTime;
-    this.bgmGain.gain.setTargetAtTime(active ? this.settings.bgmVolume * 0.28 : 0, now, 0.12);
+    // Cancel any scheduled duckBgm restoration ramps so muting always holds cleanly
+    this.bgmGain.gain.cancelScheduledValues(now);
+    this.sfxGain.gain.cancelScheduledValues(now);
+    this.bgmGain.gain.setTargetAtTime(active ? this.settings.bgmVolume * 0.28 : 0, now, 0.1);
     this.sfxGain.gain.setTargetAtTime(active ? this.settings.sfxVolume * 0.55 : 0, now, 0.05);
   }
 
+  /**
+   * Called on user interaction: records gesture permission, re-claims multi-tab audio focus,
+   * and starts BGM if enabled.
+   */
   unlock(): void {
+    this.userHasInteracted = true;
     if (!this.settings.soundEnabled) return;
     const ctx = this.ensureContext();
     if (ctx && this.timerId === null) {
@@ -109,6 +136,7 @@ class ProceduralSoundEngine {
 
   private startLoop(): void {
     if (this.timerId !== null || typeof window === 'undefined') return;
+    if (typeof document !== 'undefined' && document.hidden) return;
     const tick = () => {
       if (!this.settings.soundEnabled || !this.ownsAudio || !this.ctx || !this.bgmGain) return;
       if (this.ctx.state !== 'running') return;
@@ -117,11 +145,9 @@ class ProceduralSoundEngine {
       const now = this.ctx.currentTime;
       const isWar = this.scene === 'war' || this.scene === 'crisis';
 
-      // Soft plucked koto/flute ambient note
       const freq = scale[(this.stepIndex * 2 + (this.stepIndex % 3)) % scale.length];
       this.playTone(freq, isWar ? 'triangle' : 'sine', now, isWar ? 0.55 : 1.15, 0.4, this.bgmGain);
 
-      // Low taiko pulse during War & Crisis scenes
       if (isWar && this.stepIndex % 2 === 0) {
         this.playDrum(now, this.scene === 'crisis' ? 68 : 82, 0.28, this.bgmGain);
       }
@@ -159,6 +185,10 @@ class ProceduralSoundEngine {
 
     osc.connect(env);
     env.connect(dest);
+    osc.onended = () => {
+      osc.disconnect();
+      env.disconnect();
+    };
     osc.start(startTime);
     osc.stop(startTime + duration + 0.04);
   }
@@ -176,6 +206,10 @@ class ProceduralSoundEngine {
 
     osc.connect(env);
     env.connect(dest);
+    osc.onended = () => {
+      osc.disconnect();
+      env.disconnect();
+    };
     osc.start(startTime);
     osc.stop(startTime + duration + 0.03);
   }
@@ -184,17 +218,20 @@ class ProceduralSoundEngine {
     if (!this.ctx || !this.bgmGain || !this.settings.soundEnabled || !this.ownsAudio) return;
     const now = this.ctx.currentTime;
     const normal = this.settings.bgmVolume * 0.28;
+    this.bgmGain.gain.cancelScheduledValues(now);
     this.bgmGain.gain.setTargetAtTime(normal * 0.25, now, 0.04);
     this.bgmGain.gain.setTargetAtTime(normal, now + seconds, 0.25);
   }
 
   playSfx(kind: SfxKind, speed = 1): void {
-    if (!this.settings.soundEnabled || !this.ownsAudio) return;
-    // Mute trivial life SFX at 8x speed (GDD Ch. 12.4)
+    if (!this.settings.soundEnabled) return;
     if (speed >= 8 && kind === 'click') return;
 
     const ctx = this.ensureContext();
     if (!ctx || !this.sfxGain) return;
+    if (this.timerId === null) {
+      this.startLoop();
+    }
     const now = ctx.currentTime;
 
     switch (kind) {

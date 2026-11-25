@@ -144,6 +144,42 @@ export interface BattleOddsEstimate {
   isEstimate: boolean;
 }
 
+export function computeStanceMultiplier(
+  state: GameState,
+  pRanks: [number, number, number, number, number],
+  enemyRanks: [number, number, number, number, number],
+  enemyElement: ChakraElement | null,
+  enemySkills: { tag: SkillTag; rank: number }[],
+  skillsKnown: boolean,
+  actionId: 'taijutsu' | 'ninjutsu' | 'genjutsu',
+): { mult: number; elemLabel: string | null } {
+  if (actionId === 'taijutsu') {
+    const mult = clamp(1 + (pRanks[0] - enemyRanks[2]) * 0.08 + (pRanks[1] - enemyRanks[1]) * 0.02, 0.65, 1.55);
+    return { mult, elemLabel: null };
+  }
+  if (actionId === 'ninjutsu') {
+    const elemInfo = enemyElement ? getElementMultiplier(state.element, enemyElement) : { mult: 1.0, label: null };
+    const mr = skillsKnown ? 1 - Math.min(0.35, skillSum(enemySkills, 'resist') * 0.04) : 1.0;
+    const mult = clamp(1 + (pRanks[3] - enemyRanks[3]) * 0.05, 0.75, 1.35) * elemInfo.mult * mr;
+    return { mult, elemLabel: elemInfo.label };
+  }
+  const mult = clamp(1 + (pRanks[4] - enemyRanks[4]) * 0.06, 0.75, 1.35);
+  return { mult, elemLabel: null };
+}
+
+export function computeRetreatChance(
+  pSpd: number,
+  eSpd: number,
+  hasClone: boolean,
+  hasSummoning: boolean,
+): number {
+  return clamp(
+    0.45 + pSpd * 0.05 + (pSpd - eSpd) * 0.04 + (hasClone ? 0.15 : 0) + (hasSummoning ? 0.08 : 0),
+    0.28,
+    0.94,
+  );
+}
+
 /**
  * Computes a fair matchup preview for the 3 core battle styles using ONLY
  * known enemy intel (`getDisplayEnemyRanks`) so hidden enemy stats are never leaked.
@@ -158,15 +194,15 @@ export function estimateBattleActionOdds(
   const pRanks = getPlayerRanks(state, resolveBoost);
   const eRanks = getDisplayEnemyRanks(enemy);
 
-  let mult = 1.0;
-  if (actionId === 'taijutsu') {
-    mult = clamp(1 + (pRanks[0] - eRanks[2]) * 0.09 + (pRanks[1] - eRanks[1]) * 0.03, 0.65, 1.55);
-  } else if (actionId === 'ninjutsu') {
-    const elemMult = enemy.intel >= 60 ? getElementMultiplier(state.element, enemy.element).mult : 1.0;
-    mult = clamp(1 + (pRanks[3] - eRanks[3]) * 0.07, 0.72, 1.38) * elemMult;
-  } else {
-    mult = clamp(1 + (pRanks[4] - eRanks[4]) * 0.08, 0.72, 1.38);
-  }
+  const { mult } = computeStanceMultiplier(
+    state,
+    pRanks,
+    eRanks,
+    enemy.intel >= 60 ? enemy.element : null,
+    enemy.skills,
+    enemy.skillsRevealed,
+    actionId,
+  );
 
   const suffix = isEstimate ? ' (est.)' : '';
   if (mult >= 1.1) {
@@ -185,7 +221,9 @@ export function estimateRetreatChance(
 ): number {
   const pRanks = getPlayerRanks(state, resolveBoost);
   const eRanks = getDisplayEnemyRanks(enemy);
-  return Math.round(clamp(0.45 + (pRanks[1] - eRanks[1]) * 0.07 + 0.06, 0.25, 0.92) * 100);
+  const hasClone = Boolean(state.war?.activeBattle?.playerCloneEvade);
+  const hasSummoning = state.disciplines.some((d) => d.id === 'summoning');
+  return Math.round(computeRetreatChance(pRanks[1], eRanks[1], hasClone, hasSummoning) * 100);
 }
 
 export function computePlayerRoundPower(
@@ -219,9 +257,12 @@ export function computePlayerRoundPower(
   }
 
   if (battle.bloodlineActiveRounds > 0 && state.bloodline) {
-    const bBoost = 9 + state.bloodline.grade * 2;
+    const bId = state.bloodline.id;
+    let bBoost = 9 + state.bloodline.grade * 2;
+    if (bId === 'sharingan' || bId === 'byakugan') bBoost += 4;
+    if (bId === 'hyoton' || bId === 'shikotsumyaku' || bId === 'yoton') bBoost += 5;
     total += bBoost;
-    terms.push({ label: `${BLOODLINE_MAP[state.bloodline.id]?.name ?? 'Bloodline'} (+${bBoost})`, val: bBoost });
+    terms.push({ label: `${BLOODLINE_MAP[bId]?.name ?? 'Bloodline'} (+${bBoost})`, val: bBoost });
   }
 
   if (battle.playerBuffRounds > 0) {
@@ -286,7 +327,12 @@ export function computeEnemyRoundPower(
   total += Math.round(war.exposure * 0.12);
 
   if (enemy.tactic === 'reckless') total += 5;
-  if (!battle.isDefense && enemy.fort > 0) total += Math.round(enemy.fort * 0.08);
+  if (!battle.isDefense && enemy.fort > 0) {
+    total += Math.round(enemy.fort * 0.08 + skillSum(enemy.skills, 'fort') * 1.4);
+  }
+  if (war.hp < 75) {
+    total += Math.round(skillSum(enemy.skills, 'slayer') * 1.6);
+  }
   if (battle.enemyDebuffRounds > 0) total -= 9;
   if (enemy.cp <= 0) total -= 18;
 
@@ -385,7 +431,8 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
       disabledReason: 'Requires 12 CP',
       autoEligible: war.hp < 50 && war.cp >= 12,
     });
-  } else if (hasWard && battle.playerWardRounds === 0) {
+  }
+  if (hasWard && battle.playerWardRounds === 0) {
     options.push({
       id: 'support_ward',
       label: 'Raise Defensive Barrier (-35% damage for 2 rounds, 10 CP)',
@@ -394,7 +441,8 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
       disabledReason: 'Requires 10 CP',
       autoEligible: false,
     });
-  } else if (hasClone && !battle.playerCloneEvade) {
+  }
+  if (hasClone && !battle.playerCloneEvade) {
     options.push({
       id: 'support_clone',
       label: 'Shadow Clone Feint (+22% dodge & +8 next attack, 10 CP)',
@@ -448,7 +496,7 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
     options.push({
       id: 'retreat',
       label: 'Shunshin Retreat (Attempt Escape)',
-      sublabel: 'Escape chance scales with Speed. Failure risks 14 to 26 parting damage.',
+      sublabel: 'Escape chance scales with Speed. Failure risks 14 to 24 parting damage.',
       statHints: ['SPD'],
       autoEligible: war.hp <= 30,
     });
@@ -470,6 +518,15 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
 
 export type BattleResolutionStatus = 'continue' | 'player_won' | 'player_dead' | 'retreated' | 'dawn_break';
 
+interface PreRoundCounters {
+  ward: boolean;
+  buff: boolean;
+  debuff: boolean;
+  bloodline: boolean;
+  wall: boolean;
+  field: boolean;
+}
+
 export function resolveBattleRound(
   state: GameState,
   optionId: string,
@@ -478,13 +535,24 @@ export function resolveBattleRound(
   const war = state.war!;
   const battle = war.activeBattle!;
   const enemy = war.enemies.find((e) => e.id === battle.enemyId)!;
-  const pRanks = getPlayerRanks(state, battle.resolveBoostThisRound);
   const ult = getPlayerSignatureUltimate(state);
+
+  // Snapshot which counters were already active BEFORE this round's actions,
+  // so newly applied buffs/debuffs never lose a turn on the same round!
+  const preCounters: PreRoundCounters = {
+    ward: battle.playerWardRounds > 0,
+    buff: battle.playerBuffRounds > 0,
+    debuff: battle.enemyDebuffRounds > 0,
+    bloodline: battle.bloodlineActiveRounds > 0,
+    wall: battle.enemyWallRounds > 0,
+    field: battle.enemyFieldRounds > 0,
+  };
 
   // Instant Resolve actions that modify state and resolve or exit
   if (optionId === 'resolve_flee' && war.resolves > 0 && !battle.isFinal) {
     war.resolves -= 1;
     state.bodyStrain += 3;
+    battle.resolveBoostThisRound = false;
     recordWarFact(war, {
       type: 'resolve_burst',
       actorId: 'player',
@@ -498,8 +566,8 @@ export function resolveBattleRound(
       outcome: 'retreat',
       playerDmgTaken: 0,
       enemyDmgTaken: 0,
-      whyLine: 'Key Factor: Resolve Token guaranteed clean Body Flicker withdrawal',
-      narrative: 'You burn a surge of resolve into a blinding Body Flicker, vanishing beyond pursuit.',
+      whyLine: 'Key Factor: Limit Break Body Flicker guaranteed clean withdrawal',
+      narrative: 'Limit Break: You burn a surge of resolve into a blinding Body Flicker, vanishing beyond pursuit.',
     };
     battle.rounds.push(summary);
     return { status: 'retreated', summary };
@@ -509,6 +577,7 @@ export function resolveBattleRound(
     war.resolves -= 1;
     war.cp = clamp(war.cp + 40, 0, 100);
     state.bodyStrain += 4;
+    battle.resolveBoostThisRound = false;
     const chip = rng.int(4, 9);
     war.hp = Math.max(1, war.hp - chip);
     const summary: BattleRoundSummary = {
@@ -518,11 +587,11 @@ export function resolveBattleRound(
       outcome: 'support',
       playerDmgTaken: chip,
       enemyDmgTaken: 0,
-      whyLine: 'Key Factor: Emergency chakra surge restored 40 CP at minor damage cost',
-      narrative: `You force dormant reserves open (+40 CP) while absorbing a ${chip}-damage glancing blow.`,
+      whyLine: 'Key Factor: Limit Break Second Wind restored 40 CP at minor damage cost',
+      narrative: `Limit Break: You force dormant reserves open (+40 CP) while absorbing a ${chip}-damage glancing blow.`,
     };
     battle.rounds.push(summary);
-    return advanceRoundCounter(battle, summary);
+    return advanceRoundCounter(battle, summary, preCounters);
   }
 
   if (optionId === 'resolve_boost' && war.resolves > 0) {
@@ -541,10 +610,17 @@ export function resolveBattleRound(
     optionId = war.cp >= ult.cost ? 'ultimate' : 'taijutsu';
   }
 
-  // Standard Retreat attempt
+  // Compute pRanks AFTER resolve_boost has been applied!
+  const pRanks = getPlayerRanks(state, battle.resolveBoostThisRound);
+  const activeBloodlineId =
+    battle.bloodlineActiveRounds > 0 && state.bloodline ? state.bloodline.id : null;
+
+  // Standard Retreat attempt (shared formula with estimateRetreatChance)
   if (optionId === 'retreat' && !battle.isFinal) {
-    const fleeP = clamp(0.45 + pRanks[1] * 0.06 + (battle.playerCloneEvade ? 0.15 : 0), 0.35, 0.94);
+    const hasSummoning = state.disciplines.some((d) => d.id === 'summoning');
+    const fleeP = computeRetreatChance(pRanks[1], enemy.ranks[1], battle.playerCloneEvade, hasSummoning);
     if (rng.chance(fleeP)) {
+      battle.resolveBoostThisRound = false;
       const summary: BattleRoundSummary = {
         round: battle.round,
         playerAction: 'Shunshin Retreat',
@@ -560,6 +636,7 @@ export function resolveBattleRound(
     } else {
       const failDmg = rng.int(14, 24);
       war.hp = Math.max(0, war.hp - failDmg);
+      battle.resolveBoostThisRound = false;
       const summary: BattleRoundSummary = {
         round: battle.round,
         playerAction: 'Shunshin Retreat (Failed)',
@@ -571,8 +648,7 @@ export function resolveBattleRound(
         narrative: `Your opponent reads your smoke feint and slashes across your flank for ${failDmg} damage!`,
       };
       battle.rounds.push(summary);
-      if (war.hp <= 0) return { status: 'player_dead', summary };
-      return advanceRoundCounter(battle, summary);
+      return resolveNonCombatLethalCheck(state, war, battle, summary, preCounters, rng);
     }
   }
 
@@ -619,13 +695,14 @@ export function resolveBattleRound(
       battle.playerBuffRounds = Math.max(battle.playerBuffRounds, 1);
       enemyChip = rng.int(0, 4);
       playerAction = 'Shadow Clone Feint';
-      whyLine = 'Key Factor: Clone decoy absorbed enemy momentum';
+      whyLine = 'Key Factor: Clone decoy absorbed enemy momentum (+8 next attack)';
       narrative = 'A Shadow Clone bursts into smoke on impact, opening an angle for your next counter.';
     } else if (optionId === 'exploit_weakness') {
       const ok = rng.chance(clamp(0.32 + state.stats.intel / 200 + (enemy.intel >= 80 ? 0.12 : 0), 0.35, 0.85));
       if (ok) {
         battle.weaknessExploited = true;
         enemy.intel = clamp(enemy.intel + 15, 0, 100);
+        if (enemy.intel >= 90) enemy.skillsRevealed = true;
         playerAction = 'Exploit Weakness (Success)';
         whyLine = `Key Factor: Intel (${state.stats.intel}) spotted habit (+${8 + Math.round(state.stats.intel * 0.1)} power)`;
         narrative = 'You spot the half-beat hesitation in their hand seals and lock onto their blind spot!';
@@ -637,6 +714,7 @@ export function resolveBattleRound(
     }
 
     war.hp = Math.max(0, war.hp - enemyChip);
+    battle.resolveBoostThisRound = false;
     const summary: BattleRoundSummary = {
       round: battle.round,
       playerAction,
@@ -648,8 +726,7 @@ export function resolveBattleRound(
       narrative,
     };
     battle.rounds.push(summary);
-    if (war.hp <= 0) return { status: 'player_dead', summary };
-    return advanceRoundCounter(battle, summary);
+    return resolveNonCombatLethalCheck(state, war, battle, summary, preCounters, rng);
   }
 
   // Decide whether Enemy fires Ultimate this round
@@ -658,6 +735,7 @@ export function resolveBattleRound(
     enemy.cp = Math.max(0, enemy.cp - enemy.ultimate.cost);
     enemy.ultimateSeen = true;
     enemy.intel = clamp(enemy.intel + 15, 0, 100);
+    if (enemy.intel >= 90) enemy.skillsRevealed = true;
   }
 
   const playerUsesUlt = optionId === 'ultimate' && war.cp >= ult.cost;
@@ -669,6 +747,8 @@ export function resolveBattleRound(
   } else if (optionId === 'genjutsu') {
     war.cp = Math.max(0, war.cp - 6);
   }
+
+  const boostTag = battle.resolveBoostThisRound ? 'Limit Break: ' : '';
 
   // === JUTSU CLASH (Both sides fire Ultimates on the same round!) ===
   if (playerUsesUlt && enemyUsesUlt) {
@@ -701,25 +781,26 @@ export function resolveBattleRound(
       pTaken = Math.max(3, Math.round(baseEnemyUltDmg * 0.15));
       outcome = 'clash_win';
       whyLine = `JUTSU CLASH WON (+${Math.round(diff)} CV)${elemInfo.label ? ` · ${elemInfo.label}` : ''}`;
-      narrative = `JUTSU CLASH! Your ${ult.name} tears clean through ${enemy.ultimate.name}, dealing ${eTaken} damage!`;
+      narrative = `${boostTag}JUTSU CLASH! Your ${ult.name} tears clean through ${enemy.ultimate.name}, dealing ${eTaken} damage!`;
     } else if (diff <= -8) {
       const pierceFactor = clamp(0.65 + (-diff - 8) * 0.022, 0.65, 1.0);
       pTaken = Math.max(8, Math.round(baseEnemyUltDmg * pierceFactor));
       eTaken = Math.max(3, Math.round(basePlayerUltDmg * 0.15));
       outcome = 'clash_lose';
       whyLine = `JUTSU CLASH LOST (${Math.round(diff)} CV)${elemInfo.label ? ` · ${elemInfo.label}` : ''}`;
-      narrative = `JUTSU CLASH! ${enemy.ultimate.name} overpowers your ${ult.name}, slamming you for ${pTaken} damage!`;
+      narrative = `${boostTag}JUTSU CLASH! ${enemy.ultimate.name} overpowers your ${ult.name}, slamming you for ${pTaken} damage!`;
     } else {
       pTaken = Math.max(4, Math.round(baseEnemyUltDmg * 0.3));
       eTaken = Math.max(4, Math.round(basePlayerUltDmg * 0.3));
       outcome = 'clash_cancel';
       whyLine = `JUTSU CLASH SCATTERED (Δ${Math.round(diff)} CV) · Both techniques cancelled out`;
-      narrative = `JUTSU CLASH! ${ult.name} and ${enemy.ultimate.name} detonate midair in blinding shockwaves!`;
+      narrative = `${boostTag}JUTSU CLASH! ${ult.name} and ${enemy.ultimate.name} detonate midair in blinding shockwaves!`;
     }
 
     war.hp = Math.max(0, war.hp - pTaken);
     enemy.hp = Math.max(0, enemy.hp - eTaken);
     battle.resolveBoostThisRound = false;
+    state.flags.had_jutsu_clash = true;
 
     recordWarFact(war, {
       type: 'jutsu_clash',
@@ -741,7 +822,7 @@ export function resolveBattleRound(
       narrative,
     };
     battle.rounds.push(summary);
-    return finalizeCombatOutcomes(state, war, enemy, battle, summary, rng);
+    return finalizeCombatOutcomes(state, war, enemy, battle, summary, preCounters, rng);
   }
 
   // === Single-Side Ultimate ===
@@ -765,25 +846,36 @@ export function resolveBattleRound(
       playerDmgTaken: chip,
       enemyDmgTaken: dmg,
       whyLine: `Key Factor: Uncontested Ultimate${elemInfo.label ? ` · ${elemInfo.label}` : ''}`,
-      narrative: `You unleash ${ult.name}, tearing through their guard for ${dmg} damage!`,
+      narrative: `${boostTag}You unleash ${ult.name}, tearing through their guard for ${dmg} damage!`,
     };
     battle.rounds.push(summary);
-    return finalizeCombatOutcomes(state, war, enemy, battle, summary, rng);
+    return finalizeCombatOutcomes(state, war, enemy, battle, summary, preCounters, rng);
   }
 
   if (enemyUsesUlt && !playerUsesUlt) {
     let pTaken = 0;
     let narrative = '';
+    const wardMult =
+      (battle.playerWardRounds > 0 ? 0.65 : 1) * (activeBloodlineId === 'jiton' ? 0.82 : 1);
+
     if (enemy.ultimate.role === 'wall') {
       battle.enemyWallRounds = 2;
-      pTaken = rng.int(4, 9);
+      pTaken = Math.round(rng.int(4, 9) * wardMult);
       narrative = `${enemy.name} raises ${enemy.ultimate.name}, fortifying their guard for 2 rounds!`;
     } else if (enemy.ultimate.role === 'field' || enemy.ultimate.role === 'debuff') {
       battle.enemyFieldRounds = 2;
-      pTaken = rng.int(10, 18);
+      pTaken = Math.round(rng.int(10, 18) * wardMult);
       narrative = `${enemy.name} activates ${enemy.ultimate.name}, seizing the terrain and hitting you for ${pTaken} damage!`;
+    } else if (enemy.ultimate.role === 'heal') {
+      enemy.hp = clamp(enemy.hp + 20, 0, 100);
+      pTaken = Math.round(rng.int(3, 7) * wardMult);
+      narrative = `${enemy.name} triggers ${enemy.ultimate.name}, mending wounds (+20 HP) while pushing you back for ${pTaken} damage!`;
+    } else if (enemy.ultimate.role === 'buff') {
+      battle.enemyWallRounds = 2;
+      battle.enemyFieldRounds = 2;
+      pTaken = Math.round(rng.int(6, 12) * wardMult);
+      narrative = `${enemy.name} surges with ${enemy.ultimate.name}, bolstering defense and terrain control (${pTaken} damage)!`;
     } else {
-      const wardMult = battle.playerWardRounds > 0 ? 0.65 : 1;
       const elemInfo = getElementMultiplier(enemy.element, state.element);
       pTaken = Math.max(
         10,
@@ -795,6 +887,7 @@ export function resolveBattleRound(
     const counterChip = rng.int(3, 8);
     war.hp = Math.max(0, war.hp - pTaken);
     enemy.hp = Math.max(0, enemy.hp - counterChip);
+    battle.resolveBoostThisRound = false;
 
     const summary: BattleRoundSummary = {
       round: battle.round,
@@ -807,7 +900,7 @@ export function resolveBattleRound(
       narrative,
     };
     battle.rounds.push(summary);
-    return finalizeCombatOutcomes(state, war, enemy, battle, summary, rng);
+    return finalizeCombatOutcomes(state, war, enemy, battle, summary, preCounters, rng);
   }
 
   // === Standard Tactical Exchange (Taijutsu / Ninjutsu / Genjutsu) ===
@@ -819,21 +912,26 @@ export function resolveBattleRound(
   const eRoll = eBase + rng.int(-14, 14);
   const diff = pRoll - eRoll;
 
-  let stanceMult = 1.0;
+  const styleKey: 'taijutsu' | 'ninjutsu' | 'genjutsu' =
+    optionId === 'ninjutsu' ? 'ninjutsu' : optionId === 'genjutsu' ? 'genjutsu' : 'taijutsu';
+  const { mult: stanceMult, elemLabel } = computeStanceMultiplier(
+    state,
+    pRanks,
+    enemy.ranks,
+    enemy.element,
+    enemy.skills,
+    true,
+    styleKey,
+  );
+
   let stanceReason = '';
   let playerActionLabel = 'Taijutsu Strike';
-
-  if (optionId === 'taijutsu') {
-    stanceMult = clamp(1 + (pRanks[0] - enemy.ranks[2]) * 0.08 + (pRanks[1] - enemy.ranks[1]) * 0.02, 0.65, 1.55);
+  if (styleKey === 'taijutsu') {
     stanceReason = `Taijutsu (TAI ${pRanks[0].toFixed(1)} vs STA ${enemy.ranks[2].toFixed(1)})`;
-  } else if (optionId === 'ninjutsu') {
-    const elemInfo = getElementMultiplier(state.element, enemy.element);
-    const mr = 1 - Math.min(0.35, skillSum(enemy.skills, 'resist') * 0.04);
-    stanceMult = clamp(1 + (pRanks[3] - enemy.ranks[3]) * 0.05, 0.75, 1.35) * elemInfo.mult * mr;
+  } else if (styleKey === 'ninjutsu') {
     playerActionLabel = `${ELEMENT_NAMES[state.element]} Ninjutsu`;
-    stanceReason = elemInfo.label ?? `Ninjutsu (CHK ${pRanks[3].toFixed(1)} vs CHK ${enemy.ranks[3].toFixed(1)})`;
+    stanceReason = elemLabel ?? `Ninjutsu (CHK ${pRanks[3].toFixed(1)} vs CHK ${enemy.ranks[3].toFixed(1)})`;
   } else {
-    stanceMult = clamp(1 + (pRanks[4] - enemy.ranks[4]) * 0.06, 0.75, 1.35);
     playerActionLabel = 'Genjutsu Feint';
     stanceReason = `Genjutsu (INS ${pRanks[4].toFixed(1)} vs INS ${enemy.ranks[4].toFixed(1)})`;
   }
@@ -849,7 +947,7 @@ export function resolveBattleRound(
     eTaken = rng.int(4, 8);
     outcome = 'draw';
     whyLine = `Key Factor: Even clash (Δ${Math.round(diff)}) · ${stanceReason}`;
-    narrative = `Sparks and steel collide evenly: both shinobi trade glancing wounds (${eTaken} dealt, ${pTaken} taken).`;
+    narrative = `${boostTag}Sparks and steel collide evenly: both shinobi trade glancing wounds (${eTaken} dealt, ${pTaken} taken).`;
   } else {
     // Reversal check (instinct/luck)
     let playerWins = diff > 0;
@@ -859,28 +957,47 @@ export function resolveBattleRound(
 
     if (playerWins) {
       const dodgeP = clamp(0.05 + (enemy.ranks[1] - pRanks[1]) * 0.012 + skillSum(enemy.skills, 'evade') * 0.02, 0.03, 0.22);
-      if (rng.chance(optionId === 'ninjutsu' ? dodgeP * 0.5 : dodgeP)) {
+      if (rng.chance(styleKey === 'ninjutsu' ? dodgeP * 0.5 : dodgeP)) {
         eTaken = rng.int(2, 5);
         pTaken = rng.int(1, 3);
         outcome = 'win';
         whyLine = `Key Factor: Enemy evaded brunt of attack · ${stanceReason}`;
-        narrative = `Your ${playerActionLabel} nearly connects, grazing them for ${eTaken} damage as they twist clear.`;
+        narrative = `${boostTag}Your ${playerActionLabel} nearly connects, grazing them for ${eTaken} damage as they twist clear.`;
       } else {
-        const wallMult = battle.enemyWallRounds > 0 ? 0.65 : 1;
+        // Lava Release (yoton) melts enemy defensive walls
+        const wallMult = battle.enemyWallRounds > 0 && activeBloodlineId !== 'yoton' ? 0.65 : 1;
+        const gentleFistActive = styleKey === 'taijutsu' && state.disciplines.some((d) => d.id === 'gentle_fist');
         eTaken = Math.max(5, Math.round((7 + Math.abs(diff) * 0.34) * stanceMult * wallMult));
         pTaken = rng.int(1, 5);
         outcome = 'win';
-        if (optionId === 'genjutsu') {
+        if (styleKey === 'genjutsu') {
           battle.enemyDebuffRounds = 2;
         }
+        if (gentleFistActive) {
+          enemy.cp = Math.max(0, enemy.cp - 10);
+        }
         whyLine = `Key Factor: ${reversal ? 'Instinct Reversal! ' : ''}${stanceReason} · ${topFactor}`;
-        narrative = `Your ${playerActionLabel} breaks their guard for ${eTaken} damage${optionId === 'genjutsu' ? ' and rattles their focus!' : '!'}`;
+        narrative = `${boostTag}Your ${playerActionLabel} breaks their guard for ${eTaken} damage${
+          styleKey === 'genjutsu'
+            ? ' and rattles their focus!'
+            : gentleFistActive
+              ? ' and strikes their chakra tenketsu (-10 Enemy CP)!'
+              : '!'
+        }`;
       }
     } else {
+      const bloodlineDodge =
+        activeBloodlineId === 'hyoton'
+          ? 0.16
+          : activeBloodlineId === 'sharingan'
+            ? 0.14
+            : battle.bloodlineActiveRounds > 0
+              ? 0.1
+              : 0;
       const pDodgeP = clamp(
-        0.05 + (pRanks[1] - enemy.ranks[1]) * 0.012 + (battle.playerCloneEvade ? 0.22 : 0) + (battle.bloodlineActiveRounds > 0 ? 0.1 : 0),
+        0.05 + (pRanks[1] - enemy.ranks[1]) * 0.012 + (battle.playerCloneEvade ? 0.22 : 0) + bloodlineDodge,
         0.04,
-        0.4,
+        0.44,
       );
       if (rng.chance(pDodgeP)) {
         pTaken = rng.int(2, 5);
@@ -889,7 +1006,9 @@ export function resolveBattleRound(
         whyLine = 'Key Factor: High-speed evasion turned a heavy hit into a graze';
         narrative = `You twist out of a lethal strike at the last fraction of a second, taking only ${pTaken} damage.`;
       } else {
-        const wardMult = battle.playerWardRounds > 0 ? 0.65 : 1;
+        const wardMult =
+          (battle.playerWardRounds > 0 ? 0.65 : 1) *
+          (activeBloodlineId === 'jiton' || activeBloodlineId === 'shikotsumyaku' ? 0.82 : 1);
         pTaken = Math.max(5, Math.round((7 + Math.abs(diff) * 0.32) * wardMult));
         eTaken = rng.int(1, 5);
         outcome = 'lose';
@@ -915,7 +1034,27 @@ export function resolveBattleRound(
     narrative,
   };
   battle.rounds.push(summary);
-  return finalizeCombatOutcomes(state, war, enemy, battle, summary, rng);
+  return finalizeCombatOutcomes(state, war, enemy, battle, summary, preCounters, rng);
+}
+
+function resolveNonCombatLethalCheck(
+  state: GameState,
+  war: WarState,
+  battle: ActiveBattleState,
+  summary: BattleRoundSummary,
+  preCounters: PreRoundCounters,
+  rng: SeededRng,
+): { status: BattleResolutionStatus; summary: BattleRoundSummary } {
+  checkLoyalInterception(state, war, summary, rng);
+  if (war.hp <= 0 && !battle.usedDesperation && state.stats.will >= 65) {
+    battle.usedDesperation = true;
+    war.hp = 10;
+    summary.narrative += ' Sheer shinobi willpower keeps you standing at 10 HP!';
+  }
+  if (war.hp <= 0) {
+    return { status: 'player_dead', summary };
+  }
+  return advanceRoundCounter(battle, summary, preCounters);
 }
 
 /**
@@ -929,6 +1068,7 @@ export function checkLoyalInterception(
   rng: SeededRng,
 ): boolean {
   if (war.loyalInterceptUsed || !state.team) return false;
+  if (summary.playerDmgTaken <= 0) return false;
   if (summary.playerDmgTaken < 14 && war.hp >= 30) return false;
 
   const candidates = state.team.members
@@ -940,10 +1080,11 @@ export function checkLoyalInterception(
   const prob = clamp(0.38 + (protector.trust - 65) * 0.014, 0.38, 0.85);
   if (!rng.chance(prob)) return false;
 
-  const saved = Math.max(6, Math.round(summary.playerDmgTaken * 0.45));
+  const saved = Math.min(summary.playerDmgTaken, Math.max(6, Math.round(summary.playerDmgTaken * 0.45)));
   war.hp = clamp(war.hp + saved, 1, 100);
   summary.playerDmgTaken = Math.max(0, summary.playerDmgTaken - saved);
   war.loyalInterceptUsed = true;
+  state.flags.had_loyal_intercept = true;
   summary.narrative += ` KIZUNA INTERCEPTION! ${protector.name} flash-steps between you and the lethal blow, absorbing ${saved} damage!`;
   recordWarFact(war, {
     type: 'squad_protect',
@@ -962,8 +1103,11 @@ function finalizeCombatOutcomes(
   enemy: WarCompetitor,
   battle: ActiveBattleState,
   summary: BattleRoundSummary,
+  preCounters: PreRoundCounters,
   rng: SeededRng,
 ): { status: BattleResolutionStatus; summary: BattleRoundSummary } {
+  battle.resolveBoostThisRound = false;
+
   // Check Kizuna Loyal Interception before resolving lethal blow
   checkLoyalInterception(state, war, summary, rng);
 
@@ -1006,10 +1150,16 @@ function finalizeCombatOutcomes(
 
   if (enemy.hp <= 0) {
     enemy.alive = false;
+    enemy.hp = 0;
     enemy.intel = 100;
+    enemy.skillsRevealed = true;
+    enemy.allyId = null;
     war.kills += 1;
     if (war.allyId === enemy.id) {
       war.allyId = null;
+    }
+    for (const o of war.enemies) {
+      if (o.allyId === enemy.id) o.allyId = null;
     }
     recordWarFact(war, {
       type: 'kill',
@@ -1026,19 +1176,20 @@ function finalizeCombatOutcomes(
     return { status: 'player_won', summary };
   }
 
-  return advanceRoundCounter(battle, summary);
+  return advanceRoundCounter(battle, summary, preCounters);
 }
 
 function advanceRoundCounter(
   battle: ActiveBattleState,
   summary: BattleRoundSummary,
+  preCounters: PreRoundCounters,
 ): { status: BattleResolutionStatus; summary: BattleRoundSummary } {
-  if (battle.playerWardRounds > 0) battle.playerWardRounds -= 1;
-  if (battle.playerBuffRounds > 0) battle.playerBuffRounds -= 1;
-  if (battle.enemyDebuffRounds > 0) battle.enemyDebuffRounds -= 1;
-  if (battle.bloodlineActiveRounds > 0) battle.bloodlineActiveRounds -= 1;
-  if (battle.enemyWallRounds > 0) battle.enemyWallRounds -= 1;
-  if (battle.enemyFieldRounds > 0) battle.enemyFieldRounds -= 1;
+  if (preCounters.ward && battle.playerWardRounds > 0) battle.playerWardRounds -= 1;
+  if (preCounters.buff && battle.playerBuffRounds > 0) battle.playerBuffRounds -= 1;
+  if (preCounters.debuff && battle.enemyDebuffRounds > 0) battle.enemyDebuffRounds -= 1;
+  if (preCounters.bloodline && battle.bloodlineActiveRounds > 0) battle.bloodlineActiveRounds -= 1;
+  if (preCounters.wall && battle.enemyWallRounds > 0) battle.enemyWallRounds -= 1;
+  if (preCounters.field && battle.enemyFieldRounds > 0) battle.enemyFieldRounds -= 1;
 
   battle.round += 1;
   if (!battle.isFinal && battle.round > battle.maxRounds) {
@@ -1059,8 +1210,18 @@ export function resolveNpcSkirmish(
   const elemA = getElementMultiplier(a.element, b.element).mult;
   const elemB = getElementMultiplier(b.element, a.element).mult;
 
-  const pA = unitBasePower(a.ranks, a.hp) * elemA + skillSum(a.skills, 'power') * 1.4 + rng.int(-16, 16);
-  const pB = unitBasePower(b.ranks, b.hp) * elemB + skillSum(b.skills, 'power') * 1.4 + rng.int(-16, 16);
+  const pA =
+    unitBasePower(a.ranks, a.hp) * elemA +
+    skillSum(a.skills, 'power') * 1.4 +
+    skillSum(a.skills, 'slayer') * 1.1 +
+    skillSum(a.skills, 'fort') * 0.6 +
+    rng.int(-16, 16);
+  const pB =
+    unitBasePower(b.ranks, b.hp) * elemB +
+    skillSum(b.skills, 'power') * 1.4 +
+    skillSum(b.skills, 'slayer') * 1.1 +
+    skillSum(b.skills, 'fort') * 0.6 +
+    rng.int(-16, 16);
 
   const diff = pA - pB;
   if (Math.abs(diff) < 7) {
@@ -1093,9 +1254,14 @@ export function resolveNpcSkirmish(
 
   if (loser.hp <= 0) {
     loser.alive = false;
+    loser.hp = 0;
+    loser.allyId = null;
     winner.kills += 1;
     if (war) {
       if (war.allyId === loser.id) war.allyId = null;
+      for (const o of war.enemies) {
+        if (o.allyId === loser.id) o.allyId = null;
+      }
       recordWarFact(war, {
         type: 'kill',
         actorId: winner.id,

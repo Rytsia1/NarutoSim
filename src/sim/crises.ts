@@ -1,5 +1,5 @@
 import { getPlayerRanks, getPlayerSignatureUltimate } from './combat';
-import { addLeaning, clampStats, killCharacter, pushLog } from './life';
+import { addLeaning, clampStats, pushLog } from './life';
 import { recordWarFact } from './narrative';
 import { clamp } from './powers';
 import type { SeededRng } from './rng';
@@ -49,13 +49,21 @@ export function initWarCrisisState(state: GameState, war: WarState, rng: SeededR
     bossHp: bossMaxHp,
     bossMaxHp,
     bossPhase2Done: false,
-    echoesLeft: id === 'calamity' ? 0 : 0,
+    echoesLeft: 0,
     sentinelsLeft: id === 'mastermind' ? 5 : 0,
     guardsActive: id === 'mastermind' ? 2 : 0,
     npcStances: stances,
     coalitionAllies: 0,
     defeated: false,
   };
+}
+
+export function syncCrisisCoalitionAllies(war: WarState): number {
+  const c = war.crisis;
+  if (!c) return 0;
+  const count = war.enemies.filter((e) => e.alive && (c.npcStances[e.id] === 'seal' || e.id === war.allyId)).length;
+  c.coalitionAllies = count;
+  return count;
 }
 
 export function getMastermindDivisor(state: GameState, crisis: WarCrisisState): number {
@@ -97,7 +105,7 @@ export function advanceCrisisPhase(state: GameState, war: WarState, rng: SeededR
 
   // Autonomous NPC Sentinel hunting during Mastermind Phase 2
   if (c.id === 'mastermind' && c.phase === 2 && c.sentinelsLeft > 0) {
-    const hunters = aliveEnemies.filter((e) => e.intel >= 40 || e.tactic === 'cunning' || e.tactic === 'hunter');
+    const hunters = aliveEnemies.filter((e) => e.ranks[4] >= 4 || e.tactic === 'cunning' || e.tactic === 'hunter');
     if (hunters.length > 0 && rng.chance(0.24)) {
       c.sentinelsLeft = Math.max(0, c.sentinelsLeft - 1);
       pushLog(
@@ -116,8 +124,8 @@ export function advanceCrisisPhase(state: GameState, war: WarState, rng: SeededR
 
   if (c.phase === 2 && readyForDescent) {
     c.phase = 3;
-    c.coalitionAllies = aliveEnemies.filter((e) => c.npcStances[e.id] === 'seal' || e.id === war.allyId).length;
-    c.guardsActive = c.id === 'mastermind' ? Math.min(3, Math.max(1, c.sentinelsLeft)) : 0;
+    syncCrisisCoalitionAllies(war);
+    c.guardsActive = c.id === 'mastermind' ? Math.min(3, c.sentinelsLeft) : 0;
     pushLog(
       state,
       'crisis',
@@ -134,15 +142,22 @@ export function advanceCrisisPhase(state: GameState, war: WarState, rng: SeededR
     if (weakest && weakest.id !== war.allyId) {
       weakest.alive = false;
       weakest.hp = 0;
+      for (const o of war.enemies) {
+        if (o.allyId === weakest.id) o.allyId = null;
+      }
       c.echoesLeft += 1;
+      syncCrisisCoalitionAllies(war);
       pushLog(state, 'crisis', `Calamity Culling: ${weakest.name} is swallowed by crimson mud and rises as a Corrupted Echo!`);
     }
+  } else if (c.phase === 3) {
+    syncCrisisCoalitionAllies(war);
   }
 }
 
 export function buildCrisisBossDecision(state: GameState): PendingDecision {
   const war = state.war!;
   const c = war.crisis!;
+  syncCrisisCoalitionAllies(war);
   const ult = getPlayerSignatureUltimate(state);
   const hasMokutonOrSeal =
     (state.bloodline?.id === 'mokuton' && state.bloodline.stage !== 'latent') ||
@@ -220,20 +235,22 @@ export function buildCrisisAftermathDecision(state: GameState): PendingDecision 
     kind: 'war_crisis_end',
     eventId: 'war_crisis_end',
     title: `Aftermath: ${c.bossName} Shattered`,
-    body: `The storm collapses around the crater, leaving the exposed core of ${c.id === 'calamity' ? 'the unbound Tailed-Beast chakra' : 'the Mastermind’s Relic Matrix'} trembling before you. How will you end this era?`,
+    body: `The storm collapses around the crater, leaving the exposed core of ${c.id === 'calamity' ? 'the unbound Tailed-Beast chakra' : 'the Mastermind Relic Matrix'} trembling before you. How will you end this era?`,
     manual: true,
     options: [
       {
         id: 'crisis_seal',
-        label: `Bind the Core with a Grand Seal (Chakra+Intel avg ${sealScore})`,
-        sublabel: 'Establishes a lasting Era of True Peace and honors the coalition.',
+        label: `Bind the Core with a Grand Seal (Chakra+Intel avg ${sealScore}, needs 50+)`,
+        sublabel: 'Seals the core cleanly on success for True Peace; weaker seal strains Chakra (-12 HP).',
         autoEligible: true,
       },
       {
         id: 'crisis_shatter',
         label: 'Shatter the Core Completely (Costs 1 Resolve or 25 CP)',
         sublabel: 'Guaranteed destruction of the threat -> Era of True Peace.',
-        autoEligible: true,
+        disabled: war.resolves === 0 && war.cp < 25,
+        disabledReason: 'Requires 1 Resolve or 25 CP',
+        autoEligible: war.resolves > 0 || war.cp >= 25,
       },
       {
         id: 'crisis_claim',
@@ -331,7 +348,6 @@ export function resolveCrisisBossTurn(
   );
 
   if (war.hp <= 0) {
-    killCharacter(state, `slain fighting ${c.bossName} during Crisis War #${war.warNumber}`);
     return 'player_dead';
   }
 
@@ -368,9 +384,16 @@ export function canTriggerConvictionRoute(state: GameState, war: WarState): bool
   return livingSquad.length > 0;
 }
 
-export function startConvictionRoute(state: GameState, war: WarState): PendingDecision {
+export function startConvictionRoute(
+  state: GameState,
+  war: WarState,
+  triggerOutcome: 'victor' | 'shared' = 'victor',
+): PendingDecision {
   const leaning = findDominantExtremeLeaning(state)!;
   const opponent = [...state.team!.members.filter((m) => m.alive)].sort((a, b) => b.trust - a.trust)[0];
+
+  // Clear any leftover activeBattle when transitioning into Conviction Route
+  war.activeBattle = null;
 
   // Initial Resolve R (0..100) from traits, trust, and relationship stage
   let r = 48;
@@ -388,6 +411,7 @@ export function startConvictionRoute(state: GameState, war: WarState): PendingDe
     opponentId: opponent.id,
     opponentName: opponent.name,
     opponentRole: opponent.role,
+    triggerOutcome,
     resolveR: clamp(r, 15, 95),
     beat: 1,
     inDuel: false,
@@ -551,7 +575,7 @@ export function resolveConvictionDuelRound(
   state: GameState,
   optionId: string,
   rng: SeededRng,
-): 'continue' | 'player_won' | 'opponent_won' | 'turned_away' {
+): 'continue' | 'player_won' | 'opponent_won' | 'opponent_won_dead' | 'turned_away' {
   const war = state.war!;
   const conv = war.conviction!;
   const ult = getPlayerSignatureUltimate(state);
@@ -597,8 +621,8 @@ export function resolveConvictionDuelRound(
   );
 
   if (conv.opponentHp <= 0) {
-    conv.endingKey = 'conv_master_won';
-    state.flags.conv_master_won = true;
+    conv.endingKey = 'conv_player_won';
+    state.flags.conv_player_won = true;
     state.stats.bonds -= 12;
     state.stats.will += 8;
     clampStats(state);
@@ -625,8 +649,7 @@ export function resolveConvictionDuelRound(
       );
       return 'opponent_won';
     }
-    killCharacter(state, `felled by ${conv.opponentName} in the Final Valley Ideological Duel`);
-    return 'opponent_won';
+    return 'opponent_won_dead';
   }
 
   return 'continue';

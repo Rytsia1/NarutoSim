@@ -31,7 +31,8 @@ describe('World Tension, Seeded Endgame Crisis, and Dual Epilogue', () => {
     const endgameTick = tickWorldTension(state, new SeededRng(34));
     expect(endgameTick.triggerWar).toBe(true);
     expect(endgameTick.isCrisisWar).toBe(true);
-    expect(state.world.crisisStage).toBe(2);
+    // Pure tickWorldTension does not prematurely mutate crisisStage until prelude is actually queued
+    expect(state.world.crisisStage).toBe(1);
   });
 
   it('supports recurring 14-day wars in one life and returns to Continuous Life Loop afterward', () => {

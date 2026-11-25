@@ -86,7 +86,7 @@ export const ORIGINS: readonly OriginDef[] = [
     alwaysSibling: false,
     isOrphan: false,
     bloodlineMult: 4.0,
-    familyDisciplines: ['fuinjutsu', 'barrier', 'medical', 'senjutsu'],
+    familyDisciplines: ['fuinjutsu', 'barrier', 'medical', 'water_release'],
   },
   {
     id: 'civilian',

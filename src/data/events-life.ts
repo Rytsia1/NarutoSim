@@ -169,7 +169,7 @@ export const LIFE_EVENTS: readonly LifeEventDef[] = [
         label: 'Turn it over to the village archive',
         statHints: ['Bonds', 'Ryo'],
         autoEligible: true,
-        onPassText: 'The archivist pays a modest finder fee and commends your restraint.',
+        onPassText: 'The archivist pays a modest finder\'s fee and commends your restraint.',
         onPass: { stats: { ryo: 6, bonds: 3 }, leanings: { will_of_fire: 1 } },
       },
     ],
@@ -499,7 +499,7 @@ export const LIFE_EVENTS: readonly LifeEventDef[] = [
   },
   {
     id: 'le_keep_fit_routine',
-    title: 'An Aging Medic’s Warning',
+    title: 'An Aging Medic\'s Warning',
     body: 'After patching a torn shoulder tendon, an old village medic warns that shinobi bodies collect every shortcut after forty.',
     minAge: 32,
     maxAge: 48,
@@ -526,8 +526,8 @@ export const LIFE_EVENTS: readonly LifeEventDef[] = [
     id: 'le_hunter_nin_ambush',
     title: 'Hunter-Nin in the Cedar Fog',
     body: 'Whistling senbon slice the mist around your camp. A village tracker squad has finally caught up with your rogue scent.',
-    minAge: 16,
-    maxAge: 55,
+    minAge: 12,
+    maxAge: 65,
     weight: 18,
     repeatable: true,
     options: [

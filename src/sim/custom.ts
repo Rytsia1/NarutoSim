@@ -84,6 +84,7 @@ export function evaluateCustomBuild(cfg: CustomBuildConfig): CustomBuildValidati
 }
 
 export function applyCustomBuild(state: GameState, cfg: CustomBuildConfig): void {
+  const check = evaluateCustomBuild(cfg);
   state.flags.custom_run = true;
   state.originId = cfg.originId;
   state.villageId = cfg.villageId;
@@ -92,28 +93,31 @@ export function applyCustomBuild(state: GameState, cfg: CustomBuildConfig): void
   state.capacity = cfg.capacity;
   state.element = cfg.element;
 
-  // Apply stat offsets cleanly within caps
+  // Apply stat offsets cleanly within valid bounds and caps
   const statKeys: StatKey[] = ['chakra', 'intel', 'will', 'bonds', 'health', 'ryo'];
   for (const k of statKeys) {
-    const off = cfg.statOffsets[k] ?? 0;
+    const rawOff = cfg.statOffsets[k] ?? 0;
+    const off = Math.max(-20, Math.min(25, rawOff));
     state.stats[k] += off;
   }
 
-  if (cfg.startDisciplineId && DISCIPLINE_MAP[cfg.startDisciplineId]) {
-    const existing = state.disciplines.find((d) => d.id === cfg.startDisciplineId);
-    if (!existing) {
-      state.disciplines = [
-        {
-          id: cfg.startDisciplineId,
-          level: 1,
-          xp: 0,
-          lastLevelAge: 0,
-          quality: 1,
-          isMain: true,
-          declinedUntilAge: 0,
-        },
-      ];
-    }
+  if (
+    cfg.startDisciplineId &&
+    DISCIPLINE_MAP[cfg.startDisciplineId] &&
+    cfg.startDisciplineId !== 'senjutsu' &&
+    cfg.startDisciplineId !== 'space_time'
+  ) {
+    state.disciplines = [
+      {
+        id: cfg.startDisciplineId,
+        level: 1,
+        xp: 0,
+        lastLevelAge: 0,
+        quality: 1,
+        isMain: true,
+        declinedUntilAge: 0,
+      },
+    ];
   }
 
   if (cfg.latentBloodlineId && BLOODLINE_MAP[cfg.latentBloodlineId]) {
@@ -125,6 +129,8 @@ export function applyCustomBuild(state: GameState, cfg: CustomBuildConfig): void
       lastEventAge: 0,
       declined: false,
     };
+  } else if (check.valid && cfg.latentBloodlineId === undefined) {
+    // Keep natural rolled bloodline for the selected custom origin
   }
 
   // Enforce chakra cap

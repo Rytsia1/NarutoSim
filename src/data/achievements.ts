@@ -90,7 +90,7 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
     id: 'ach_bell_test',
     category: 'kizuna',
     title: 'Two Bells, Three Genin',
-    desc: 'Pass your Jonin Sensei’s induction Bell Test.',
+    desc: 'Pass your Jonin Sensei\'s induction Bell Test.',
     check: (s) => Boolean(s.team?.bellTestPassed),
   },
   {
@@ -120,8 +120,7 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
     title: 'Shield of Old Comrades',
     desc: 'Be saved in wartime combat by a Kizuna Loyal Interception.',
     check: (s) =>
-      Boolean(s.war?.loyalInterceptUsed) ||
-      s.warHistory.some((w) => w.narrativeArcs?.some((a) => a.id === 'arc_kizuna')),
+      Boolean(s.war?.loyalInterceptUsed) || Boolean(s.flags.had_loyal_intercept),
   },
   {
     id: 'ach_family',
@@ -165,14 +164,16 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
     category: 'war',
     title: 'Roaring Sky Collision',
     desc: 'Trigger a Jutsu Clash by firing Ultimates on the same round.',
-    check: (s) => Boolean(s.war?.facts.some((f) => f.type === 'jutsu_clash')),
+    check: (s) =>
+      Boolean(s.flags.had_jutsu_clash) || Boolean(s.war?.facts.some((f) => f.type === 'jutsu_clash')),
   },
   {
     id: 'ach_siege_breaker',
     category: 'war',
     title: 'Siege Breaker',
     desc: 'Counter-sally to break an enemy camp siege.',
-    check: (s) => Boolean(s.war?.facts.some((f) => f.type === 'siege_broken')),
+    check: (s) =>
+      Boolean(s.flags.had_siege_break) || Boolean(s.war?.facts.some((f) => f.type === 'siege_broken')),
   },
   {
     id: 'ach_s_mission',
@@ -201,7 +202,7 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
     id: 'ach_clan_legacy',
     category: 'powers',
     title: 'Keeper of the Hiden',
-    desc: 'Inherit your clan’s Hiden technique scroll.',
+    desc: 'Inherit your clan\'s Hiden technique scroll.',
     check: (s) => s.hasClanLegacy,
   },
   {
@@ -261,7 +262,7 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
     id: 'ach_conviction_turn',
     category: 'crises',
     title: 'Sheathed at the Brink',
-    desc: 'Turn away from your extreme conviction after hearing a comrade’s voice.',
+    desc: 'Turn away from your extreme conviction after hearing a comrade\'s voice.',
     hidden: true,
     check: (_s, m) => m.convictionEndings.includes('conv_turned_away'),
   },
@@ -272,7 +273,9 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
     desc: 'Conclude the Final Valley Ideological Duel.',
     hidden: true,
     check: (_s, m) =>
-      m.convictionEndings.includes('conv_master_won') || m.convictionEndings.includes('conv_bond_stopped'),
+      m.convictionEndings.includes('conv_player_won') ||
+      m.convictionEndings.includes('conv_master_won') ||
+      m.convictionEndings.includes('conv_bond_stopped'),
   },
 
   // === META / HALL OF SHINOBI (3) ===

@@ -31,17 +31,17 @@ export function LobbyBackdropCanvas({
 
     const resize = () => {
       const dpr = Math.min(2, window.devicePixelRatio || 1);
-      width = window.innerWidth;
+      width = document.documentElement.clientWidth || window.innerWidth;
       height = Math.min(460, Math.max(300, window.innerHeight * 0.48));
       canvas.width = Math.floor(width * dpr);
       canvas.height = Math.floor(height * dpr);
       canvas.style.width = `${width}px`;
       canvas.style.height = `${height}px`;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (!animate) {
+        draw(0);
+      }
     };
-
-    resize();
-    window.addEventListener('resize', resize);
 
     // Deterministic seeded positions for stars & village lanterns
     const stars = Array.from({ length: Math.min(24, Math.max(6, codexCount + 4)) }, (_, i) => ({
@@ -159,9 +159,10 @@ export function LobbyBackdropCanvas({
       ctx.fillRect(0, height * 0.78, width, height * 0.22);
     };
 
-    if (!animate) {
-      draw(0);
-    } else {
+    resize();
+    window.addEventListener('resize', resize);
+
+    if (animate) {
       const start = performance.now();
       const loop = (now: number) => {
         draw((now - start) / 1000);

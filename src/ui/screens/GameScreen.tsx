@@ -20,6 +20,7 @@ import { DecisionDialog } from '../components/DecisionDialog';
 interface GameScreenProps {
   state: GameState;
   yearProgress: number;
+  shortcutsBlocked?: boolean;
   onSetSpeed: (speed: 1 | 2 | 4 | 8) => void;
   onTogglePause: () => void;
   onToggleAuto: () => void;
@@ -35,6 +36,7 @@ const FOCUSES: FocusId[] = ['training', 'study', 'body', 'mind', 'social', 'work
 export function GameScreen({
   state,
   yearProgress,
+  shortcutsBlocked = false,
   onSetSpeed,
   onTogglePause,
   onToggleAuto,
@@ -45,7 +47,8 @@ export function GameScreen({
   onBackToLobby,
 }: GameScreenProps) {
   const [tab, setTab] = useState<'status' | 'squad' | 'wars'>('status');
-  const logEndRef = useRef<HTMLDivElement | null>(null);
+  const logFeedRef = useRef<HTMLDivElement | null>(null);
+  const nearBottomRef = useRef(true);
 
   const proj = computeCombatProjection(state);
   const chakraCap = getChakraCap(state);
@@ -53,19 +56,24 @@ export function GameScreen({
   const origin = ORIGIN_MAP[state.originId];
   const retireAvailable = canEnterRetirement(state);
 
-  // Scroll chronicle smoothly when new entries arrive
+  // Smart container-only auto-scroll (never yanks page scroll or traps users reading history)
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
+    const feed = logFeedRef.current;
+    if (feed && nearBottomRef.current) {
+      feed.scrollTop = feed.scrollHeight;
+    }
   }, [state.logs.length]);
 
-  // Global keyboard shortcuts (outside modals and inputs)
+  // Global keyboard shortcuts (disabled when modals/FX/settings open, modifier held, or on buttons/inputs)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (state.pending) return;
-      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (shortcutsBlocked || state.pending || e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
       if (e.code === 'Space') {
+        if (tag === 'BUTTON' || tag === 'A' || target?.getAttribute('role') === 'tab') return;
         e.preventDefault();
         onTogglePause();
       } else if (e.key === '1') {
@@ -82,7 +90,7 @@ export function GameScreen({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [state.pending, onTogglePause, onSetSpeed, onToggleAuto]);
+  }, [shortcutsBlocked, state.pending, onTogglePause, onSetSpeed, onToggleAuto]);
 
   const rankClass =
     state.rank === 'jonin'
@@ -155,7 +163,15 @@ export function GameScreen({
 
       <main className="game-layout">
         <section className="log-column" aria-label="Shinobi Life Chronicle">
-          <div className="log-feed">
+          <div
+            ref={logFeedRef}
+            className="log-feed"
+            onScroll={() => {
+              const el = logFeedRef.current;
+              if (!el) return;
+              nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+            }}
+          >
             {state.logs.map((entry) => (
               <article key={entry.id} className={`log-entry tone-${entry.tone}`}>
                 <div className="log-meta tabular">
@@ -182,7 +198,6 @@ export function GameScreen({
                 )}
               </article>
             ))}
-            <div ref={logEndRef} />
           </div>
         </section>
 
@@ -522,7 +537,11 @@ export function GameScreen({
         </aside>
       </main>
 
-      <DecisionDialog decision={state.pending} onResolve={onResolve} />
+      <DecisionDialog
+        decision={state.pending}
+        shortcutsBlocked={shortcutsBlocked}
+        onResolve={onResolve}
+      />
     </div>
   );
 }

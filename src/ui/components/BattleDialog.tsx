@@ -17,6 +17,9 @@ import type { GameState, PendingDecision, WarCompetitor } from '../../sim/types'
 interface BattleDialogProps {
   state: GameState;
   decision: PendingDecision;
+  minimized: boolean;
+  shortcutsBlocked?: boolean;
+  onMinimizedChange: (next: boolean) => void;
   onResolve: (optionId: string) => void;
 }
 
@@ -39,10 +42,17 @@ const SUPPORT_IDS = new Set([
 
 const RESOLVE_IDS = new Set(['resolve_boost', 'resolve_cp', 'resolve_flee']);
 
-export function BattleDialog({ state, decision, onResolve }: BattleDialogProps) {
+export function BattleDialog({
+  state,
+  decision,
+  minimized,
+  shortcutsBlocked = false,
+  onMinimizedChange,
+  onResolve,
+}: BattleDialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const innerRef = useRef<HTMLDivElement | null>(null);
   const titleId = useId();
-  const [minimized, setMinimized] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
   const [resolveOpen, setResolveOpen] = useState(false);
 
@@ -50,10 +60,13 @@ export function BattleDialog({ state, decision, onResolve }: BattleDialogProps) 
   const battle = war.activeBattle!;
   const enemy = war.enemies.find((e) => e.id === battle.enemyId)!;
 
-  // Reset accordions when switching to a new battle (keep open state clean per round)
+  // Reset accordions & scroll to top on every new round so Fighter Cards stay visible
   useEffect(() => {
     setSupportOpen(false);
     setResolveOpen(false);
+    if (innerRef.current) {
+      innerRef.current.scrollTop = 0;
+    }
   }, [decision.id]);
 
   // Open/close native <dialog> based on minimized state
@@ -62,6 +75,10 @@ export function BattleDialog({ state, decision, onResolve }: BattleDialogProps) 
     if (!el) return;
     if (!minimized && !el.open) {
       el.showModal();
+      if (innerRef.current) {
+        innerRef.current.scrollTop = 0;
+        innerRef.current.focus({ preventScroll: true });
+      }
     } else if (minimized && el.open) {
       el.close();
     }
@@ -95,12 +112,13 @@ export function BattleDialog({ state, decision, onResolve }: BattleDialogProps) 
   // Keyboard shortcuts: 0 toggles Minimize, 1-4 pick core actions, dynamic keys for accordions & retreat
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
+      if (shortcutsBlocked || e.ctrlKey || e.metaKey || e.altKey) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
 
       if (e.key === '0') {
         e.preventDefault();
-        setMinimized((prev) => !prev);
+        onMinimizedChange(!minimized);
         return;
       }
       if (minimized) return;
@@ -130,7 +148,20 @@ export function BattleDialog({ state, decision, onResolve }: BattleDialogProps) 
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [minimized, taiOpt, ninOpt, genOpt, ultOpt, retreatOpt, supportKey, resolveKey, retreatKey, onResolve]);
+  }, [
+    shortcutsBlocked,
+    minimized,
+    onMinimizedChange,
+    taiOpt,
+    ninOpt,
+    genOpt,
+    ultOpt,
+    retreatOpt,
+    supportKey,
+    resolveKey,
+    retreatKey,
+    onResolve,
+  ]);
 
   const playerRanks = getPlayerRanks(state, battle.resolveBoostThisRound);
   const ult = getPlayerSignatureUltimate(state);
@@ -156,17 +187,20 @@ export function BattleDialog({ state, decision, onResolve }: BattleDialogProps) 
   if (battle.isAmbush && battle.round <= 2) {
     playerMods.push(`▲▲ Initiative ${3 - battle.round} ${3 - battle.round === 1 ? 'exchange' : 'exchanges'}`);
   }
-  if (battle.isDefense && war.fort > 0) {
-    playerMods.push(`▲ Camp Wards (+${Math.round(war.fort * 0.22)})`);
+  if (battle.isDefense && (war.fort > 0 || war.workshop >= 100)) {
+    const fortVal = Math.round(war.fort * 0.22 + (war.workshop >= 100 ? 10 : 0));
+    playerMods.push(`▲ Camp Wards (+${fortVal})`);
   }
   if (battle.bloodlineActiveRounds > 0 && state.bloodline) {
     const bName = BLOODLINE_MAP[state.bloodline.id]?.name ?? 'Bloodline';
     playerMods.push(`▲▲ ${bName} (${battle.bloodlineActiveRounds}r)`);
   }
   if (battle.playerWardRounds > 0) playerMods.push(`▲ Barrier (${battle.playerWardRounds}r)`);
+  if (battle.playerBuffRounds > 0) playerMods.push(`▲ Tactical Buff +8 (${battle.playerBuffRounds}r)`);
   if (battle.playerCloneEvade) playerMods.push('▲ Clone Feint');
   if (battle.weaknessExploited) playerMods.push('▲ Weakness Read');
-  if (war.strategicClaimedBy === 'player') playerMods.push('▲ High Ground');
+  if (war.nextBattleBonus > 0) playerMods.push(`▲ Prep Bonus (+${war.nextBattleBonus})`);
+  if (war.strategicClaimedBy === 'player') playerMods.push('▲ High Ground (+6)');
   if (battle.resolveBoostThisRound) playerMods.push('▲▲ Surpass Limits');
 
   const enemyMods: string[] = [`▲▲ ${TACTIC_LABELS[enemy.tactic]}`];
@@ -196,7 +230,7 @@ export function BattleDialog({ state, decision, onResolve }: BattleDialogProps) 
           <button
             type="button"
             className="btn btn-primary btn-sm"
-            onClick={() => setMinimized(false)}
+            onClick={() => onMinimizedChange(false)}
           >
             Expand Battle (0) ▴
           </button>
@@ -209,17 +243,24 @@ export function BattleDialog({ state, decision, onResolve }: BattleDialogProps) 
         aria-labelledby={titleId}
         {...({ closedby: 'none' } as Record<string, string>)}
       >
-        <div className="battle-dialog-inner">
+        <div ref={innerRef} className="battle-dialog-inner" tabIndex={-1}>
           {/* Header Bar */}
           <header className="battle-header">
-            <h1 id={titleId} className="battle-title">
-              {headerEnemy} · Round {battle.round}
-              {!battle.isFinal && <span className="battle-round-cap"> / {battle.maxRounds}</span>}
-            </h1>
+            <div>
+              <h1 id={titleId} className="battle-title">
+                {headerEnemy} · Round {battle.round}
+                {!battle.isFinal && <span className="battle-round-cap"> / {battle.maxRounds}</span>}
+              </h1>
+              {decision.manual && (
+                <div className="chip-row" style={{ marginTop: 6 }}>
+                  <span className="chip">Critical Decision (Auto-Play Paused)</span>
+                </div>
+              )}
+            </div>
             <button
               type="button"
               className="battle-min-btn"
-              onClick={() => setMinimized(true)}
+              onClick={() => onMinimizedChange(true)}
               title="Minimize battle window to inspect the war log (Shortcut: 0)"
             >
               Minimize ▾
@@ -386,7 +427,6 @@ export function BattleDialog({ state, decision, onResolve }: BattleDialogProps) 
                 type="button"
                 className="battle-action-card"
                 disabled={taiOpt.disabled}
-                autoFocus
                 onClick={() => onResolve('taijutsu')}
               >
                 <div className="action-card-top">
@@ -495,6 +535,9 @@ export function BattleDialog({ state, decision, onResolve }: BattleDialogProps) 
                 <div className="action-card-chips">
                   <span className="cost-chip">Your trump card will be revealed</span>
                   <span className="cost-chip tabular">Chakra -{ult.cost}</span>
+                  {ultOpt.disabled && ultOpt.disabledReason && (
+                    <span className="cost-chip">{ultOpt.disabledReason}</span>
+                  )}
                 </div>
                 <div className="action-card-footer">
                   <span className="footer-label">Current</span>
@@ -574,6 +617,9 @@ export function BattleDialog({ state, decision, onResolve }: BattleDialogProps) 
                       >
                         <span className="battle-sub-title">{opt.label}</span>
                         {opt.sublabel && <span className="action-card-desc">{opt.sublabel}</span>}
+                        {opt.disabled && opt.disabledReason && (
+                          <span className="cost-chip">{opt.disabledReason}</span>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -597,8 +643,13 @@ export function BattleDialog({ state, decision, onResolve }: BattleDialogProps) 
                   </span>
                 </div>
                 <div className="action-card-desc">
-                  Disengage through smoke · Failed escape risks 14 to 26 parting damage
+                  Disengage through smoke · Failed escape risks 14 to 24 parting damage
                 </div>
+                {retreatOpt.disabled && retreatOpt.disabledReason && (
+                  <div className="action-card-chips">
+                    <span className="cost-chip">{retreatOpt.disabledReason}</span>
+                  </div>
+                )}
                 <div className="action-card-footer">
                   <span className="footer-label">Stat used</span>
                   <span className="stat-used-chip tabular">Speed {rankValueToGrade(playerRanks[1])}</span>

@@ -30,7 +30,7 @@ export function CodexPanel({ meta, selectedFatedId, onSelectFated }: CodexPanelP
         Bingo Book & Shinobi Codex
       </h2>
 
-      <div className="tab-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)', marginBottom: 16 }} role="tablist">
+      <div className="tab-strip tab-strip-4" style={{ marginBottom: 16 }} role="tablist">
         <button
           type="button"
           role="tab"
@@ -90,7 +90,7 @@ export function CodexPanel({ meta, selectedFatedId, onSelectFated }: CodexPanelP
                       ? `${VILLAGE_MAP[r.villageId].name} | ${ELEMENT_NAMES[r.element]} | Ultimate: ${r.ultimate.name}`
                       : 'Encounter this shinobi during a 14-day war to unlock their dossier.'}
                   </div>
-                  {entry && r.archetype !== 'rogue_s' && (
+                  {entry && (
                     <div style={{ marginTop: 6 }}>
                       <button
                         type="button"

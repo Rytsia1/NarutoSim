@@ -703,7 +703,7 @@ export const ROSTER: readonly RosterShinobiDef[] = [
   },
   {
     id: 'ros_hozuki_juggernaut',
-    name: 'Hoshigaki Raiga',
+    name: 'Raiga Hoshigaki',
     epithet: 'Shark-Skin Tide',
     villageId: 'kiri',
     archetype: 'juggernaut',
@@ -733,7 +733,7 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     },
   },
 
-  // === SPECIAL S-RANK OPERATIVES (3 — 8th Seat & High-Threat Encounters) ===
+  // === SPECIAL S-RANK OPERATIVES (3 - S-Rank High-Threat Encounters) ===
   {
     id: 'ros_s_kurogumo',
     name: 'Kurogumo of the Rain',
@@ -798,7 +798,7 @@ export const ROSTER: readonly RosterShinobiDef[] = [
   },
   {
     id: 'ros_s_golden_flash',
-    name: 'Minato-Style Envoy Kaito',
+    name: 'Thunder-Step Envoy Kaito',
     epithet: 'Yellow Horizon',
     villageId: 'kumo',
     archetype: 'rogue_s',
@@ -819,7 +819,7 @@ export const ROSTER: readonly RosterShinobiDef[] = [
       desc: 'Blinks between sealing markers to slam a roaring chakra sphere home.',
     },
     motive: 'End the border war in a single decisive night before casualties mount.',
-    originHint: 'Carries three-pronged marked kunai carrying flee-on-sight warnings.',
+    originHint: 'Bears three-pronged marked kunai carrying flee-on-sight warnings.',
     lines: {
       meet: 'A marked kunai lands inches from your boot before a shadow blinks beside you.',
       clash: 'Golden sparks streak across six points in a single heartbeat.',

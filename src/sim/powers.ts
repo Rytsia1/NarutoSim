@@ -207,7 +207,8 @@ export function awardYearlyDisciplineXp(state: GameState): void {
   if (state.focus === 'training' || state.focus === 'balance') {
     const main = state.disciplines.find((d) => d.isMain) ?? state.disciplines[0];
     const baseGain = state.focus === 'training' ? 3 : 1;
-    main.xp += Math.round(baseGain * teacherMult) + legacyBonus;
+    const cloneBonus = state.disciplines.some((d) => d.id === 'shadow_clone') ? 1 : 0;
+    main.xp += Math.round(baseGain * teacherMult) + legacyBonus + cloneBonus;
 
     // Bonus XP if active Sensei shares a discipline you already know
     const sensei = state.team?.active
@@ -242,8 +243,8 @@ export function tryBloodlineEvent(
 
   const r = hashRand(state.rng.seed, state.age, `bloodline_${b.stage}`);
 
-  if (b.stage === 'latent' && state.age >= 6 && state.age <= 18) {
-    const prob = parentDiedThisYear ? 0.45 : 0.16;
+  if (b.stage === 'latent' && state.age >= 6 && state.age <= 18 && state.age - b.lastEventAge >= 3) {
+    const prob = parentDiedThisYear ? 0.45 : state.age === 18 && state.flags.custom_run ? 1.0 : 0.16;
     if (r < prob) {
       return {
         id: `bl_awaken_${state.age}`,
@@ -331,7 +332,9 @@ export function tryDisciplineEvent(state: GameState, rng: SeededRng): PendingDec
 
     if (nextLevel === 3 && state.capacity < 2 && !state.hasClanLegacy) continue;
     if (nextLevel === 4) {
-      if (!prog.isMain || state.age < 20) continue;
+      const currentMain = state.disciplines.find((d) => d.isMain);
+      const mainCappedAt3 = currentMain ? (DISCIPLINE_MAP[currentMain.id]?.maxLevel ?? 4) < 4 : true;
+      if ((!prog.isMain && !mainCappedAt3) || state.age < 20) continue;
       if (state.capacity < 4 && !state.hasClanLegacy && state.rank !== 'jonin') continue;
     }
 

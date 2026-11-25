@@ -72,18 +72,17 @@ export function updateMetaFromState(
     next.codexRoster[fallenId] = cur;
   }
 
-  // 4. Crisis & Conviction records
-  if (state.world.crisisStage === 3 && state.world.seededCrisis !== 'none') {
-    const k = state.world.seededCrisis;
-    if (next.crisisCleared[k] === 0) next.crisisCleared[k] = 1;
-  }
+  // 4. Crisis & Conviction records (NOTE: crisisCleared count increments once in recordCompletedLifeInMeta!)
   const convEnd = state.war?.conviction?.endingKey;
   if (convEnd && !next.convictionEndings.includes(convEnd)) {
     next.convictionEndings.push(convEnd);
   }
-  for (const key of ['conv_turned_away', 'conv_together', 'conv_master_won', 'conv_bond_stopped']) {
-    if (state.flags[key] && !next.convictionEndings.includes(key)) {
-      next.convictionEndings.push(key);
+  for (const key of ['conv_turned_away', 'conv_together', 'conv_player_won', 'conv_master_won', 'conv_bond_stopped']) {
+    if (state.flags[key]) {
+      const normalized = key === 'conv_master_won' ? 'conv_player_won' : key;
+      if (!next.convictionEndings.includes(normalized)) {
+        next.convictionEndings.push(normalized);
+      }
     }
   }
 
@@ -110,6 +109,15 @@ export function recordCompletedLifeInMeta(
   bumped.livesPlayed += 1;
   if (state.world.crisisStage === 3 && state.world.seededCrisis !== 'none') {
     bumped.crisisCleared[state.world.seededCrisis] += 1;
+  }
+  // Increment cumulative defeats for roster shinobi slain during this completed life
+  for (const fallenId of state.fallenRosterIds) {
+    if (!ROSTER_MAP[fallenId]) continue;
+    const cur = bumped.codexRoster[fallenId] ?? { state: 'defeated', encounters: 0, defeats: 0 };
+    cur.state = 'defeated';
+    cur.defeats += 1;
+    cur.encounters = Math.max(cur.encounters + 1, cur.defeats);
+    bumped.codexRoster[fallenId] = cur;
   }
   return updateMetaFromState(bumped, state);
 }

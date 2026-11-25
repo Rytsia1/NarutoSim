@@ -1,5 +1,5 @@
 import { CRISIS_WHISPERS } from '../data/events-team';
-import { clamp, computeCombatProjection } from './powers';
+import { clamp } from './powers';
 import type { SeededRng } from './rng';
 import type { CrisisId, GameState, PendingDecision, ScenarioConfig } from './types';
 
@@ -64,7 +64,6 @@ export function tickWorldTension(state: GameState, rng: SeededRng): TensionTickR
     );
     if (availableWhispers.length > 0 && rng.chance(0.26)) {
       const cw = availableWhispers[0];
-      state.usedEvents.push(cw.id);
       whisperDecision = {
         id: `${cw.id}_${state.age}`,
         kind: 'crisis_whisper',
@@ -110,9 +109,6 @@ export function tickWorldTension(state: GameState, rng: SeededRng): TensionTickR
   if (canTriggerWar) {
     const isCrisisWar =
       w.seededCrisis !== 'none' && w.crisisStage < 2 && isEndgameReady(state);
-    if (isCrisisWar) {
-      w.crisisStage = 2;
-    }
     return { triggerWar: true, isCrisisWar, whisperDecision: null, omenLogged };
   }
 
@@ -209,55 +205,6 @@ export function buildWarPreludeDecision(state: GameState, isCrisisWar: boolean):
             },
           ]
         : []),
-    ],
-  };
-}
-
-export function buildWarCampaignDecision(
-  state: GameState,
-  isCrisisWar: boolean,
-  approach: 'front' | 'flank',
-): PendingDecision {
-  const proj = computeCombatProjection(state);
-  const warNum = state.world.eraNumber;
-  const crisisName =
-    state.world.seededCrisis === 'calamity'
-      ? 'the Tailed-Beast Calamity'
-      : 'the Shadow Mastermind';
-
-  return {
-    id: `war_climax_${warNum}_${state.age}`,
-    kind: 'war_campaign_choice',
-    eventId: 'war_climax',
-    title: isCrisisWar
-      ? `Final Night of Crisis War #${warNum}`
-      : `Decisive Night of War #${warNum} (Your Threat Tier: ${proj.threatTier})`,
-    body: isCrisisWar
-      ? `Fourteen relentless days culminate beneath a torn crimson sky. Allied shinobi hold the perimeter while you face the core of ${crisisName}. Your ${state.world.crisisClues} gathered clues highlight a narrow opening.`
-      : `By the final week of the ${approach === 'front' ? 'frontline siege' : 'flank campaign'}, enemy commanders commit their reserves in a desperate night push through the valley mist.`,
-    manual: true,
-    meta: { isCrisisWar, approach, warNum },
-    options: [
-      {
-        id: 'press_victory',
-        label: isCrisisWar
-          ? 'Commit every ounce of Chakra to break the crisis core'
-          : 'Break the enemy captain in a solo decisive clash',
-        statHints: ['Chakra', 'Health', 'Will'],
-        autoEligible: true,
-      },
-      {
-        id: 'tactical_hold',
-        label: 'Use traps, terrain, and intel to outlast the assault',
-        statHints: ['Intel', 'Will'],
-        autoEligible: true,
-      },
-      {
-        id: 'tactical_retreat',
-        label: 'Pop smoke and pull back alive before encirclement closes',
-        statHints: ['Health', 'Intel'],
-        autoEligible: true,
-      },
     ],
   };
 }

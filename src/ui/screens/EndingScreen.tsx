@@ -8,6 +8,7 @@ interface EndingScreenProps {
   state: GameState;
   onSubmitLastWords: (words: string) => void;
   onNewLife: () => void;
+  onOpenSettings: () => void;
   onReturnLobby: () => void;
 }
 
@@ -15,6 +16,7 @@ export function EndingScreen({
   state,
   onSubmitLastWords,
   onNewLife,
+  onOpenSettings,
   onReturnLobby,
 }: EndingScreenProps) {
   const [words, setWords] = useState('');
@@ -25,12 +27,22 @@ export function EndingScreen({
     return (
       <main className="ending-wrap">
         <header className="lobby-header">
-          <span className="lobby-kicker">End of a Shinobi Life</span>
+          <div className="disc-head">
+            <span className="lobby-kicker">End of a Shinobi Life</span>
+            <div className="controls-bar">
+              <button type="button" className="btn btn-sm btn-ghost" onClick={onOpenSettings}>
+                Settings
+              </button>
+              <button type="button" className="btn btn-sm btn-ghost" onClick={onReturnLobby}>
+                Lobby
+              </button>
+            </div>
+          </div>
           <h1 className="lobby-title">
             {state.name}, Age {state.age}
           </h1>
           <p className="lobby-tagline">
-            Fallen in {VILLAGE_MAP[state.villageId].name} territory ({state.birthYear + state.age}) from{' '}
+            Fallen in {VILLAGE_MAP[state.villageId]?.name ?? state.villageId} territory ({state.birthYear + state.age}) from{' '}
             {state.causeOfDeath ?? 'natural causes'}.
           </p>
         </header>
@@ -56,7 +68,7 @@ export function EndingScreen({
             className="btn btn-primary"
             onClick={() => onSubmitLastWords(words)}
           >
-            Seal Shinobi Record & View Posthumous Epilogue
+            Seal Shinobi Record &amp; View Posthumous Epilogue
           </button>
         </section>
       </main>
@@ -64,6 +76,12 @@ export function EndingScreen({
   }
 
   const rec = state.record!;
+  const peakRankText =
+    rec.specialStatus === 'kage'
+      ? 'Kage'
+      : rec.specialStatus !== 'none'
+        ? `${t(`status.${rec.specialStatus}`)} (${t(`rank.${rec.peakRank}`)})`
+        : t(`rank.${rec.peakRank}`);
 
   return (
     <main className="ending-wrap">
@@ -72,7 +90,7 @@ export function EndingScreen({
         <h1 className="lobby-title">{rec.name}</h1>
         <p className="lobby-tagline tabular">
           {rec.birthYear} to {rec.deathYear} (Age {rec.deathAge}) | {rec.villageName} | Peak Rank:{' '}
-          {rec.specialStatus === 'kage' ? 'Kage' : t(`rank.${rec.peakRank}`)}
+          {peakRankText}
         </p>
       </header>
 

@@ -114,7 +114,7 @@ export function pushLog(
 ): LogEntry {
   const isOrphan = ORIGIN_MAP[state.originId].isOrphan;
   const entry: LogEntry = {
-    id: `log_${state.age}_${++logCounter}_${state.logs.length}`,
+    id: `log_${state.rng.seed}_${state.age}_${++logCounter}`,
     age: state.age,
     year: state.birthYear + state.age,
     tone,
@@ -223,19 +223,25 @@ function generateNameForVillage(villageId: GameState['villageId'], sex: 'M' | 'F
 
 export function createNewLife(seed: number, scenario?: ScenarioConfig): GameState {
   const rng = new SeededRng(seed);
+  const customCfg = scenario?.customBuild;
 
-  const origin = rng.weighted(ORIGINS.map((o) => ({ item: o, weight: o.weight })));
-  const village = scenario?.preferredVillage
-    ? VILLAGE_MAP[scenario.preferredVillage]
-    : rng.pick(VILLAGES);
-  const sex: 'M' | 'F' = scenario?.preferredSex ?? (rng.chance(0.5) ? 'M' : 'F');
-  const customTrim = scenario?.customName?.trim();
+  const origin = customCfg
+    ? ORIGIN_MAP[customCfg.originId]
+    : rng.weighted(ORIGINS.map((o) => ({ item: o, weight: o.weight })));
+  const village = customCfg
+    ? VILLAGE_MAP[customCfg.villageId]
+    : scenario?.preferredVillage
+      ? VILLAGE_MAP[scenario.preferredVillage]
+      : rng.pick(VILLAGES);
+  const sex: 'M' | 'F' = customCfg?.sex ?? scenario?.preferredSex ?? (rng.chance(0.5) ? 'M' : 'F');
+  const customTrim = (customCfg?.name ?? scenario?.customName)?.trim();
   const name = customTrim && customTrim.length > 0 ? customTrim : generateNameForVillage(village.id, sex, rng);
 
   const [minCap, maxCap] = origin.capacityRange;
-  const capacity = rng.int(minCap, maxCap) as 1 | 2 | 3 | 4 | 5;
+  const capacity = (customCfg?.capacity ?? rng.int(minCap, maxCap)) as 1 | 2 | 3 | 4 | 5;
   const elements: ChakraElement[] = ['fire', 'wind', 'lightning', 'earth', 'water'];
-  const element: ChakraElement = rng.chance(0.55) ? village.dominantElement : rng.pick(elements);
+  const element: ChakraElement =
+    customCfg?.element ?? (rng.chance(0.55) ? village.dominantElement : rng.pick(elements));
 
   const birthYear = rng.int(1968, 2004);
   const [minRyo, maxRyo] = origin.ryoRange;
@@ -375,8 +381,11 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
     record: null,
   };
 
-  if (scenario?.customBuild) {
-    applyCustomBuild(state, scenario.customBuild);
+  // Save RNG snapshot AFTER all birth rolls so Year 1 never replays birth RNG draws
+  state.rng = rng.snapshot();
+
+  if (customCfg) {
+    applyCustomBuild(state, customCfg);
   }
 
   clampStats(state);
@@ -385,14 +394,15 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
   pushLog(
     state,
     'milestone',
-    `Born in ${resolvedVillage.name} (${resolvedVillage.region}) as ${state.name}. ${resolvedOrigin.name}: ${resolvedOrigin.shortDesc} ${resolvedVillage.flavor}${scenario?.customBuild ? ' (Custom Shinobi Build)' : ''}`,
+    `Born in ${resolvedVillage.name} (${resolvedVillage.region}) as ${state.name}. ${resolvedOrigin.name}: ${resolvedOrigin.shortDesc} ${resolvedVillage.flavor}${customCfg ? ' (Custom Shinobi Build)' : ''}`,
     { title: `Year ${birthYear}: A New Shinobi Life` },
   );
-  if (startDisc) {
+  const actualStartDisc = state.disciplines[0];
+  if (actualStartDisc) {
     pushLog(
       state,
       'normal',
-      `Your household begins instilling early fundamentals in ${DISCIPLINE_MAP[startDisc.id]?.name ?? startDisc.id}.`,
+      `Your household begins instilling early fundamentals in ${DISCIPLINE_MAP[actualStartDisc.id]?.name ?? actualStartDisc.id}.`,
     );
   }
 
@@ -444,14 +454,27 @@ function applySimpleEffect(
       } else if (fl === 'keep_fit') {
         state.keepFit = true;
       } else if (fl === 'trigger_marry') {
-        const spouseSex: 'M' | 'F' = state.sex === 'M' ? 'F' : 'M';
-        state.family.push({
-          relation: 'spouse',
-          name: generateNameForVillage(state.villageId, spouseSex, rng),
-          sex: spouseSex,
-          age: Math.max(18, state.age + rng.int(-3, 3)),
-          alive: true,
-        });
+        const romanticMate = state.team?.members.find(
+          (m) => m.role === 'teammate' && m.alive && m.relTrack === 'romance' && m.specialStatus !== 'missing_nin',
+        );
+        if (romanticMate) {
+          state.family.push({
+            relation: 'spouse',
+            name: romanticMate.name,
+            sex: romanticMate.sex,
+            age: romanticMate.age,
+            alive: true,
+          });
+        } else {
+          const spouseSex: 'M' | 'F' = state.sex === 'M' ? 'F' : 'M';
+          state.family.push({
+            relation: 'spouse',
+            name: generateNameForVillage(state.villageId, spouseSex, rng),
+            sex: spouseSex,
+            age: Math.max(18, state.age + rng.int(-3, 3)),
+            alive: true,
+          });
+        }
       } else if (fl === 'trigger_child') {
         const childSex: 'M' | 'F' = rng.chance(0.5) ? 'M' : 'F';
         const surname = state.name.split(' ').slice(1).join(' ') || 'Shinobi';
@@ -688,7 +711,7 @@ function rollPoolDecision(state: GameState, rng: SeededRng): PendingDecision | n
     }
   }
 
-  // 2. Dangerous shinobi mission (Genin/Chunin/Jonin) — real stakes & permadeath!
+  // 2. Dangerous shinobi mission (Genin/Chunin/Jonin) with real stakes & permadeath!
   if (
     (state.rank === 'genin' || state.rank === 'chunin' || state.rank === 'jonin') &&
     state.specialStatus !== 'missing_nin' &&
@@ -736,12 +759,20 @@ function rollPoolDecision(state: GameState, rng: SeededRng): PendingDecision | n
     const hasSpouse = state.family.some((f) => f.relation === 'spouse' && f.alive);
     const childCount = state.family.filter((f) => f.relation === 'child').length;
 
+    const villageDutyIds = new Set([
+      'le_rogue_informant',
+      'le_border_skirmish_dilemma',
+      'le_mentor_young_genin',
+      'le_kage_ambition',
+      'le_anbu_recruitment',
+    ]);
     const cands = LIFE_EVENTS.filter((ev) => {
       if (state.age < ev.minAge || state.age > ev.maxAge) return false;
       if (!ev.repeatable && state.usedEvents.includes(ev.id)) return false;
       if (ev.ranks && !ev.ranks.includes(state.rank)) return false;
       if (ev.excludeOrphan && isOrphan) return false;
       if (ev.onlyOrphan && !isOrphan) return false;
+      if (state.specialStatus === 'missing_nin' && villageDutyIds.has(ev.id)) return false;
       if (ev.id === 'le_marriage' && hasSpouse) return false;
       if (ev.id === 'le_have_child' && (!hasSpouse || childCount >= 3)) return false;
       if (ev.id === 'le_anbu_recruitment' && state.specialStatus !== 'none') return false;
@@ -777,7 +808,7 @@ function rollPoolDecision(state: GameState, rng: SeededRng): PendingDecision | n
     }
   }
 
-  // 4. Childhood growth events (ages 4–15)
+  // 4. Childhood growth events (ages 4 to 15)
   if (state.age >= 4 && state.age <= 15 && rng.chance(0.75)) {
     const gCands = GROWTH_EVENTS.filter(
       (g) => state.age >= g.minAge && state.age <= g.maxAge && !state.usedGrowth.includes(g.id),
@@ -816,7 +847,10 @@ export function advanceYear(state: GameState): void {
     for (let i = 0; i < jump; i++) {
       state.age += 1;
       state.stats.health = clamp(state.stats.health - (state.keepFit ? rng.int(0, 1) : rng.int(1, 2)), 0, 100);
-      tickTeamYear(state, rng);
+      const retTeamNotices = tickTeamYear(state, rng);
+      for (const notice of retTeamNotices) {
+        pushLog(state, 'bond', notice);
+      }
       tickFamilyYear(state, rng);
       if (state.stats.health <= 0 || state.age >= 102 || rng.chance(yearlyMortalityChance(state))) {
         killCharacter(state, state.age >= 60 ? 'old age in peaceful retirement' : causeOfNaturalDeath(state, rng));
@@ -884,11 +918,11 @@ export function advanceYear(state: GameState): void {
     nextDecision = buildAcademyChoiceDecision(state);
   }
 
-  // Priority 2: Age 6 Initial Focus Pick
-  if (!nextDecision && state.age === 6 && !state.flags.initial_focus_picked) {
+  // Priority 2: Early Focus Pick (ages 6-8 so Civilian/Orphan receive it after Academy choice)
+  if (!nextDecision && state.age >= 6 && state.age <= 8 && !state.flags.initial_focus_picked) {
     state.flags.initial_focus_picked = true;
     nextDecision = {
-      id: 'focus_initial_6',
+      id: `focus_initial_${state.age}`,
       kind: 'focus_initial',
       eventId: 'focus_initial',
       title: 'Choose Your Early Focus',
@@ -912,6 +946,9 @@ export function advanceYear(state: GameState): void {
 
   // Priority 4: Recurring Shinobi War / Endgame Crisis Eruption!
   if (!nextDecision && worldTick.triggerWar) {
+    if (worldTick.isCrisisWar) {
+      state.world.crisisStage = 2;
+    }
     nextDecision = buildWarPreludeDecision(state, worldTick.isCrisisWar);
   }
 
@@ -943,6 +980,10 @@ export function advanceYear(state: GameState): void {
 
   // Priority 10: Crisis Foreshadowing Whisper (Seeded Endgame Crisis)
   if (!nextDecision && worldTick.whisperDecision) {
+    const wId = String(worldTick.whisperDecision.meta?.whisperId ?? '');
+    if (wId && !state.usedEvents.includes(wId)) {
+      state.usedEvents.push(wId);
+    }
     nextDecision = worldTick.whisperDecision;
   }
 
@@ -1081,10 +1122,13 @@ export function resolvePendingDecision(
         // Immediately queue the induction Bell Test
         state.pending = buildBellTestDecision(state);
       } else {
-        state.academyFailedCount += 1;
+        const isEarlyExam = state.age < 12;
+        if (!isEarlyExam) {
+          state.academyFailedCount += 1;
+        }
         state.stats.will -= 2;
         clampStats(state);
-        if (state.academyFailedCount >= 2) {
+        if (!isEarlyExam && state.academyFailedCount >= 2) {
           state.rank = 'civilian';
           pushLog(
             state,
@@ -1096,7 +1140,9 @@ export function resolvePendingDecision(
           pushLog(
             state,
             'normal',
-            'Your clone flickers and dissolves before the examiners. You stay in the Academy for one more year to sharpen your fundamentals.',
+            isEarlyExam
+              ? 'The proctors commend your ambition on the early exam, though your fundamentals need another year in the Academy.'
+              : 'Your clone flickers and dissolves before the examiners. You stay in the Academy for one more year to sharpen your fundamentals.',
             { deltas: diffStats(before, state.stats), checks },
           );
         }
@@ -1144,7 +1190,7 @@ export function resolvePendingDecision(
           adjustMemberTrust(state, sensei, 5);
           mates.forEach((m) => adjustMemberTrust(state, m, -3));
         } else {
-          state.stats.health -= 4;
+          state.stats.health = Math.max(1, state.stats.health - 4);
           adjustMemberTrust(state, sensei, 2);
           mates.forEach((m) => adjustMemberTrust(state, m, 2));
         }
@@ -1211,7 +1257,7 @@ export function resolvePendingDecision(
 
         if (passed) {
           state.stats.will += 3;
-          state.stats.health -= 4;
+          state.stats.health = Math.max(1, state.stats.health - 4);
           if (state.team?.active) {
             state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 4));
           }
@@ -1425,10 +1471,14 @@ export function resolvePendingDecision(
             { title: `Awakened ${def.name}`, deltas: diffStats(before, state.stats) },
           );
         } else {
-          b.declined = true;
+          b.lastEventAge = state.age;
           state.stats.will += 3;
           clampStats(state);
-          pushLog(state, 'normal', `You seal away the stirring power of ${def.name}, choosing an ordinary shinobi path.`);
+          pushLog(
+            state,
+            'normal',
+            `You keep ${def.name} sealed for now to avoid drawing attention. It may stir again in a few years.`,
+          );
         }
       } else if (optionId === 'guided') {
         b.stage = nextStage;
@@ -1461,6 +1511,10 @@ export function resolvePendingDecision(
           state.stats.health -= 6;
           state.bodyStrain += def.strainCost;
           clampStats(state);
+          if (state.stats.health <= 0) {
+            killCharacter(state, `chakra pathway collapse while forcing ${def.name} alone`);
+            break;
+          }
           pushLog(
             state,
             'danger',
@@ -1491,7 +1545,7 @@ export function resolvePendingDecision(
 
       const quality = optionId === 'dig_deep' ? 1.2 : 1.0;
       if (optionId === 'dig_deep') {
-        state.stats.health -= 3;
+        state.stats.health = Math.max(1, state.stats.health - 3);
         state.stats.bonds -= 2;
       }
 
@@ -1542,6 +1596,10 @@ export function resolvePendingDecision(
         state.stats.health -= 8;
         state.stats.will += 3;
         clampStats(state);
+        if (state.stats.health <= 0) {
+          killCharacter(state, 'body failure during the clan Hiden inheritance ritual');
+          break;
+        }
         pushLog(
           state,
           'milestone',
@@ -1620,8 +1678,13 @@ export function resolvePendingDecision(
         }
         avgTrust += adjustMemberTrust(state, m, delta, Boolean(opt.unlockFragment));
       }
-      state.missions.d += 1;
+      if (def.id === 'te_d_rank_chores') state.missions.d += 1;
+      else if (def.id === 'te_c_rank_dilemma') state.missions.c += 1;
       clampStats(state);
+      if (state.stats.health <= 0) {
+        killCharacter(state, `fatal injuries sustained during ${def.title}`);
+        break;
+      }
       const trustChip: StatDeltaChip[] =
         avgTrust !== 0 ? [{ stat: 'trust', label: 'Squad Kizuna', delta: Math.round(avgTrust / 3) }] : [];
 
@@ -1697,11 +1760,11 @@ export function resolvePendingDecision(
         checks.push({ label: 'Anomaly Investigation', passed });
 
         if (passed) {
-          state.world.crisisClues = clamp(state.world.crisisClues + 1, 0, 5);
+          state.world.crisisClues = clamp(state.world.crisisClues + 1, 0, 3);
           state.stats.intel += 3;
           clampStats(state);
           pushLog(state, 'crisis', cw.clueFoundText, {
-            title: `Crisis Clue Uncovered (${state.world.crisisClues}/5)`,
+            title: `Crisis Clue Uncovered (${state.world.crisisClues}/3)`,
             deltas: [...diffStats(before, state.stats), { stat: 'clues', label: 'Crisis Clues', delta: 1 }],
             checks,
           });
@@ -1735,6 +1798,10 @@ export function resolvePendingDecision(
           state.stats.ryo -= 6;
         }
         clampStats(state);
+        if (state.stats.health <= 0) {
+          killCharacter(state, `exhaustion and shrapnel while aiding wounded in Great Shinobi War #${warNum}`);
+          break;
+        }
         state.warHistory.push({
           warNumber: warNum,
           ageAtStart: state.age,
@@ -1762,6 +1829,14 @@ export function resolvePendingDecision(
         state.stats.bonds -= 12;
         state.stats.will += 4;
         addLeaning(state, 'ruthless', 2);
+        if (state.team?.active) {
+          state.team.active = false;
+          state.team.disbandedAge = state.age;
+          state.team.disbandReason = 'tragedy';
+          for (const m of state.team.members) {
+            if (m.alive) adjustMemberTrust(state, m, -20);
+          }
+        }
         clampStats(state);
         state.warHistory.push({
           warNumber: warNum,
@@ -1801,187 +1876,6 @@ export function resolvePendingDecision(
       break;
     }
 
-    case 'war_campaign_choice': {
-      const isCrisisWar = Boolean(decision.meta?.isCrisisWar);
-      const approach = (decision.meta?.approach === 'flank' ? 'flank' : 'front') as 'front' | 'flank';
-      const warNum = Number(decision.meta?.warNum ?? state.world.eraNumber);
-      const proj = computeCombatProjection(state);
-
-      const clueBonus = isCrisisWar ? state.world.crisisClues * 7 : 0;
-      const rankRiskMod = state.rank === 'genin' ? -12 : state.rank === 'jonin' ? 8 : 0;
-      const difficulty = isCrisisWar ? 86 : approach === 'front' ? 68 : 56;
-
-      let rollScore = proj.score + rankRiskMod + clueBonus + rng.int(-14, 14);
-      if (optionId === 'tactical_hold') rollScore += Math.round(state.stats.intel * 0.16);
-      if (optionId === 'press_victory') rollScore += Math.round(state.stats.chakra * 0.14);
-
-      if (optionId === 'tactical_retreat') {
-        const escaped = state.stats.health * 0.4 + state.stats.intel * 0.4 + rng.int(0, 35) > 52;
-        checks.push({ label: 'Tactical Withdrawal', passed: escaped });
-        if (!escaped && rng.chance(state.rank === 'genin' ? 0.35 : 0.2)) {
-          state.warHistory.push({
-            warNumber: warNum,
-            ageAtStart: state.age,
-            rankAtStart: state.rank,
-            isCrisisWar,
-            crisisId: isCrisisWar ? state.world.seededCrisis : 'none',
-            outcome: 'dead',
-            title: `Fallen in War #${warNum}`,
-            fieldPromoted: false,
-            summary: 'Overtaken during a desperate nighttime retreat.',
-          });
-          killCharacter(state, `cut down retreating from Great Shinobi War #${warNum}`);
-          break;
-        }
-        state.stats.health -= 12;
-        state.stats.will += 2;
-        clampStats(state);
-        state.warHistory.push({
-          warNumber: warNum,
-          ageAtStart: state.age,
-          rankAtStart: state.rank,
-          isCrisisWar,
-          crisisId: isCrisisWar ? state.world.seededCrisis : 'none',
-          outcome: 'withdrew',
-          title: `Retreat from War #${warNum}`,
-          fieldPromoted: false,
-          summary: 'Pulled back through smoke and fog to live another day.',
-        });
-        state.phase = 'life';
-        state.world.warsSurvived += 1;
-        state.world.eraNumber += 1;
-        state.world.lastWarAge = state.age;
-        state.world.tension = rng.int(12, 26);
-        state.world.omenActive = false;
-        pushLog(state, 'war', `You escape encirclement alive as War #${warNum} grinds toward a bitter armistice.`, {
-          deltas: diffStats(before, state.stats),
-          checks,
-        });
-        break;
-      }
-
-      const decisiveWin = rollScore >= difficulty + 10;
-      const survived = rollScore >= difficulty - 10;
-      checks.push({ label: isCrisisWar ? 'Crisis Climax Clash' : 'Warfront Survival Clash', passed: survived });
-
-      if (!survived) {
-        const deathChance = optionId === 'press_victory' ? (isCrisisWar ? 0.55 : 0.42) : 0.26;
-        if (rng.chance(deathChance) || state.stats.health <= 18) {
-          state.warHistory.push({
-            warNumber: warNum,
-            ageAtStart: state.age,
-            rankAtStart: state.rank,
-            isCrisisWar,
-            crisisId: isCrisisWar ? state.world.seededCrisis : 'none',
-            outcome: 'dead',
-            title: isCrisisWar ? `Fell Against the Crisis (War #${warNum})` : `Fallen in War #${warNum}`,
-            fieldPromoted: false,
-            summary: 'Held the line on the final night until chakra ran dry.',
-          });
-          killCharacter(
-            state,
-            isCrisisWar
-              ? `killed fighting the ${state.world.seededCrisis === 'calamity' ? 'Tailed-Beast Calamity' : 'Shadow Mastermind'}`
-              : `killed in action during Great Shinobi War #${warNum}`,
-          );
-          break;
-        }
-      }
-
-      // Survived the war!
-      const damage = decisiveWin ? rng.int(6, 12) : rng.int(14, 24);
-      state.stats.health -= damage;
-      state.stats.will += decisiveWin ? 6 : 3;
-      state.stats.intel += 3;
-      state.stats.ryo += decisiveWin ? 16 : 8;
-      if (state.stats.health < 28) {
-        state.legacyScar = true;
-        state.flags.medical_retirement = true;
-      }
-
-      // Genin Squad casualties risk if deployed as active Genin on the front
-      if (state.team?.active && approach === 'front') {
-        const aliveMates = state.team.members.filter((m) => m.role === 'teammate' && m.alive);
-        if (aliveMates.length > 0 && rng.chance(0.14)) {
-          const fallen = rng.pick(aliveMates);
-          fallen.alive = false;
-          fallen.fateNote = `Killed in action during Great Shinobi War #${warNum} at age ${fallen.age}.`;
-          addLeaning(state, 'vengeance', 2);
-          pushLog(
-            state,
-            'danger',
-            `In the smoke of War #${warNum}, squadmate ${fallen.name} takes a lethal blow shielding the flank. Their headband stays in your pocket.`,
-          );
-        }
-      }
-
-      // Field promotion for Genin surviving frontline war!
-      let fieldPromoted = false;
-      if (state.rank === 'genin' && (decisiveWin || (approach === 'front' && rng.chance(0.45)))) {
-        promoteRank(state, 'chunin');
-        fieldPromoted = true;
-      }
-
-      // Crisis resolution -> True Peace & Kage candidacy
-      if (isCrisisWar && (decisiveWin || survived)) {
-        state.world.crisisStage = 3;
-        state.world.truePeace = true;
-        if (state.rank === 'jonin' && state.stats.bonds >= 55 && state.specialStatus !== 'missing_nin') {
-          state.specialStatus = 'kage';
-          pushLog(
-            state,
-            'milestone',
-            `Having broken the Endgame Crisis, the elders and shinobi of ${VILLAGE_MAP[state.villageId].name} acclaim you as Kage!`,
-            { title: 'Acclaimed as Kage' },
-          );
-        }
-      }
-
-      clampStats(state);
-      const outcome = decisiveWin ? 'victor' : 'survived';
-      const warTitle = isCrisisWar
-        ? `Dawn After the ${state.world.seededCrisis === 'calamity' ? 'Calamity' : 'Shadow War'}`
-        : decisiveWin
-          ? `Hero of Great Shinobi War #${warNum}`
-          : `Survivor of Great Shinobi War #${warNum}`;
-
-      state.warHistory.push({
-        warNumber: warNum,
-        ageAtStart: state.age,
-        rankAtStart: fieldPromoted ? 'genin' : state.rank,
-        isCrisisWar,
-        crisisId: isCrisisWar ? state.world.seededCrisis : 'none',
-        outcome,
-        title: warTitle,
-        fieldPromoted,
-        summary: decisiveWin
-          ? 'Turned the decisive night clash and returned decorated.'
-          : 'Endured fourteen brutal days of mud, fire, and survival.',
-      });
-
-      state.phase = 'life';
-      state.world.warsSurvived += 1;
-      state.world.eraNumber += 1;
-      state.world.lastWarAge = state.age;
-      state.world.tension = state.world.truePeace ? 5 : rng.int(10, 24);
-      state.world.omenActive = false;
-
-      pushLog(
-        state,
-        isCrisisWar ? 'crisis' : 'milestone',
-        `Post-War Aftermath: ${warTitle}. ${fieldPromoted ? 'For valor under fire, you receive a Field Promotion to Chunin! ' : ''}${state.world.truePeace ? 'The continent enters a long Era of True Peace.' : 'An uneasy ceasefire settles across the Five Great Nations as everyday life resumes.'}`,
-        { title: warTitle, deltas: diffStats(before, state.stats), checks },
-      );
-
-      // If Field Promotion promoted a Genin while squad was active, disband the Genin team!
-      if (fieldPromoted && state.team?.active) {
-        state.pending = disbandGeninTeam(state, 'player_chunin', [state.name]);
-      } else if (state.team?.active && state.team.members.filter((m) => m.role === 'teammate' && m.alive).length === 0) {
-        state.pending = disbandGeninTeam(state, 'tragedy', []);
-      }
-      break;
-    }
-
     case 'retirement_event': {
       const ev = RETIREMENT_EVENTS.find((r) => r.id === decision.meta?.retEventId);
       const opt = ev?.options.find((o) => o.id === optionId);
@@ -1995,6 +1889,10 @@ export function resolvePendingDecision(
         state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, opt.trustAllTeam!));
       }
       clampStats(state);
+      if (state.stats.health <= 0) {
+        killCharacter(state, 'quiet exhaustion in twilight retirement');
+        break;
+      }
       pushLog(state, 'epilogue', opt.resultText, { deltas: diffStats(before, state.stats) });
       break;
     }

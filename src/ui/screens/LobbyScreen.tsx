@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
+import { ACHIEVEMENTS } from '../../data/achievements';
 import { t } from '../../data/i18n';
-import { ROSTER_MAP } from '../../data/roster';
+import { ROSTER, ROSTER_MAP } from '../../data/roster';
 import { VILLAGES, VILLAGE_MAP } from '../../data/villages';
 import type {
   CrisisId,
@@ -44,10 +45,16 @@ export function LobbyScreen({
   const [crisisOverride, setCrisisOverride] = useState<'natural' | CrisisId>('natural');
   const [customName, setCustomName] = useState('');
   const [fatedRosterId, setFatedRosterId] = useState<string | null>(null);
+  const [confirmOverwrite, setConfirmOverwrite] = useState(false);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const handleStart = () => {
+    if (savedLife && !confirmOverwrite) {
+      setConfirmOverwrite(true);
+      return;
+    }
+    setConfirmOverwrite(false);
     onStartNew({
       preferredVillage: village || undefined,
       preferredSex: sex || undefined,
@@ -73,7 +80,7 @@ export function LobbyScreen({
     a.href = url;
     a.download = `narutosim-archive-${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
-    URL.revokeObjectURL(url);
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
 
   const handleImportFile = async (file: File | undefined) => {
@@ -105,15 +112,26 @@ export function LobbyScreen({
         <p className="lobby-tagline">{t('app.tagline')}</p>
         <div className="chip-row tabular" style={{ marginTop: 6 }}>
           <span className="chip">Lives Lived: {meta.livesPlayed}</span>
-          <span className="chip">Bingo Book: {Object.keys(meta.codexRoster).length}/24</span>
-          <span className="chip">Achievements: {meta.achievements.length}/36</span>
+          <span className="chip">
+            Bingo Book: {Object.keys(meta.codexRoster).length}/{ROSTER.length}
+          </span>
+          <span className="chip">
+            Achievements: {meta.achievements.length}/{ACHIEVEMENTS.length}
+          </span>
           {fatedRosterId && ROSTER_MAP[fatedRosterId] && (
-            <span className="chip pos">Fated Thread: {ROSTER_MAP[fatedRosterId].name}</span>
+            <button
+              type="button"
+              className="chip pos chip-btn"
+              onClick={() => setFatedRosterId(null)}
+              title="Click to clear Fated Thread"
+            >
+              Fated Thread: {ROSTER_MAP[fatedRosterId].name} ×
+            </button>
           )}
         </div>
       </header>
 
-      <nav className="tab-strip" style={{ gridTemplateColumns: 'repeat(4, 1fr)' }} aria-label="Lobby Sections" role="tablist">
+      <nav className="tab-strip tab-strip-4" aria-label="Lobby Sections" role="tablist">
         <button
           type="button"
           role="tab"
@@ -121,7 +139,7 @@ export function LobbyScreen({
           className="tab-btn"
           onClick={() => setLobbyTab('play')}
         >
-          New Life & Hall
+          New Life &amp; Hall
         </button>
         <button
           type="button"
@@ -152,7 +170,14 @@ export function LobbyScreen({
         </button>
       </nav>
 
-      {lobbyTab === 'custom' && <CustomBuilderPanel onStartCustom={handleStartCustom} />}
+      {/* Keep CustomBuilderPanel mounted so switching to Codex never wipes user edits */}
+      <div hidden={lobbyTab !== 'custom'}>
+        <CustomBuilderPanel
+          fatedRosterName={fatedRosterId ? ROSTER_MAP[fatedRosterId]?.name ?? null : null}
+          onClearFated={() => setFatedRosterId(null)}
+          onStartCustom={handleStartCustom}
+        />
+      </div>
 
       {lobbyTab === 'codex' && (
         <CodexPanel
@@ -179,7 +204,8 @@ export function LobbyScreen({
                 </div>
                 <div className="continue-meta tabular">
                   Age {savedLife.age} ({savedLife.birthYear + savedLife.age}) in{' '}
-                  {VILLAGE_MAP[savedLife.villageId].name} | Wars Survived: {savedLife.world.warsSurvived}
+                  {VILLAGE_MAP[savedLife.villageId]?.name ?? savedLife.villageId} | Wars Survived:{' '}
+                  {savedLife.world.warsSurvived}
                 </div>
                 <div>
                   <button type="button" className="btn btn-primary" onClick={onContinue}>
@@ -248,8 +274,17 @@ export function LobbyScreen({
 
             <div className="lobby-actions">
               <button type="button" className="btn btn-primary" onClick={handleStart}>
-                {t('lobby.new_life')}
+                {confirmOverwrite ? 'Confirm Overwrite Saved Life' : t('lobby.new_life')}
               </button>
+              {confirmOverwrite && (
+                <button
+                  type="button"
+                  className="btn btn-ghost"
+                  onClick={() => setConfirmOverwrite(false)}
+                >
+                  Cancel
+                </button>
+              )}
               <button type="button" className="btn btn-ghost" onClick={handleExport}>
                 {t('lobby.export_save')}
               </button>
@@ -265,7 +300,11 @@ export function LobbyScreen({
                 type="file"
                 accept="application/json"
                 style={{ display: 'none' }}
-                onChange={(e) => handleImportFile(e.target.files?.[0])}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  void handleImportFile(file);
+                }}
               />
             </div>
 

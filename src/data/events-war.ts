@@ -32,7 +32,7 @@ export const WAR_CROSSROADS: readonly WarCrossroadDef[] = [
       {
         id: 'escort_safe',
         label: 'Clear the axle and guide them to a hidden cave',
-        sublabel: '+6 Exposure, +4 Will, +5 Squad Kizuna',
+        sublabel: '+6 Exposure, -6 CP, +3 Will, +3 Bonds, +5 Squad Kizuna',
         autoEligible: true,
         exposureDelta: 6,
         cpDelta: -6,
@@ -62,7 +62,7 @@ export const WAR_CROSSROADS: readonly WarCrossroadDef[] = [
       {
         id: 'take_cipher_honor_letter',
         label: 'Seize the military map, but seal their family letter for neutral post',
-        sublabel: '+10 Intel on a rival, Will +3',
+        sublabel: '+10 Rival Intel, +3 Intel, +2 Will, +3 Ally/Squad Trust',
         autoEligible: true,
         stats: { intel: 3, will: 2 },
         allyTrustDelta: 3,
@@ -119,7 +119,7 @@ export const WAR_CROSSROADS: readonly WarCrossroadDef[] = [
       {
         id: 'disarm_loot',
         label: 'Carefully sever the chakra wire and claim the cache',
-        sublabel: '+14 CP, +8 Fort, +8 Ryo (or blast damage on slip)',
+        sublabel: '+14 CP, +8 Fort, +8 Ryo (or -10 HP blast on slip)',
         autoEligible: true,
         cpDelta: 14,
         fortDelta: 8,
@@ -157,7 +157,7 @@ export const WAR_CROSSROADS: readonly WarCrossroadDef[] = [
       {
         id: 'burn_scroll',
         label: 'Reduce the scroll to ash with a quick spark',
-        sublabel: '+5 Will, Will of Fire +1',
+        sublabel: '+3 Will, +3 Squad Trust, Will of Fire +1',
         autoEligible: true,
         stats: { will: 3 },
         squadTrustDelta: 3,
@@ -230,7 +230,7 @@ export const WAR_CROSSROADS: readonly WarCrossroadDef[] = [
       {
         id: 'share_fire',
         label: 'Accept the brief truce and trade quiet stories until midnight',
-        sublabel: '+10 HP, +10 CP, Ally/Rival Trust up',
+        sublabel: '+10 HP, +10 CP, +6 Ally Trust, +3 Bonds',
         autoEligible: true,
         hpDelta: 10,
         cpDelta: 10,
@@ -308,7 +308,7 @@ export const WAR_CROSSROADS: readonly WarCrossroadDef[] = [
       {
         id: 'hone_resolve',
         label: 'Sharpen your blades and steady your chakra breathing',
-        sublabel: '+12 CP, +4 Will',
+        sublabel: '+12 CP, +3 Will',
         autoEligible: true,
         cpDelta: 12,
         stats: { will: 3 },
@@ -333,7 +333,7 @@ export const WAR_CROSSROADS: readonly WarCrossroadDef[] = [
       {
         id: 'accept_honor',
         label: 'Leave your own mark in reply and steel your spirit',
-        sublabel: '+5 Will, +6 Ally/Squad Trust, Exposure +5',
+        sublabel: '+4 Will, +5 Ally / +4 Squad Trust, Exposure +5',
         autoEligible: true,
         exposureDelta: 5,
         allyTrustDelta: 5,

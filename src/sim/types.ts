@@ -65,6 +65,7 @@ export interface ConvictionState {
   opponentId: string;
   opponentName: string;
   opponentRole: 'sensei' | 'teammate';
+  triggerOutcome: 'victor' | 'shared';
   resolveR: number; // 0..100
   beat: 1 | 2 | 3;
   inDuel: boolean;
@@ -268,6 +269,8 @@ export interface ActiveBattleState {
   isFinal: boolean;
   isAmbush: boolean;
   isDefense: boolean;
+  startedInPhase?: 'day' | 'night';
+  rewardTag?: 'strategic_ridge';
   sceneLine: string;
   enemyQuip: string;
   playerWardRounds: number;
@@ -505,7 +508,6 @@ export type DecisionKind =
   | 'mission_event'
   | 'crisis_whisper'
   | 'war_prelude'
-  | 'war_campaign_choice'
   | 'war_day'
   | 'war_night'
   | 'war_target'

@@ -60,7 +60,7 @@ export function buildPosthumousEpilogue(state: GameState): EpilogueBeat[] {
     beats.push({
       title: 'Carved Into the Memorial Stone',
       tone: 'milestone',
-      body: `Black umbrellas crowd the hillside above ${village} as your name is chiselled beside the village’s greatest defenders. Passing at age ${state.age} (${state.causeOfDeath ?? 'at the end of your road'}), you leave behind the weight of a true ${state.specialStatus === 'kage' ? 'Kage' : 'Jonin'}.`,
+      body: `Black umbrellas crowd the hillside above ${village} as your name is chiseled beside the village's greatest defenders. Passing at age ${state.age} (${state.causeOfDeath ?? 'at the end of your road'}), you leave behind the weight of a true ${state.specialStatus === 'kage' ? 'Kage' : 'Jonin'}.`,
     });
   } else if (state.rank === 'genin' || state.rank === 'chunin') {
     beats.push({
@@ -158,14 +158,18 @@ export function buildLifeRecord(state: GameState): LifeRecord {
     teamSummary = `Team ${state.team.number} (${state.team.active ? 'Active at death' : `Disbanded at age ${state.team.disbandedAge}`}): ${names}`;
   }
 
+  const crisisName =
+    state.world.seededCrisis === 'calamity' ? 'Tailed-Beast Calamity' : 'Shadow Mastermind';
   const crisisStatus =
     state.world.seededCrisis === 'none'
       ? 'Normal Shinobi Era'
       : state.world.crisisStage === 3
-        ? `Resolved ${state.world.seededCrisis === 'calamity' ? 'Tailed-Beast Calamity' : 'Shadow Mastermind'}`
-        : state.world.crisisStage === 2
-          ? `Fell during ${state.world.seededCrisis === 'calamity' ? 'Tailed-Beast Calamity' : 'Shadow Mastermind'}`
-          : `Unresolved (${state.world.crisisClues} clues gathered before death)`;
+        ? `Resolved ${crisisName}`
+        : state.flags.crisis_claimed
+          ? `Claimed Forbidden Power (${crisisName})`
+          : state.world.crisisStage === 2
+            ? `Endured / Fell during ${crisisName}`
+            : `Unresolved (${state.world.crisisClues} clues gathered before death)`;
 
   return {
     id: `life_${state.rng.seed}_${state.birthYear}_${state.age}`,

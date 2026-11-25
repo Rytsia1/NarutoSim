@@ -3,16 +3,26 @@ import type { PendingDecision } from '../../sim/types';
 
 interface DecisionDialogProps {
   decision: PendingDecision | null;
+  shortcutsBlocked?: boolean;
   onResolve: (optionId: string, freeText?: string) => void;
 }
 
-export function DecisionDialog({ decision, onResolve }: DecisionDialogProps) {
+export function DecisionDialog({
+  decision,
+  shortcutsBlocked = false,
+  onResolve,
+}: DecisionDialogProps) {
   const dialogRef = useRef<HTMLDialogElement | null>(null);
+  const innerRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const titleId = useId();
   const [freeText, setFreeText] = useState('');
 
   useEffect(() => {
     setFreeText('');
+    if (innerRef.current) {
+      innerRef.current.scrollTop = 0;
+    }
   }, [decision?.id]);
 
   useEffect(() => {
@@ -23,6 +33,17 @@ export function DecisionDialog({ decision, onResolve }: DecisionDialogProps) {
       el.showModal();
     } else if (!decision && el.open) {
       el.close();
+    }
+
+    if (decision) {
+      if (innerRef.current) {
+        innerRef.current.scrollTop = 0;
+      }
+      if (decision.allowFreeText && textareaRef.current) {
+        textareaRef.current.focus({ preventScroll: true });
+      } else if (innerRef.current) {
+        innerRef.current.focus({ preventScroll: true });
+      }
     }
   }, [decision]);
 
@@ -39,10 +60,11 @@ export function DecisionDialog({ decision, onResolve }: DecisionDialogProps) {
     return () => el.removeEventListener('cancel', handleCancel);
   }, [decision]);
 
-  // Number keys 1..9 choose options (unless typing in free-text textarea)
+  // Number keys 1..9 choose options (disabled when blocked, modifier held, or typing in free-text)
   useEffect(() => {
     if (!decision) return;
     const onKeyDown = (e: KeyboardEvent) => {
+      if (shortcutsBlocked || e.ctrlKey || e.metaKey || e.altKey) return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === 'TEXTAREA' || tag === 'INPUT') return;
       const num = Number(e.key);
@@ -56,7 +78,7 @@ export function DecisionDialog({ decision, onResolve }: DecisionDialogProps) {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [decision, freeText, onResolve]);
+  }, [decision, shortcutsBlocked, freeText, onResolve]);
 
   return (
     <dialog
@@ -66,7 +88,7 @@ export function DecisionDialog({ decision, onResolve }: DecisionDialogProps) {
       {...({ closedby: 'none' } as Record<string, string>)}
     >
       {decision && (
-        <div className="dialog-inner">
+        <div ref={innerRef} className="dialog-inner" tabIndex={-1}>
           <div>
             <h1 id={titleId} className="dialog-heading">
               {decision.title}
@@ -84,6 +106,7 @@ export function DecisionDialog({ decision, onResolve }: DecisionDialogProps) {
             <div className="field">
               <label htmlFor="reflection-input">Personal Note</label>
               <textarea
+                ref={textareaRef}
                 id="reflection-input"
                 rows={3}
                 value={freeText}
@@ -100,7 +123,6 @@ export function DecisionDialog({ decision, onResolve }: DecisionDialogProps) {
                 type="button"
                 className="option-btn"
                 disabled={opt.disabled}
-                autoFocus={idx === 0 && !decision.allowFreeText}
                 onClick={() => onResolve(opt.id, decision.allowFreeText ? freeText : undefined)}
               >
                 <span className="option-head">

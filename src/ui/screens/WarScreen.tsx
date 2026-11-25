@@ -4,10 +4,10 @@ import { ELEMENT_NAMES } from '../../data/powers';
 import { ARCHETYPE_LABELS } from '../../data/roster';
 import { VILLAGE_MAP } from '../../data/villages';
 import { getRel, SHORT_GOAL_LABELS } from '../../sim/ai';
-import { getDisplayEnemyRanks, getPlayerRanks } from '../../sim/combat';
+import { getHealthConditionLabel, getPlayerRanks } from '../../sim/combat';
 import { getMastermindDivisor } from '../../sim/crises';
 import { detectWarArcs } from '../../sim/narrative';
-import { rankValueToLetter } from '../../sim/powers';
+import { rankValueToGrade } from '../../sim/powers';
 import type { GameState } from '../../sim/types';
 import { getLivingEnemies } from '../../sim/war';
 import { BattleDialog } from '../components/BattleDialog';
@@ -27,6 +27,9 @@ interface WarScreenProps {
   state: GameState;
   warDayProgress: number;
   warBeatProgress: number;
+  shortcutsBlocked?: boolean;
+  battleMinimized: boolean;
+  onBattleMinimizedChange: (next: boolean) => void;
   onSetSpeed: (speed: 1 | 2 | 4 | 8) => void;
   onTogglePause: () => void;
   onToggleAuto: () => void;
@@ -40,6 +43,9 @@ export function WarScreen({
   state,
   warDayProgress,
   warBeatProgress,
+  shortcutsBlocked = false,
+  battleMinimized,
+  onBattleMinimizedChange,
   onSetSpeed,
   onTogglePause,
   onToggleAuto,
@@ -50,7 +56,8 @@ export function WarScreen({
 }: WarScreenProps) {
   const [sideTab, setSideTab] = useState<'competitors' | 'diplomacy'>('competitors');
   const war = state.war!;
-  const logEndRef = useRef<HTMLDivElement | null>(null);
+  const logFeedRef = useRef<HTMLDivElement | null>(null);
+  const nearBottomRef = useRef(true);
   const livingCount = getLivingEnemies(war).length;
   const activeBattle = war.activeBattle;
   const battleEnemy = activeBattle
@@ -60,17 +67,24 @@ export function WarScreen({
   const playerRanks = getPlayerRanks(state, activeBattle?.resolveBoostThisRound);
   const liveArcs = detectWarArcs(state, war);
 
+  // Smart container-only auto-scroll (never yanks page scroll or traps users reading history)
   useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'auto', block: 'end' });
-  }, [state.logs.length, activeBattle?.rounds.length]);
+    const feed = logFeedRef.current;
+    if (feed && nearBottomRef.current) {
+      feed.scrollTop = feed.scrollHeight;
+    }
+  }, [state.logs.length]);
 
-  // War-phase keyboard shortcuts (disabled while a modal decision is open)
+  // War-phase keyboard shortcuts (disabled when modals/FX/settings open or typing/activating buttons)
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (state.pending) return;
-      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (shortcutsBlocked || state.pending || e.ctrlKey || e.metaKey || e.altKey) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
       if (e.code === 'Space') {
+        if (tag === 'BUTTON' || tag === 'A' || target?.getAttribute('role') === 'tab') return;
         e.preventDefault();
         onTogglePause();
       } else if (e.key === '1') {
@@ -87,15 +101,16 @@ export function WarScreen({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [state.pending, onTogglePause, onSetSpeed, onToggleAuto]);
+  }, [shortcutsBlocked, state.pending, onTogglePause, onSetSpeed, onToggleAuto]);
 
-  const warLogs = state.logs.slice(-40);
+  const warLogs = state.logs.slice(-60);
   const waitingForBeat = !state.pending && war.beatQueue.length > 0;
   const nextBeat = war.beatQueue[0] ?? null;
   const remainSec = nextBeat
     ? Math.max(0, (nextBeat.delay - war.beatClock) / state.speed)
     : 0;
   const isBattleDialogOpen = state.pending?.kind === 'war_battle_round' && activeBattle !== null;
+  const showInlineArena = Boolean(activeBattle && battleEnemy && (!isBattleDialogOpen || battleMinimized));
 
   return (
     <div className="app-shell">
@@ -110,7 +125,7 @@ export function WarScreen({
           <span className="status-tag">{t(`rank.${state.rank}`)}</span>
           {activeAlly && (
             <span className="status-tag rank-genin">
-              Ally: {activeAlly.intel >= 80 ? activeAlly.name : activeAlly.archetype}
+              Ally: {activeAlly.intel >= 80 ? activeAlly.name : ARCHETYPE_LABELS[activeAlly.archetype]}
             </span>
           )}
           {war.strategicClaimedBy === 'player' && (
@@ -154,7 +169,7 @@ export function WarScreen({
               onClick={onSkipWarBeat}
               title="Advance immediately to the next war beat"
             >
-              Next Beat
+              {state.paused ? 'Step Beat' : 'Next Beat'}
             </button>
           )}
 
@@ -190,7 +205,7 @@ export function WarScreen({
         <div className="hud-meter">
           <span className="hud-label">
             Camp Fort {war.fort}
-            {war.workshop > 0 ? ` (WS ${war.workshop}%)` : ''}
+            {war.workshop > 0 ? ` (Barrier ${war.workshop}%)` : ''}
           </span>
           <div className="bar-track">
             <div className="bar-fill" style={{ width: `${Math.min(100, war.fort)}%` }} />
@@ -221,17 +236,21 @@ export function WarScreen({
       <div className="war-clock-strip" aria-live="polite">
         <div className="war-clock-meta tabular">
           <span className="war-tod-badge">
-            Day {war.day} · {TIME_OF_DAY_LABELS[war.timeOfDay] ?? 'WAR'}
+            Day {war.day}/{war.maxDays} · {TIME_OF_DAY_LABELS[war.timeOfDay] ?? 'WAR'} ({Math.round(warDayProgress * 100)}%)
           </span>
           <span className="war-status-text">
             {state.paused
-              ? 'Paused (Press Space to resume)'
+              ? 'Paused (Press Space to resume or click Step Beat)'
               : state.pending
                 ? 'Awaiting your tactical command'
                 : war.statusText}
           </span>
           <span className="war-clock-eta">
-            {waitingForBeat && !state.paused ? `Next beat: ${remainSec.toFixed(1)}s` : `${Math.round(warDayProgress * 100)}% of day`}
+            {waitingForBeat
+              ? state.paused
+                ? `Beat paused (${remainSec.toFixed(1)}s left)`
+                : `Next beat: ${remainSec.toFixed(1)}s`
+              : 'Command Ready'}
           </span>
         </div>
         <div className="war-clock-bars">
@@ -294,8 +313,8 @@ export function WarScreen({
             </section>
           )}
 
-          {activeBattle && battleEnemy && (
-            <section className="panel battle-arena-card" aria-label="Active Solo Battle">
+          {showInlineArena && activeBattle && battleEnemy && (
+            <section className="panel battle-arena-card" aria-label="Active Solo Battle Summary">
               <div className="disc-head" style={{ marginBottom: 12 }}>
                 <span className="log-title">
                   {activeBattle.isFinal
@@ -320,21 +339,12 @@ export function WarScreen({
                     <div className="bar-fill health" style={{ width: `${war.hp}%` }} />
                   </div>
                   <div className="chip-row" style={{ marginTop: 6 }}>
-                    <span className="chip">TAI {rankValueToLetter(playerRanks[0])}</span>
-                    <span className="chip">SPD {rankValueToLetter(playerRanks[1])}</span>
-                    <span className="chip">STA {rankValueToLetter(playerRanks[2])}</span>
-                    <span className="chip">CHK {rankValueToLetter(playerRanks[3])}</span>
-                    <span className="chip">INS {rankValueToLetter(playerRanks[4])}</span>
+                    <span className="chip">TAI {rankValueToGrade(playerRanks[0])}</span>
+                    <span className="chip">SPD {rankValueToGrade(playerRanks[1])}</span>
+                    <span className="chip">STA {rankValueToGrade(playerRanks[2])}</span>
+                    <span className="chip">CHK {rankValueToGrade(playerRanks[3])}</span>
+                    <span className="chip">INS {rankValueToGrade(playerRanks[4])}</span>
                   </div>
-                  {(activeBattle.bloodlineActiveRounds > 0 ||
-                    activeBattle.playerWardRounds > 0 ||
-                    activeBattle.weaknessExploited) && (
-                    <div className="chip-row">
-                      {activeBattle.bloodlineActiveRounds > 0 && <span className="chip pos">Bloodline Active</span>}
-                      {activeBattle.playerWardRounds > 0 && <span className="chip pos">Barrier Ward</span>}
-                      {activeBattle.weaknessExploited && <span className="chip pos">Weakness Read</span>}
-                    </div>
-                  )}
                 </div>
 
                 <div className="arena-fighter">
@@ -342,46 +352,27 @@ export function WarScreen({
                     <strong>
                       {battleEnemy.intel >= 80
                         ? `${battleEnemy.name} (${battleEnemy.epithet})`
-                        : `Unknown ${battleEnemy.archetype.toUpperCase()}`}
+                        : `Unknown ${ARCHETYPE_LABELS[battleEnemy.archetype]}`}
                     </strong>
                     <span className="chip">
                       {battleEnemy.intel >= 60 ? ELEMENT_NAMES[battleEnemy.element] : '???'}
                     </span>
                   </div>
                   <div className="disc-sub tabular">
-                    HP {battleEnemy.hp}/100 | Intel {battleEnemy.intel}%
+                    {battleEnemy.intel >= 80
+                      ? `HP ${battleEnemy.hp}/100 | Intel ${battleEnemy.intel}%`
+                      : `${getHealthConditionLabel(battleEnemy.hp)} | Intel ${battleEnemy.intel}%`}
                   </div>
                   <div className="bar-track">
                     <div className="bar-fill tension" style={{ width: `${battleEnemy.hp}%` }} />
                   </div>
-                  {(() => {
-                    const eRanks = getDisplayEnemyRanks(battleEnemy);
-                    const est = battleEnemy.intel < 80 ? '~' : '';
-                    return (
-                      <div className="chip-row" style={{ marginTop: 6 }}>
-                        <span className="chip">
-                          TAI {est}
-                          {rankValueToLetter(eRanks[0])}
-                        </span>
-                        <span className="chip">
-                          SPD {est}
-                          {rankValueToLetter(eRanks[1])}
-                        </span>
-                        <span className="chip">
-                          STA {est}
-                          {rankValueToLetter(eRanks[2])}
-                        </span>
-                        <span className="chip">
-                          CHK {est}
-                          {rankValueToLetter(eRanks[3])}
-                        </span>
-                        <span className="chip">
-                          INS {est}
-                          {rankValueToLetter(eRanks[4])}
-                        </span>
-                      </div>
-                    );
-                  })()}
+                  <div className="chip-row" style={{ marginTop: 6 }}>
+                    <span className="chip">TAI {battleEnemy.intel >= 80 ? rankValueToGrade(battleEnemy.ranks[0]) : '?'}</span>
+                    <span className="chip">SPD {battleEnemy.intel >= 80 ? rankValueToGrade(battleEnemy.ranks[1]) : '?'}</span>
+                    <span className="chip">STA {battleEnemy.intel >= 80 ? rankValueToGrade(battleEnemy.ranks[2]) : '?'}</span>
+                    <span className="chip">CHK {battleEnemy.intel >= 80 ? rankValueToGrade(battleEnemy.ranks[3]) : '?'}</span>
+                    <span className="chip">INS {battleEnemy.intel >= 80 ? rankValueToGrade(battleEnemy.ranks[4]) : '?'}</span>
+                  </div>
                 </div>
               </div>
 
@@ -406,7 +397,15 @@ export function WarScreen({
             </section>
           )}
 
-          <div className="log-feed">
+          <div
+            ref={logFeedRef}
+            className="log-feed"
+            onScroll={() => {
+              const el = logFeedRef.current;
+              if (!el) return;
+              nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+            }}
+          >
             {warLogs.map((entry) => (
               <article key={entry.id} className={`log-entry tone-${entry.tone}`}>
                 <div className="log-meta tabular">
@@ -419,7 +418,6 @@ export function WarScreen({
                 <p className="log-text">{entry.text}</p>
               </article>
             ))}
-            <div ref={logEndRef} />
           </div>
         </section>
 
@@ -460,7 +458,13 @@ export function WarScreen({
                           {knownName ? `${e.name} (${e.epithet})` : `Unknown ${ARCHETYPE_LABELS[e.archetype]}`}
                         </span>
                         <span className={`status-tag ${isAlly ? 'rank-genin' : e.alive ? '' : 'tension-high'}`}>
-                          {!e.alive ? 'Eliminated' : isAlly ? `ALLY (HP ${e.hp})` : `HP ${e.hp}`}
+                          {!e.alive
+                            ? 'Eliminated'
+                            : isAlly
+                              ? `ALLY (HP ${e.hp})`
+                              : e.intel >= 50
+                                ? `HP ${e.hp}`
+                                : getHealthConditionLabel(e.hp)}
                         </span>
                       </div>
                       <div className="disc-sub tabular">
@@ -532,7 +536,7 @@ export function WarScreen({
                     <div key={`${f.day}_${f.type}_${idx}`} className="disc-item">
                       <div className="disc-head tabular">
                         <span>Day {f.day}</span>
-                        <span className="chip">{f.type.replace('_', ' ')}</span>
+                        <span className="chip">{f.type.replace(/_/g, ' ')}</span>
                       </div>
                       <div className="disc-sub">{f.detail}</div>
                     </div>
@@ -545,9 +549,20 @@ export function WarScreen({
       </main>
 
       {isBattleDialogOpen && state.pending ? (
-        <BattleDialog state={state} decision={state.pending} onResolve={onResolve} />
+        <BattleDialog
+          state={state}
+          decision={state.pending}
+          minimized={battleMinimized}
+          shortcutsBlocked={shortcutsBlocked}
+          onMinimizedChange={onBattleMinimizedChange}
+          onResolve={onResolve}
+        />
       ) : (
-        <DecisionDialog decision={state.pending} onResolve={onResolve} />
+        <DecisionDialog
+          decision={state.pending}
+          shortcutsBlocked={shortcutsBlocked}
+          onResolve={onResolve}
+        />
       )}
     </div>
   );

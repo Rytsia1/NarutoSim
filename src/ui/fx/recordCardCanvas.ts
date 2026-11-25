@@ -23,6 +23,48 @@ export function formatShareText(rec: LifeRecord): string {
   return parts.join('\n');
 }
 
+function truncateToWidth(ctx: CanvasRenderingContext2D, text: string, maxWidth: number): string {
+  if (ctx.measureText(text).width <= maxWidth) return text;
+  let out = text;
+  while (out.length > 1 && ctx.measureText(`${out}...`).width > maxWidth) {
+    out = out.slice(0, -1);
+  }
+  return `${out.trimEnd()}...`;
+}
+
+export function wrapLines(
+  measure: (text: string) => number,
+  text: string,
+  maxWidth: number,
+  maxLines = 4,
+): string[] {
+  const words = text.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return [];
+  const lines: string[] = [];
+  let line = '';
+
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    const test = line ? `${line} ${w}` : w;
+    if (measure(test) <= maxWidth || !line) {
+      line = test;
+    } else {
+      lines.push(line);
+      line = w;
+      if (lines.length >= maxLines - 1) {
+        // Accumulate all remaining words onto the final line and let truncation clamp cleanly
+        const rest = words.slice(i + 1);
+        if (rest.length > 0) line = `${line} ${rest.join(' ')}`;
+        break;
+      }
+    }
+  }
+  if (line && lines.length < maxLines) {
+    lines.push(line);
+  }
+  return lines;
+}
+
 function wrapText(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -32,25 +74,10 @@ function wrapText(
   lineHeight: number,
   maxLines = 4,
 ): number {
-  const words = text.split(/\s+/);
-  let line = '';
+  const lines = wrapLines((s) => ctx.measureText(s).width, text, maxWidth, maxLines);
   let curY = y;
-  let count = 0;
-
-  for (const w of words) {
-    const test = line ? `${line} ${w}` : w;
-    if (ctx.measureText(test).width > maxWidth && line) {
-      ctx.fillText(line, x, curY);
-      line = w;
-      curY += lineHeight;
-      count += 1;
-      if (count >= maxLines - 1) break;
-    } else {
-      line = test;
-    }
-  }
-  if (line && count < maxLines) {
-    ctx.fillText(line, x, curY);
+  for (const ln of lines) {
+    ctx.fillText(truncateToWidth(ctx, ln, maxWidth), x, curY);
     curY += lineHeight;
   }
   return curY;
@@ -233,8 +260,11 @@ export async function downloadOrShareShinobiCard(rec: LifeRecord): Promise<strin
         files: [file],
       });
       return 'Shared Shinobi Card.';
-    } catch {
-      // Fallback to direct download if share sheet cancelled
+    } catch (err) {
+      if ((err as { name?: string })?.name === 'AbortError') {
+        return 'Share cancelled.';
+      }
+      // Fallback to direct download if share failed for non-cancel reason
     }
   }
 
@@ -243,6 +273,6 @@ export async function downloadOrShareShinobiCard(rec: LifeRecord): Promise<strin
   a.href = url;
   a.download = filename;
   a.click();
-  URL.revokeObjectURL(url);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   return 'Shinobi Record PNG downloaded.';
 }
