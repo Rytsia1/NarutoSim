@@ -83,8 +83,11 @@ export interface CustomBuildConfig {
   capacity: 1 | 2 | 3 | 4 | 5;
   element: ChakraElement;
   statOffsets: Partial<Record<StatKey, number>>;
+  directStats?: Partial<Record<StatKey, number>>;
   startDisciplineId?: string;
+  startDisciplineLevel?: 1 | 2 | 3 | 4;
   latentBloodlineId?: string;
+  startBloodlineStage?: BloodlineStage;
 }
 
 export interface MetaState {
@@ -532,6 +535,8 @@ export interface PendingDecision {
   manual: boolean;
   allowFreeText?: boolean;
   freeTextPlaceholder?: string;
+  cancelOptionId?: string;
+  cancelLabel?: string;
   meta?: Record<string, string | number | boolean>;
   options: DecisionOption[];
 }

@@ -30,6 +30,8 @@ interface WarScreenProps {
   shortcutsBlocked?: boolean;
   battleMinimized: boolean;
   onBattleMinimizedChange: (next: boolean) => void;
+  decisionMinimized: boolean;
+  onDecisionMinimizedChange: (next: boolean) => void;
   onSetSpeed: (speed: 1 | 2 | 4 | 8) => void;
   onTogglePause: () => void;
   onToggleAuto: () => void;
@@ -46,6 +48,8 @@ export function WarScreen({
   shortcutsBlocked = false,
   battleMinimized,
   onBattleMinimizedChange,
+  decisionMinimized,
+  onDecisionMinimizedChange,
   onSetSpeed,
   onTogglePause,
   onToggleAuto,
@@ -57,7 +61,7 @@ export function WarScreen({
   const [sideTab, setSideTab] = useState<'competitors' | 'diplomacy'>('competitors');
   const war = state.war!;
   const logFeedRef = useRef<HTMLDivElement | null>(null);
-  const nearBottomRef = useRef(true);
+  const nearTopRef = useRef(true);
   const livingCount = getLivingEnemies(war).length;
   const activeBattle = war.activeBattle;
   const battleEnemy = activeBattle
@@ -67,11 +71,11 @@ export function WarScreen({
   const playerRanks = getPlayerRanks(state, activeBattle?.resolveBoostThisRound);
   const liveArcs = detectWarArcs(state, war);
 
-  // Smart container-only auto-scroll (never yanks page scroll or traps users reading history)
+  // Keep newest war log visible at top without yanking users scrolling older history
   useEffect(() => {
     const feed = logFeedRef.current;
-    if (feed && nearBottomRef.current) {
-      feed.scrollTop = feed.scrollHeight;
+    if (feed && nearTopRef.current) {
+      feed.scrollTop = 0;
     }
   }, [state.logs.length]);
 
@@ -103,7 +107,7 @@ export function WarScreen({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [shortcutsBlocked, state.pending, onTogglePause, onSetSpeed, onToggleAuto]);
 
-  const warLogs = state.logs.slice(-60);
+  const warLogs = [...state.logs.slice(-60)].reverse();
   const waitingForBeat = !state.pending && war.beatQueue.length > 0;
   const nextBeat = war.beatQueue[0] ?? null;
   const remainSec = nextBeat
@@ -378,7 +382,7 @@ export function WarScreen({
 
               {activeBattle.rounds.length > 0 && (
                 <div className="battle-rounds-feed">
-                  {activeBattle.rounds.slice(-4).map((r) => (
+                  {[...activeBattle.rounds.slice(-4)].reverse().map((r) => (
                     <div key={r.round} className={`round-row outcome-${r.outcome}`}>
                       <div className="disc-head tabular">
                         <span>
@@ -403,7 +407,7 @@ export function WarScreen({
             onScroll={() => {
               const el = logFeedRef.current;
               if (!el) return;
-              nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+              nearTopRef.current = el.scrollTop < 60;
             }}
           >
             {warLogs.map((entry) => (
@@ -560,7 +564,9 @@ export function WarScreen({
       ) : (
         <DecisionDialog
           decision={state.pending}
+          minimized={decisionMinimized}
           shortcutsBlocked={shortcutsBlocked}
+          onMinimizedChange={onDecisionMinimizedChange}
           onResolve={onResolve}
         />
       )}

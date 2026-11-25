@@ -1048,29 +1048,40 @@ function buildTargetSelectDecision(
     ally: 'Select Shinobi to Propose Alliance',
   };
 
+  const targetOptions: PendingDecision['options'] = living.map((e) => {
+    const displayName = e.intel >= 80 ? `${e.name} (${e.epithet})` : `Unknown ${ARCHETYPE_LABELS[e.archetype]}`;
+    const subParts = [`HP ${e.hp}/100`, `Intel ${e.intel}%`];
+    if (e.id === war.allyId) subParts.push('CURRENT ALLY');
+    if (actionMode === 'ally') {
+      subParts.push(`Est. Acceptance: ${Math.round(calcAllyAcceptChance(state, war, e) * 100)}%`);
+    }
+    if (e.intel >= 60) subParts.push(`${ELEMENT_NAMES[e.element]} | ${VILLAGE_MAP[e.villageId].name}`);
+    return {
+      id: e.id,
+      label: displayName,
+      sublabel: subParts.join(' | '),
+      autoEligible: e.id !== war.allyId || actionMode === 'scout',
+    };
+  });
+
+  targetOptions.push({
+    id: 'cancel_back',
+    label: 'Cancel & Back to Night Actions',
+    sublabel: 'Return to the Night menu without spending your turn.',
+    autoEligible: false,
+  });
+
   return {
     id: `war_target_${actionMode}_${war.day}`,
     kind: 'war_target',
     eventId: 'war_target',
     title: titleMap[actionMode],
-    body: 'Choose a rival shinobi in the sector. Higher Intel reveals their element, identity, and strategic intent.',
+    body: 'Choose a rival shinobi in the sector, or cancel to pick a different night operation.',
     manual: false,
+    cancelOptionId: 'cancel_back',
+    cancelLabel: 'Cancel & Back to Night Actions',
     meta: { actionMode },
-    options: living.map((e) => {
-      const displayName = e.intel >= 80 ? `${e.name} (${e.epithet})` : `Unknown ${ARCHETYPE_LABELS[e.archetype]}`;
-      const subParts = [`HP ${e.hp}/100`, `Intel ${e.intel}%`];
-      if (e.id === war.allyId) subParts.push('CURRENT ALLY');
-      if (actionMode === 'ally') {
-        subParts.push(`Est. Acceptance: ${Math.round(calcAllyAcceptChance(state, war, e) * 100)}%`);
-      }
-      if (e.intel >= 60) subParts.push(`${ELEMENT_NAMES[e.element]} | ${VILLAGE_MAP[e.villageId].name}`);
-      return {
-        id: e.id,
-        label: displayName,
-        sublabel: subParts.join(' | '),
-        autoEligible: e.id !== war.allyId || actionMode === 'scout',
-      };
-    }),
+    options: targetOptions,
   };
 }
 
@@ -2266,6 +2277,10 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
 
   // === TARGET SELECTION ===
   if (decision.kind === 'war_target') {
+    if (optionId === 'cancel_back') {
+      state.pending = buildWarNightDecision(state);
+      return;
+    }
     const mode = String(decision.meta?.actionMode ?? 'scout');
     const target = war.enemies.find((e) => e.id === optionId && e.alive);
     if (!target) {

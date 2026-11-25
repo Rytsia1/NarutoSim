@@ -21,6 +21,8 @@ interface GameScreenProps {
   state: GameState;
   yearProgress: number;
   shortcutsBlocked?: boolean;
+  decisionMinimized: boolean;
+  onDecisionMinimizedChange: (next: boolean) => void;
   onSetSpeed: (speed: 1 | 2 | 4 | 8) => void;
   onTogglePause: () => void;
   onToggleAuto: () => void;
@@ -37,6 +39,8 @@ export function GameScreen({
   state,
   yearProgress,
   shortcutsBlocked = false,
+  decisionMinimized,
+  onDecisionMinimizedChange,
   onSetSpeed,
   onTogglePause,
   onToggleAuto,
@@ -48,19 +52,20 @@ export function GameScreen({
 }: GameScreenProps) {
   const [tab, setTab] = useState<'status' | 'squad' | 'wars'>('status');
   const logFeedRef = useRef<HTMLDivElement | null>(null);
-  const nearBottomRef = useRef(true);
+  const nearTopRef = useRef(true);
 
   const proj = computeCombatProjection(state);
   const chakraCap = getChakraCap(state);
   const village = VILLAGE_MAP[state.villageId];
   const origin = ORIGIN_MAP[state.originId];
   const retireAvailable = canEnterRetirement(state);
+  const newestFirstLogs = [...state.logs].reverse();
 
-  // Smart container-only auto-scroll (never yanks page scroll or traps users reading history)
+  // Keep newest log visible at top without yanking users who scrolled down into older history
   useEffect(() => {
     const feed = logFeedRef.current;
-    if (feed && nearBottomRef.current) {
-      feed.scrollTop = feed.scrollHeight;
+    if (feed && nearTopRef.current) {
+      feed.scrollTop = 0;
     }
   }, [state.logs.length]);
 
@@ -169,10 +174,10 @@ export function GameScreen({
             onScroll={() => {
               const el = logFeedRef.current;
               if (!el) return;
-              nearBottomRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+              nearTopRef.current = el.scrollTop < 60;
             }}
           >
-            {state.logs.map((entry) => (
+            {newestFirstLogs.map((entry) => (
               <article key={entry.id} className={`log-entry tone-${entry.tone}`}>
                 <div className="log-meta tabular">
                   <span>
@@ -351,15 +356,21 @@ export function GameScreen({
 
               <section className="panel">
                 <h2 className="panel-title">Jutsu Disciplines & Kekkei Genkai</h2>
-                {state.bloodline && state.bloodline.stage !== 'latent' && (
+                {state.bloodline && (state.bloodline.stage !== 'latent' || state.flags.custom_run) && (
                   <div className="disc-item" style={{ marginBottom: 10, borderColor: 'var(--accent-seal)' }}>
                     <div className="disc-head">
                       <span>{BLOODLINE_MAP[state.bloodline.id]?.name}</span>
                       <span className="status-tag">
-                        {BLOODLINE_GRADE_NAMES[state.bloodline.grade]} | {BLOODLINE_STAGE_LABELS[state.bloodline.stage]}
+                        {state.bloodline.stage === 'latent'
+                          ? 'Latent (Unawakened)'
+                          : `${BLOODLINE_GRADE_NAMES[state.bloodline.grade]} | ${BLOODLINE_STAGE_LABELS[state.bloodline.stage]}`}
                       </span>
                     </div>
-                    <div className="disc-sub">{BLOODLINE_MAP[state.bloodline.id]?.bonusSummary}</div>
+                    <div className="disc-sub">
+                      {state.bloodline.stage === 'latent'
+                        ? 'Dormant in your lineage. Awakens through childhood or combat trials.'
+                        : BLOODLINE_MAP[state.bloodline.id]?.bonusSummary}
+                    </div>
                   </div>
                 )}
 
@@ -539,7 +550,9 @@ export function GameScreen({
 
       <DecisionDialog
         decision={state.pending}
+        minimized={decisionMinimized}
         shortcutsBlocked={shortcutsBlocked}
+        onMinimizedChange={onDecisionMinimizedChange}
         onResolve={onResolve}
       />
     </div>

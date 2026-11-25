@@ -145,7 +145,7 @@ export function SettingsDialog({ open, settings, onUpdate, onClose }: SettingsDi
             <span>Keyboard Shortcuts</span>
           </div>
           <div className="disc-sub">
-            Space: Pause/Resume | 1 to 4: Speed (1x/2x/4x/8x) | A: Toggle Auto-Play | M: Mute Audio | 0: Minimize/Expand Battle | 1 to 9: Pick Dialog Option
+            Space: Pause/Resume | 1 to 4: Speed (1x/2x/4x/8x) | A: Toggle Auto-Play | M: Mute Audio | 0: Minimize/Expand Choice or Battle | Esc: Cancel Sub-Menu | 1 to 9: Pick Dialog Option
           </div>
         </div>
       </div>

@@ -31,25 +31,34 @@ export function evaluateCustomBuild(cfg: CustomBuildConfig): CustomBuildValidati
 
   // Positive stat offsets cost ceil(offset / 5) pts; negative offsets cost 0 (fix I3)
   const statKeys: StatKey[] = ['chakra', 'intel', 'will', 'bonds', 'health', 'ryo'];
-  for (const k of statKeys) {
-    const off = cfg.statOffsets[k] ?? 0;
-    if (off > 25) {
-      errors.push(`${k} bonus cannot exceed +25.`);
+  if (cfg.mode === 'free' && cfg.directStats) {
+    for (const k of statKeys) {
+      const val = cfg.directStats[k];
+      if (val !== undefined && (val < 0 || val > 100)) {
+        errors.push(`${k} must be between 0 and 100.`);
+      }
     }
-    if (off < -20) {
-      errors.push(`${k} reduction cannot be below -20.`);
-    }
-    if (off > 0) {
-      points += Math.ceil(off / 5);
+  } else {
+    for (const k of statKeys) {
+      const off = cfg.statOffsets[k] ?? 0;
+      if (cfg.mode === 'points' && off > 25) {
+        errors.push(`${k} bonus cannot exceed +25.`);
+      }
+      if (cfg.mode === 'points' && off < -20) {
+        errors.push(`${k} reduction cannot be below -20.`);
+      }
+      if (off > 0) {
+        points += Math.ceil(off / 5);
+      }
     }
   }
 
-  // Starting discipline validation (fix I1/I2/I4)
+  // Starting discipline validation (fix I1/I2/I4; Free Mode unlocks all 22 disciplines)
   if (cfg.startDisciplineId) {
     const def = DISCIPLINE_MAP[cfg.startDisciplineId];
     if (!def) {
       errors.push('Unknown starting discipline.');
-    } else if (def.id === 'senjutsu' || def.id === 'space_time') {
+    } else if (cfg.mode === 'points' && (def.id === 'senjutsu' || def.id === 'space_time')) {
       errors.push(`${def.name} cannot be chosen as a childhood starting discipline.`);
     } else {
       const isFamilyDiscount = origin.familyDisciplines.includes(def.id);
@@ -93,24 +102,36 @@ export function applyCustomBuild(state: GameState, cfg: CustomBuildConfig): void
   state.capacity = cfg.capacity;
   state.element = cfg.element;
 
-  // Apply stat offsets cleanly within valid bounds and caps
+  // Apply direct stats in Free Mode or bounded stat offsets in Point-Buy Mode
   const statKeys: StatKey[] = ['chakra', 'intel', 'will', 'bonds', 'health', 'ryo'];
-  for (const k of statKeys) {
-    const rawOff = cfg.statOffsets[k] ?? 0;
-    const off = Math.max(-20, Math.min(25, rawOff));
-    state.stats[k] += off;
+  if (cfg.mode === 'free' && cfg.directStats) {
+    for (const k of statKeys) {
+      const targetVal = cfg.directStats[k];
+      if (targetVal !== undefined && Number.isFinite(targetVal)) {
+        state.stats[k] = Math.max(0, Math.min(100, Math.round(targetVal)));
+      }
+    }
+  } else {
+    for (const k of statKeys) {
+      const rawOff = cfg.statOffsets[k] ?? 0;
+      const off = cfg.mode === 'free' ? Math.max(-100, Math.min(100, rawOff)) : Math.max(-20, Math.min(25, rawOff));
+      state.stats[k] += off;
+    }
   }
 
-  if (
-    cfg.startDisciplineId &&
-    DISCIPLINE_MAP[cfg.startDisciplineId] &&
-    cfg.startDisciplineId !== 'senjutsu' &&
-    cfg.startDisciplineId !== 'space_time'
-  ) {
+  const startDef = cfg.startDisciplineId ? DISCIPLINE_MAP[cfg.startDisciplineId] : undefined;
+  const allowStartDisc =
+    Boolean(startDef) &&
+    (cfg.mode === 'free' || (cfg.startDisciplineId !== 'senjutsu' && cfg.startDisciplineId !== 'space_time'));
+  if (startDef && allowStartDisc) {
+    const startLvl =
+      cfg.mode === 'free' && cfg.startDisciplineLevel
+        ? (Math.max(1, Math.min(startDef.maxLevel, cfg.startDisciplineLevel)) as 1 | 2 | 3 | 4)
+        : 1;
     state.disciplines = [
       {
-        id: cfg.startDisciplineId,
-        level: 1,
+        id: startDef.id,
+        level: startLvl,
         xp: 0,
         lastLevelAge: 0,
         quality: 1,
@@ -122,10 +143,13 @@ export function applyCustomBuild(state: GameState, cfg: CustomBuildConfig): void
 
   if (cfg.latentBloodlineId && BLOODLINE_MAP[cfg.latentBloodlineId]) {
     const bDef = BLOODLINE_MAP[cfg.latentBloodlineId];
+    const startStage = cfg.mode === 'free' && cfg.startBloodlineStage ? cfg.startBloodlineStage : 'latent';
+    const startGrade =
+      startStage === 'mastered' ? bDef.gradeRange[1] : bDef.gradeRange[0];
     state.bloodline = {
       id: bDef.id,
-      grade: bDef.gradeRange[0],
-      stage: 'latent',
+      grade: startGrade,
+      stage: startStage,
       lastEventAge: 0,
       declined: false,
     };

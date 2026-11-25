@@ -740,11 +740,33 @@ dialog.decision-dialog::backdrop {
   gap: 16px;
 }
 
+.dialog-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .dialog-heading {
   margin: 0;
   font-family: var(--font-display);
   font-size: 1.35rem;
   color: var(--accent-gold);
+}
+
+.dialog-cancel-row {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-ink);
+  display: flex;
+}
+
+.dialog-cancel-btn {
+  width: 100%;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 
 .dialog-body {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ACHIEVEMENT_MAP } from '../src/data/achievements';
+import { rewriteOrphanText } from '../src/data/i18n';
 import { ORIGINS } from '../src/data/origins';
 import { VILLAGES } from '../src/data/villages';
 import {
@@ -247,5 +248,83 @@ describe('Full Codebase Audit Regressions', () => {
       expect(origin.familyDisciplines).not.toContain('senjutsu');
       expect(origin.familyDisciplines).not.toContain('space_time');
     }
+  });
+
+  it('supports Free Mode direct 0..100 starting stats, discipline tier, mastered bloodline & orphan rewrite', () => {
+    const state = createNewLife(88888, {
+      customBuild: {
+        mode: 'free',
+        name: 'Aoi Senju',
+        sex: 'F',
+        originId: 'war_orphan',
+        villageId: 'konoha',
+        capacity: 5,
+        element: 'water',
+        statOffsets: {},
+        directStats: {
+          chakra: 100,
+          intel: 100,
+          will: 100,
+          bonds: 100,
+          health: 100,
+          ryo: 100,
+        },
+        startDisciplineId: 'senjutsu',
+        startDisciplineLevel: 4,
+        latentBloodlineId: 'mokuton',
+        startBloodlineStage: 'mastered',
+      },
+    });
+
+    expect(state.stats.chakra).toBe(100);
+    expect(state.stats.intel).toBe(100);
+    expect(state.stats.will).toBe(100);
+    expect(state.stats.bonds).toBe(100);
+    expect(state.stats.health).toBe(100);
+    expect(state.stats.ryo).toBe(100);
+    expect(state.disciplines[0]?.id).toBe('senjutsu');
+    expect(state.disciplines[0]?.level).toBe(4);
+    expect(state.bloodline?.id).toBe('mokuton');
+    expect(state.bloodline?.stage).toBe('mastered');
+
+    // Orphan rewrite replaces "Your household" cleanly
+    expect(rewriteOrphanText('Your household begins instilling fundamentals.', true)).toContain(
+      'the orphanage elders',
+    );
+    expect(state.logs.some((l) => l.text.toLowerCase().includes('your household'))).toBe(false);
+  });
+
+  it('allows canceling war_target sub-menus (including Propose Alliance) back to war_night without losing a turn', () => {
+    const sim = new ShinobiSim();
+    sim.newLife(99999, { crisisOverride: 'none' });
+    const st = sim.getState();
+    st.age = 21;
+    promoteRank(st, 'chunin');
+    st.pending = buildWarPreludeDecision(st, false);
+    sim.resolve('deploy_front');
+
+    sim.flushWarUntilDecision();
+    expect(sim.getState().pending?.kind).toBe('war_day');
+    sim.resolve('day_cover');
+
+    sim.flushWarUntilDecision();
+    expect(sim.getState().pending?.kind).toBe('war_night');
+    const dayBefore = sim.getState().war!.day;
+    const cpBefore = sim.getState().war!.cp;
+
+    // Enter Propose Temporary Alliance (Diplomacy) target sub-menu
+    sim.resolve('night_ally');
+    const targetPending = sim.getState().pending!;
+    expect(targetPending.kind).toBe('war_target');
+    expect(targetPending.cancelOptionId).toBe('cancel_back');
+    const cancelOpt = targetPending.options.find((o) => o.id === 'cancel_back');
+    expect(cancelOpt).toBeDefined();
+    expect(cancelOpt?.autoEligible).toBe(false);
+
+    // Cancel back to war_night cleanly without advancing day or spending CP
+    sim.resolve('cancel_back');
+    expect(sim.getState().pending?.kind).toBe('war_night');
+    expect(sim.getState().war!.day).toBe(dayBefore);
+    expect(sim.getState().war!.cp).toBe(cpBefore);
   });
 });

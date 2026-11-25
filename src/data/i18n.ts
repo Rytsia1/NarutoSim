@@ -58,6 +58,7 @@ export function t(key: string, vars?: Record<string, string | number>): string {
  */
 const ORPHAN_REPLACEMENTS: readonly [RegExp, string][] = [
   [/\byour parents\b/gi, 'the orphanage elders'],
+  [/\byour household\b/gi, 'the orphanage elders'],
   [/\byour father\b/gi, 'the senior caretaker'],
   [/\byour mother\b/gi, 'the matron'],
   [/\bparents'\b/gi, "caretakers'"],

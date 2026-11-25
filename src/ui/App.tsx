@@ -37,6 +37,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeFx, setActiveFx] = useState<ActiveFxEvent | null>(null);
   const [battleMinimized, setBattleMinimized] = useState(false);
+  const [decisionMinimized, setDecisionMinimized] = useState(false);
   const [toastQueue, setToastQueue] = useState<string[]>([]);
   const [gameState, setGameState] = useState<GameState>(() => simRef.current!.snapshot());
   const [yearProgress, setYearProgress] = useState(0);
@@ -48,6 +49,7 @@ export function App() {
   const settingsRef = useRef<UserSettings>(settings);
   settingsRef.current = settings;
   const lastLogIdRef = useRef<string | null>(null);
+  const lastDecisionIdRef = useRef<string | null>(null);
   const yearPctRef = useRef<number>(-1);
   const warDayPctRef = useRef<number>(-1);
   const warBeatPctRef = useRef<number>(-1);
@@ -157,6 +159,11 @@ export function App() {
     if (snap.pending?.kind !== 'war_battle_round') {
       setBattleMinimized(false);
     }
+    const nextPendingId = snap.pending?.id ?? null;
+    if (nextPendingId !== lastDecisionIdRef.current) {
+      lastDecisionIdRef.current = nextPendingId;
+      setDecisionMinimized(false);
+    }
 
     // Scan ALL newly added logs since lastLogIdRef so multi-log turns never miss Jutsu Clash FX
     const logs = snap.logs;
@@ -238,9 +245,9 @@ export function App() {
     return () => cancelAnimationFrame(rafId);
   }, [view, activeFx, settingsOpen, syncProgressQuantized]);
 
-  // Auto-Play respects paused, settingsOpen, activeFx, and minimized BattleDialog!
+  // Auto-Play respects paused, settingsOpen, activeFx, and minimized Decision/Battle dialogs!
   useEffect(() => {
-    if (view !== 'playing' || activeFx !== null || settingsOpen || battleMinimized) return;
+    if (view !== 'playing' || activeFx !== null || settingsOpen || battleMinimized || decisionMinimized) return;
     if (gameState.paused || !gameState.autoPlay || !gameState.pending || gameState.pending.manual) return;
     const delay = Math.max(450, Math.round(1600 / gameState.speed));
     const timer = window.setTimeout(() => {
@@ -252,6 +259,7 @@ export function App() {
     activeFx,
     settingsOpen,
     battleMinimized,
+    decisionMinimized,
     gameState.paused,
     gameState.autoPlay,
     gameState.pending,
@@ -271,6 +279,8 @@ export function App() {
     soundEngine.playSfx('milestone');
     setActiveFx(null);
     setBattleMinimized(false);
+    setDecisionMinimized(false);
+    lastDecisionIdRef.current = null;
     lastLogIdRef.current = null;
     simRef.current!.newLife(undefined, scenario);
     setView('playing');
@@ -281,6 +291,8 @@ export function App() {
     soundEngine.unlock();
     setActiveFx(null);
     setBattleMinimized(false);
+    setDecisionMinimized(false);
+    lastDecisionIdRef.current = savedLife.pending?.id ?? null;
     lastLogIdRef.current = savedLife.logs[savedLife.logs.length - 1]?.id ?? null;
     simRef.current!.load(savedLife);
     setView('playing');
@@ -330,6 +342,8 @@ export function App() {
   const handleBackToLobby = useCallback(() => {
     setActiveFx(null);
     setBattleMinimized(false);
+    setDecisionMinimized(false);
+    lastDecisionIdRef.current = null;
     saveCurrentLife(simRef.current!.snapshot());
     handleRefreshStorage();
     setView('lobby');
@@ -389,6 +403,8 @@ export function App() {
           shortcutsBlocked={modalBlocking}
           battleMinimized={battleMinimized}
           onBattleMinimizedChange={setBattleMinimized}
+          decisionMinimized={decisionMinimized}
+          onDecisionMinimizedChange={setDecisionMinimized}
           onSetSpeed={handleSetSpeed}
           onTogglePause={handleTogglePause}
           onToggleAuto={handleToggleAuto}
@@ -402,6 +418,8 @@ export function App() {
           state={gameState}
           yearProgress={yearProgress}
           shortcutsBlocked={modalBlocking}
+          decisionMinimized={decisionMinimized}
+          onDecisionMinimizedChange={setDecisionMinimized}
           onSetSpeed={handleSetSpeed}
           onTogglePause={handleTogglePause}
           onToggleAuto={handleToggleAuto}
