@@ -127,10 +127,34 @@ export const GENTLE_FIST_LIST: readonly JutsuEntry[] = [
   { name: 'Hakke Kaiten', seals: [] },
 ];
 
+export const KENJUTSU_TIERS: Record<1 | 2 | 3 | 4, readonly JutsuEntry[]> = {
+  1: [
+    { name: 'Kunai Iai Slash', seals: [] },
+    { name: 'Konoha-Ryu: Yanagi', seals: [] },
+    { name: 'Steel Fang Parry', seals: [] },
+  ],
+  2: [
+    { name: 'Hien: Chakra Blade Edge', seals: [] },
+    { name: 'Kumo-Ryu: Uragiri', seals: [] },
+    { name: 'Silver Crescent Draw', seals: [] },
+  ],
+  3: [
+    { name: 'Kumo-Ryu: Mikazukigiri', seals: [] },
+    { name: 'Konoha-Ryu: Crescent Flash', seals: [] },
+    { name: 'Iai: Chakra Flash Cut', seals: [] },
+  ],
+  4: [
+    { name: 'Konoha-Ryu: Mikazuki no Mai', seals: [] },
+    { name: 'Kumo-Ryu: Flame Beheading', seals: [] },
+    { name: 'Zero-Range Chakra Severance', seals: [] },
+  ],
+};
+
 export const KENJUTSU_LIST: readonly JutsuEntry[] = [
-  { name: 'Konoha-Ryu: Yanagi', seals: [] },
-  { name: 'Iai: Chakra Flash Cut', seals: [] },
-  { name: 'Mikazuki no Mai', seals: [] },
+  ...KENJUTSU_TIERS[1],
+  ...KENJUTSU_TIERS[2],
+  ...KENJUTSU_TIERS[3],
+  ...KENJUTSU_TIERS[4],
 ];
 
 export const GENJUTSU_LIST: readonly JutsuEntry[] = [
@@ -154,7 +178,7 @@ const ELEM_DISC_ID: Record<ChakraElement, string> = {
  */
 export function pickPlayerJutsu(
   state: GameState,
-  style: 'taijutsu' | 'ninjutsu' | 'genjutsu',
+  style: 'taijutsu' | 'kenjutsu' | 'ninjutsu' | 'genjutsu',
   roundIndex: number,
 ): JutsuEntry {
   const idx = Math.max(0, roundIndex);
@@ -167,11 +191,14 @@ export function pickPlayerJutsu(
   if (style === 'genjutsu') {
     return GENJUTSU_LIST[idx % GENJUTSU_LIST.length];
   }
+  if (style === 'kenjutsu') {
+    const kenDisc = state.disciplines.find((d) => d.id === 'kenjutsu');
+    const tier = (kenDisc ? kenDisc.level : 1) as 1 | 2 | 3 | 4;
+    const pool = KENJUTSU_TIERS[tier];
+    return pool[idx % pool.length];
+  }
   if (state.disciplines.some((d) => d.id === 'gentle_fist')) {
     return GENTLE_FIST_LIST[idx % GENTLE_FIST_LIST.length];
-  }
-  if (state.disciplines.some((d) => d.id === 'kenjutsu') && !state.disciplines.some((d) => d.id === 'strong_fist')) {
-    return KENJUTSU_LIST[idx % KENJUTSU_LIST.length];
   }
   return TAIJUTSU_LIST[idx % TAIJUTSU_LIST.length];
 }

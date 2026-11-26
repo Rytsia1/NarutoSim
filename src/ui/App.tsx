@@ -323,6 +323,11 @@ export function App() {
     simRef.current!.retireFromFrontline();
   }, []);
 
+  const handleCallSummit = useCallback(() => {
+    soundEngine.playSfx('milestone', simRef.current!.getState().speed);
+    simRef.current!.callDiplomaticSummit();
+  }, []);
+
   const handleSkipWarBeat = useCallback(() => {
     simRef.current!.stepWarBeat();
   }, []);
@@ -426,6 +431,7 @@ export function App() {
           onSetFocus={handleSetFocus}
           onResolve={handleResolve}
           onRetire={handleRetire}
+          onCallSummit={handleCallSummit}
           onOpenSettings={handleOpenSettings}
           onBackToLobby={handleBackToLobby}
         />

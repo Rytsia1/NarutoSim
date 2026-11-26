@@ -11,6 +11,7 @@ import {
   getEffectiveUltimateCost,
   getElementMultiplier,
   getHealthConditionLabel,
+  getKenjutsuLevel,
   getPlayerRanks,
   getPlayerSignatureUltimate,
 } from '../../sim/combat';
@@ -104,6 +105,7 @@ export function BattleDialog({
 
   const optionById = new Map(decision.options.map((o) => [o.id, o]));
   const taiOpt = optionById.get('taijutsu');
+  const kenOpt = optionById.get('kenjutsu');
   const ninOpt = optionById.get('ninjutsu');
   const genOpt = optionById.get('genjutsu');
   const ultOpt = optionById.get('ultimate');
@@ -111,12 +113,17 @@ export function BattleDialog({
   const supportOpts = decision.options.filter((o) => SUPPORT_IDS.has(o.id));
   const resolveOpts = decision.options.filter((o) => RESOLVE_IDS.has(o.id));
 
-  let nextKey = 5;
+  let nextKey = 1;
+  const taiKey = taiOpt ? nextKey++ : null;
+  const kenKey = kenOpt ? nextKey++ : null;
+  const ninKey = ninOpt ? nextKey++ : null;
+  const genKey = genOpt ? nextKey++ : null;
+  const ultKey = ultOpt ? nextKey++ : null;
   const supportKey = supportOpts.length > 0 ? nextKey++ : null;
   const resolveKey = resolveOpts.length > 0 ? nextKey++ : null;
   const retreatKey = retreatOpt ? nextKey++ : null;
 
-  // Keyboard shortcuts: 0 toggles Minimize, 1-4 pick core actions, dynamic keys for accordions & retreat
+  // Keyboard shortcuts: 0 toggles Minimize, dynamic 1..N pick core actions, accordions & retreat
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (shortcutsBlocked || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -130,16 +137,19 @@ export function BattleDialog({
       }
       if (minimized) return;
 
-      if (e.key === '1' && taiOpt && !taiOpt.disabled) {
+      if (taiKey !== null && e.key === String(taiKey) && taiOpt && !taiOpt.disabled) {
         e.preventDefault();
         onResolve('taijutsu', selectedOd ?? undefined);
-      } else if (e.key === '2' && ninOpt && !ninOpt.disabled) {
+      } else if (kenKey !== null && e.key === String(kenKey) && kenOpt && !kenOpt.disabled) {
+        e.preventDefault();
+        onResolve('kenjutsu', selectedOd ?? undefined);
+      } else if (ninKey !== null && e.key === String(ninKey) && ninOpt && !ninOpt.disabled) {
         e.preventDefault();
         onResolve('ninjutsu', selectedOd ?? undefined);
-      } else if (e.key === '3' && genOpt && !genOpt.disabled) {
+      } else if (genKey !== null && e.key === String(genKey) && genOpt && !genOpt.disabled) {
         e.preventDefault();
         onResolve('genjutsu', selectedOd ?? undefined);
-      } else if (e.key === '4' && ultOpt && !ultOpt.disabled) {
+      } else if (ultKey !== null && e.key === String(ultKey) && ultOpt && !ultOpt.disabled) {
         e.preventDefault();
         onResolve('ultimate', selectedOd ?? undefined);
       } else if (supportKey !== null && e.key === String(supportKey)) {
@@ -160,7 +170,13 @@ export function BattleDialog({
     minimized,
     onMinimizedChange,
     selectedOd,
+    taiKey,
+    kenKey,
+    ninKey,
+    genKey,
+    ultKey,
     taiOpt,
+    kenOpt,
     ninOpt,
     genOpt,
     ultOpt,
@@ -184,6 +200,8 @@ export function BattleDialog({
       : enemyArchLabel;
 
   const taiOdds = estimateBattleActionOdds(state, enemy, 'taijutsu', battle.resolveBoostThisRound);
+  const kenOdds = kenOpt ? estimateBattleActionOdds(state, enemy, 'kenjutsu', battle.resolveBoostThisRound) : null;
+  const kenLevel = getKenjutsuLevel(state);
   const ninOdds = estimateBattleActionOdds(state, enemy, 'ninjutsu', battle.resolveBoostThisRound);
   const genOdds = estimateBattleActionOdds(state, enemy, 'genjutsu', battle.resolveBoostThisRound);
   const retreatPct = estimateRetreatChance(state, enemy, battle.resolveBoostThisRound);
@@ -499,8 +517,8 @@ export function BattleDialog({
 
           {/* Row 2: Tactical Action Cards */}
           <div className="battle-actions-list">
-            {/* [1] Taijutsu Strike */}
-            {taiOpt && (
+            {/* Taijutsu Strike */}
+            {taiOpt && taiKey !== null && (
               <button
                 type="button"
                 className="battle-action-card"
@@ -508,7 +526,7 @@ export function BattleDialog({
                 onClick={() => onResolve('taijutsu', selectedOd ?? undefined)}
               >
                 <div className="action-card-top">
-                  <span className="action-key tabular">1</span>
+                  <span className="action-key tabular">{taiKey}</span>
                   <span className="action-title">
                     {pickPlayerJutsu(state, 'taijutsu', battle.rounds.length).name} (Taijutsu)
                   </span>
@@ -529,8 +547,44 @@ export function BattleDialog({
               </button>
             )}
 
-            {/* [2] Elemental Ninjutsu */}
-            {ninOpt && (
+            {/* Kenjutsu Slash (Discipline-Gated: only shown when Shinobi Kenjutsu is learned) */}
+            {kenOpt && kenKey !== null && kenOdds && (
+              <button
+                type="button"
+                className="battle-action-card"
+                disabled={kenOpt.disabled}
+                onClick={() => onResolve('kenjutsu', selectedOd ?? undefined)}
+              >
+                <div className="action-card-top">
+                  <span className="action-key tabular">{kenKey}</span>
+                  <span className="action-title">
+                    {pickPlayerJutsu(state, 'kenjutsu', battle.rounds.length).name} (Kenjutsu)
+                  </span>
+                  <span className={`odds-pill ${kenOdds.tier}`}>
+                    {kenOdds.tier === 'strong' ? '▲' : kenOdds.tier === 'weak' ? '▼' : '◆'} {kenOdds.label}
+                  </span>
+                </div>
+                <div className="action-card-desc">
+                  Pit Speed &amp; Taijutsu against their Speed · Cleaves through Guard Walls &amp; shaves enemy Fort
+                </div>
+                <div className="action-card-chips">
+                  <span className="cost-chip">Chakra -4</span>
+                  <span className="cost-chip neutral">Wall Pierce · Tier {kenLevel}</span>
+                  {kenOpt.disabled && kenOpt.disabledReason && (
+                    <span className="cost-chip">{kenOpt.disabledReason}</span>
+                  )}
+                </div>
+                <div className="action-card-footer">
+                  <span className="footer-label">Stat used</span>
+                  <span className="stat-used-chip tabular">
+                    Speed {rankValueToGrade(playerRanks[1])} · Taijutsu {rankValueToGrade(playerRanks[0])}
+                  </span>
+                </div>
+              </button>
+            )}
+
+            {/* Elemental Ninjutsu */}
+            {ninOpt && ninKey !== null && (
               <button
                 type="button"
                 className="battle-action-card"
@@ -538,7 +592,7 @@ export function BattleDialog({
                 onClick={() => onResolve('ninjutsu', selectedOd ?? undefined)}
               >
                 <div className="action-card-top">
-                  <span className="action-key tabular">2</span>
+                  <span className="action-key tabular">{ninKey}</span>
                   <span className="action-title">
                     {pickPlayerJutsu(state, 'ninjutsu', battle.rounds.length).name} ({ELEMENT_NAMES[state.element]})
                   </span>
@@ -565,8 +619,8 @@ export function BattleDialog({
               </button>
             )}
 
-            {/* [3] Genjutsu / Tactical Feint */}
-            {genOpt && (
+            {/* Genjutsu / Tactical Feint */}
+            {genOpt && genKey !== null && (
               <button
                 type="button"
                 className="battle-action-card"
@@ -574,7 +628,7 @@ export function BattleDialog({
                 onClick={() => onResolve('genjutsu', selectedOd ?? undefined)}
               >
                 <div className="action-card-top">
-                  <span className="action-key tabular">3</span>
+                  <span className="action-key tabular">{genKey}</span>
                   <span className="action-title">Genjutsu &amp; Tactical Feint</span>
                   <span className={`odds-pill ${genOdds.tier}`}>
                     {genOdds.tier === 'strong' ? '▲' : genOdds.tier === 'weak' ? '▼' : '◆'} {genOdds.label}
@@ -596,8 +650,8 @@ export function BattleDialog({
               </button>
             )}
 
-            {/* [4] Signature Jutsu Ultimate */}
-            {ultOpt && (
+            {/* Signature Jutsu Ultimate */}
+            {ultOpt && ultKey !== null && (
               <button
                 type="button"
                 className="battle-action-card ultimate-card"
@@ -605,7 +659,7 @@ export function BattleDialog({
                 onClick={() => onResolve('ultimate', selectedOd ?? undefined)}
               >
                 <div className="action-card-top">
-                  <span className="action-key tabular">4</span>
+                  <span className="action-key tabular">{ultKey}</span>
                   <span className="action-title">
                     Signature Jutsu: {ult.name}
                     <span className="rank-pill tabular">Rank {rankValueToGrade(ult.rankVal)}</span>

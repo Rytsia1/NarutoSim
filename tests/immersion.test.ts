@@ -93,8 +93,8 @@ describe('Naruto Immersion Plan Verification (Fases 0-5)', () => {
     expect(state.nindo).toBe('become_kage');
     expect(state.memories!.length).toBeGreaterThanOrEqual(3);
 
-    // Chunin Arena Finals names the permanent rival
-    const finals = buildChuninExamStage(state, 3);
+    // Chunin Arena Finals (Stage 6) names the permanent rival
+    const finals = buildChuninExamStage(state, 6);
     expect(finals.title).toContain(state.team!.members[1].name);
 
     // Valley of the End picks the permanent rival even if another squadmate has higher trust

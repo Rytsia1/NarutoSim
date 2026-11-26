@@ -62,6 +62,40 @@ export interface TensionTickResult {
   isCrisisWar: boolean;
   whisperDecision: PendingDecision | null;
   omenLogged: boolean;
+  detenteLogged?: boolean;
+  detenteDelta?: number;
+  omenCleared?: boolean;
+}
+
+export function canCallDiplomaticSummit(state: GameState): boolean {
+  if (state.phase !== 'life' || state.pending !== null) return false;
+  if (state.specialStatus === 'missing_nin') return false;
+  if (state.world.tension < 30 || state.stats.ryo < 8) return false;
+  const hasStanding = state.specialStatus === 'kage' || (state.rank === 'jonin' && state.stats.bonds >= 70);
+  if (!hasStanding) return false;
+  if (state.world.lastSummitAge !== undefined && state.age - state.world.lastSummitAge < 4) return false;
+  return true;
+}
+
+export function runDiplomaticSummit(
+  state: GameState,
+  rng: SeededRng,
+): { drop: number; omenCleared: boolean } {
+  const isKage = state.specialStatus === 'kage';
+  const rawDrop = isKage ? rng.int(16, 24) : rng.int(12, 18);
+  const before = state.world.tension;
+  state.world.tension = clamp(state.world.tension - rawDrop, 5, 100);
+  state.world.lastSummitAge = state.age;
+  state.stats.ryo = Math.max(0, state.stats.ryo - 8);
+  state.stats.bonds = clamp(state.stats.bonds + 3, 0, 100);
+  state.stats.will = clamp(state.stats.will + 2, 0, 100);
+
+  let omenCleared = false;
+  if (state.world.omenActive && state.world.tension < 65) {
+    state.world.omenActive = false;
+    omenCleared = true;
+  }
+  return { drop: before - state.world.tension, omenCleared };
 }
 
 export function tickWorldTension(state: GameState, rng: SeededRng): TensionTickResult {
@@ -70,11 +104,47 @@ export function tickWorldTension(state: GameState, rng: SeededRng): TensionTickR
     return { triggerWar: false, isCrisisWar: false, whisperDecision: null, omenLogged: false };
   }
 
-  // Advance tension each year (slower during early childhood so Genin/Chunin arcs breathe naturally)
-  const peaceDampener = w.truePeace ? 0.35 : 1;
-  const baseStep = state.age < 12 ? rng.int(2, 4) : rng.int(5, 10);
-  const delta = Math.round(baseStep * peaceDampener);
-  w.tension = clamp(w.tension + delta, 0, 100);
+  const warCooldownOk =
+    (w.lastWarAge === null || state.age - w.lastWarAge >= 6) &&
+    (!w.peaceAccordUntilAge || state.age >= w.peaceAccordUntilAge);
+
+  let detenteLogged = false;
+  let detenteDelta = 0;
+  let omenCleared = false;
+
+  const inAccord = Boolean(w.peaceAccordUntilAge && state.age < w.peaceAccordUntilAge);
+  if (w.truePeace || inAccord) {
+    // Active Peace Accord or True Peace gradually cools lingering tension down toward 5
+    const cool = w.tension > 5 ? rng.int(2, 5) : 0;
+    if (cool > 0) {
+      w.tension = clamp(w.tension - cool, 5, 100);
+      detenteDelta = -cool;
+    }
+  } else {
+    // Organic diplomatic detente can reduce rising border tension before flashpoint (25..79)
+    const detenteChance = clamp(
+      0.2 +
+        (state.specialStatus === 'kage' ? 0.14 : 0) +
+        (state.stats.bonds >= 65 ? 0.08 : 0) +
+        (state.leanings.will_of_fire >= 4 ? 0.06 : 0),
+      0.18,
+      0.45,
+    );
+    if (w.tension >= 25 && w.tension < 80 && rng.chance(detenteChance)) {
+      const cool = rng.int(4, 9);
+      w.tension = clamp(w.tension - cool, 5, 100);
+      detenteLogged = true;
+      detenteDelta = -cool;
+    } else {
+      const baseStep = state.age < 12 ? rng.int(2, 4) : rng.int(5, 10);
+      w.tension = clamp(w.tension + baseStep, 0, 100);
+    }
+  }
+
+  if (w.omenActive && w.tension < 65) {
+    w.omenActive = false;
+    omenCleared = true;
+  }
 
   // Crisis Stage 0 -> 1 foreshadowing whispers starting age 14+
   let whisperDecision: PendingDecision | null = null;
@@ -114,9 +184,6 @@ export function tickWorldTension(state: GameState, rng: SeededRng): TensionTickR
   }
 
   // Check if a Great Shinobi War can break out (honors K4 Peace Accord 12-year cooldown)
-  const warCooldownOk =
-    (w.lastWarAge === null || state.age - w.lastWarAge >= 6) &&
-    (!w.peaceAccordUntilAge || state.age >= w.peaceAccordUntilAge);
   let omenLogged = false;
 
   if (w.tension >= 70 && !w.omenActive && warCooldownOk && state.age >= 11) {
@@ -134,10 +201,26 @@ export function tickWorldTension(state: GameState, rng: SeededRng): TensionTickR
   if (canTriggerWar) {
     const isCrisisWar =
       w.seededCrisis !== 'none' && w.crisisStage < 2 && isEndgameReady(state);
-    return { triggerWar: true, isCrisisWar, whisperDecision: null, omenLogged };
+    return {
+      triggerWar: true,
+      isCrisisWar,
+      whisperDecision: null,
+      omenLogged,
+      detenteLogged,
+      detenteDelta,
+      omenCleared,
+    };
   }
 
-  return { triggerWar: false, isCrisisWar: false, whisperDecision, omenLogged };
+  return {
+    triggerWar: false,
+    isCrisisWar: false,
+    whisperDecision,
+    omenLogged,
+    detenteLogged,
+    detenteDelta,
+    omenCleared,
+  };
 }
 
 export function buildWarPreludeDecision(state: GameState, isCrisisWar: boolean): PendingDecision {

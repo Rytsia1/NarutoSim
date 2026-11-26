@@ -157,6 +157,16 @@ export interface BattleOddsEstimate {
   isEstimate: boolean;
 }
 
+export type BattleAttackStyle = 'taijutsu' | 'kenjutsu' | 'ninjutsu' | 'genjutsu';
+
+export function hasKenjutsuDiscipline(state: GameState): boolean {
+  return state.disciplines.some((d) => d.id === 'kenjutsu');
+}
+
+export function getKenjutsuLevel(state: GameState): number {
+  return state.disciplines.find((d) => d.id === 'kenjutsu')?.level ?? 0;
+}
+
 export function computeStanceMultiplier(
   state: GameState,
   pRanks: [number, number, number, number, number],
@@ -164,10 +174,16 @@ export function computeStanceMultiplier(
   enemyElement: ChakraElement | null,
   enemySkills: { tag: SkillTag; rank: number }[],
   skillsKnown: boolean,
-  actionId: 'taijutsu' | 'ninjutsu' | 'genjutsu',
+  actionId: BattleAttackStyle,
 ): { mult: number; elemLabel: string | null } {
   if (actionId === 'taijutsu') {
     const mult = clamp(1 + (pRanks[0] - enemyRanks[2]) * 0.08 + (pRanks[1] - enemyRanks[1]) * 0.02, 0.65, 1.55);
+    return { mult, elemLabel: null };
+  }
+  if (actionId === 'kenjutsu') {
+    const kenLv = getKenjutsuLevel(state);
+    const bladeRank = pRanks[1] * 0.55 + pRanks[0] * 0.45;
+    const mult = clamp(1 + (bladeRank - enemyRanks[1]) * 0.08 + kenLv * 0.05, 0.72, 1.58);
     return { mult, elemLabel: null };
   }
   if (actionId === 'ninjutsu') {
@@ -200,7 +216,7 @@ export function computeRetreatChance(
 export function estimateBattleActionOdds(
   state: GameState,
   enemy: WarCompetitor,
-  actionId: 'taijutsu' | 'ninjutsu' | 'genjutsu',
+  actionId: BattleAttackStyle,
   resolveBoost = false,
 ): BattleOddsEstimate {
   const isEstimate = enemy.intel < 80;
@@ -304,13 +320,13 @@ export function computePlayerRoundPower(
     const pSkillMod =
       war.partner.trust >= 60
         ? Math.min(
-            2,
-            Math.round(
-              skillSum(war.partner.skills, 'power') * 0.22 +
-                (battle.isDefense ? skillSum(war.partner.skills, 'fort') * 0.22 : 0) +
-                (enemy.hp < 75 ? skillSum(war.partner.skills, 'slayer') * 0.22 : 0),
-            ),
-          )
+          2,
+          Math.round(
+            skillSum(war.partner.skills, 'power') * 0.22 +
+            (battle.isDefense ? skillSum(war.partner.skills, 'fort') * 0.22 : 0) +
+            (enemy.hp < 75 ? skillSum(war.partner.skills, 'slayer') * 0.22 : 0),
+          ),
+        )
         : 0;
     const partnerTotal = pTrustMod + pSkillMod;
     total += partnerTotal;
@@ -476,6 +492,9 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
     state.bloodline.stage !== 'latent' &&
     battle.bloodlineActiveRounds === 0;
 
+  const hasKenjutsu = hasKenjutsuDiscipline(state);
+  const kenLevel = getKenjutsuLevel(state);
+
   const options: PendingDecision['options'] = [
     {
       id: 'taijutsu',
@@ -484,6 +503,19 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
       statHints: ['TAI', 'STA'],
       autoEligible: true,
     },
+    ...(hasKenjutsu
+      ? [
+        {
+          id: 'kenjutsu',
+          label: `Kenjutsu Slash (Tier ${kenLevel}, 4 CP)`,
+          sublabel: 'Tests SPD & TAI vs enemy SPD. Pierces Guard Walls and shaves enemy Fort.',
+          statHints: ['SPD', 'TAI'],
+          disabled: war.cp < 4,
+          disabledReason: 'Requires 4 CP',
+          autoEligible: war.cp >= 4,
+        },
+      ]
+      : []),
     {
       id: 'ninjutsu',
       label: `${ELEMENT_NAMES[state.element]} Ninjutsu (8 CP)`,
@@ -958,9 +990,10 @@ export function resolveBattleRound(
     return resolveNonCombatLethalCheck(state, war, battle, summary, preCounters, rng);
   }
 
-  // Execute Optional Companion Od Action alongside main attacks (K3: does not replace attack!)
+  // Execute Optional Companion Od Action alongside main attacks (K3 — does not replace attack!)
   const isMainAttack =
     optionId === 'taijutsu' ||
+    optionId === 'kenjutsu' ||
     optionId === 'ninjutsu' ||
     optionId === 'genjutsu' ||
     optionId === 'ultimate';
@@ -984,6 +1017,8 @@ export function resolveBattleRound(
   if (playerUsesUlt) {
     war.cp = Math.max(0, war.cp - ultCost);
     war.exposure = clamp(war.exposure + (ult.scope === 'fortress' ? 10 : 6), 0, 100);
+  } else if (optionId === 'kenjutsu') {
+    war.cp = Math.max(0, war.cp - 4);
   } else if (optionId === 'ninjutsu') {
     war.cp = Math.max(0, war.cp - 8);
   } else if (optionId === 'genjutsu') {
@@ -1144,7 +1179,14 @@ export function resolveBattleRound(
 
     const summary: BattleRoundSummary = {
       round: battle.round,
-      playerAction: optionId === 'ninjutsu' ? 'Elemental Ninjutsu' : optionId === 'genjutsu' ? 'Genjutsu Feint' : 'Taijutsu Strike',
+      playerAction:
+        optionId === 'kenjutsu'
+          ? 'Kenjutsu Slash'
+          : optionId === 'ninjutsu'
+            ? 'Elemental Ninjutsu'
+            : optionId === 'genjutsu'
+              ? 'Genjutsu Feint'
+              : 'Taijutsu Strike',
       enemyAction: `Ultimate: ${enemy.ultimate.name}`,
       outcome: 'lose',
       playerDmgTaken: pTaken,
@@ -1171,8 +1213,14 @@ export function resolveBattleRound(
   const eRoll = eBase + rng.int(-14, 14);
   const diff = pRoll - eRoll;
 
-  const styleKey: 'taijutsu' | 'ninjutsu' | 'genjutsu' =
-    optionId === 'ninjutsu' ? 'ninjutsu' : optionId === 'genjutsu' ? 'genjutsu' : 'taijutsu';
+  const styleKey: BattleAttackStyle =
+    optionId === 'kenjutsu'
+      ? 'kenjutsu'
+      : optionId === 'ninjutsu'
+        ? 'ninjutsu'
+        : optionId === 'genjutsu'
+          ? 'genjutsu'
+          : 'taijutsu';
   const { mult: stanceMult, elemLabel } = computeStanceMultiplier(
     state,
     pRanks,
@@ -1192,6 +1240,8 @@ export function resolveBattleRound(
   const playerActionLabel = pickedJutsu.name;
   if (styleKey === 'taijutsu') {
     stanceReason = `Taijutsu (TAI ${pRanks[0].toFixed(1)} vs STA ${enemy.ranks[2].toFixed(1)})`;
+  } else if (styleKey === 'kenjutsu') {
+    stanceReason = `Kenjutsu (SPD/TAI vs SPD ${enemy.ranks[1].toFixed(1)} · Wall Pierce)`;
   } else if (styleKey === 'ninjutsu') {
     stanceReason = elemLabel ?? `Ninjutsu (CHK ${pRanks[3].toFixed(1)} vs CHK ${enemy.ranks[3].toFixed(1)})`;
   } else {
@@ -1226,10 +1276,13 @@ export function resolveBattleRound(
         whyLine = `Key Factor: Enemy evaded brunt of attack · ${stanceReason}`;
         narrative = `${boostTag}${sealPrefix}Your strike nearly connects cleanly, grazing them for ${eTaken} damage as they twist clear.`;
       } else {
-        // Lava Release (yoton) melts enemy defensive walls
-        const wallMult = battle.enemyWallRounds > 0 && activeBloodlineId !== 'yoton' ? 0.65 : 1;
+        // Lava Release (yoton) and Kenjutsu blades cleave straight through enemy Guard Walls!
+        const wallPierced = battle.enemyWallRounds > 0 && (styleKey === 'kenjutsu' || activeBloodlineId === 'yoton');
+        const wallMult = battle.enemyWallRounds > 0 && !wallPierced ? 0.65 : 1;
         const gentleFistActive = styleKey === 'taijutsu' && state.disciplines.some((d) => d.id === 'gentle_fist');
-        eTaken = Math.max(5, Math.round((7 + Math.abs(diff) * 0.34) * stanceMult * wallMult));
+        const kenLv = styleKey === 'kenjutsu' ? getKenjutsuLevel(state) : 0;
+        const razorBonus = styleKey === 'kenjutsu' ? (kenLv >= 3 ? 5 : 3) : 0;
+        eTaken = Math.max(5, Math.round((7 + Math.abs(diff) * 0.34) * stanceMult * wallMult) + razorBonus);
         pTaken = rng.int(1, 5);
         outcome = 'win';
         if (styleKey === 'genjutsu') {
@@ -1238,14 +1291,20 @@ export function resolveBattleRound(
         if (gentleFistActive) {
           enemy.cp = Math.max(0, enemy.cp - 10);
         }
+        if (styleKey === 'kenjutsu') {
+          enemy.fort = Math.max(0, enemy.fort - 4);
+        }
         whyLine = `Key Factor: ${reversal ? 'Instinct Reversal! ' : ''}${stanceReason} · ${topFactor}`;
-        narrative = `${boostTag}${sealPrefix}Breaks their guard for ${eTaken} damage${
-          styleKey === 'genjutsu'
-            ? ' and rattles their focus!'
-            : gentleFistActive
-              ? ' and strikes their chakra tenketsu (-10 Enemy CP)!'
+        narrative = `${boostTag}${sealPrefix}Breaks their guard for ${eTaken} damage${styleKey === 'genjutsu'
+          ? ' and rattles their focus!'
+          : gentleFistActive
+            ? ' and strikes their chakra tenketsu (-10 Enemy CP)!'
+            : styleKey === 'kenjutsu'
+              ? wallPierced
+                ? ', cleaving clean through their Guard Wall (-4 Enemy Fort)!'
+                : ' with a razor chakra-blade draw (-4 Enemy Fort)!'
               : '!'
-        }`;
+          }`;
       }
     } else {
       const bloodlineDodge =

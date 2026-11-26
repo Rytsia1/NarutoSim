@@ -40,7 +40,7 @@ describe('Shinobi Rank progression & 4-man Genin Squad Kizuna', () => {
     state.stats.will = 90;
     state.stats.chakra = 80;
     state.team = formGeninTeam(state, new SeededRng(55));
-    state.pending = buildChuninExamStage(state, 3);
+    state.pending = buildChuninExamStage(state, 6, { finalsRound: 2, prepBonus: 9, finalsScore: 12 });
 
     resolvePendingDecision(state, 'tactical_outplay');
 

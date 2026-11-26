@@ -1,9 +1,11 @@
+import { kageTitle, VILLAGE_MAP } from '../data/villages';
 import { NINDO_MAP } from '../data/nindo';
 import { getAvailableOdActions } from './combat';
 import { canEnterRetirement } from './epilogue';
 import { advanceYear, createNewLife, finalizeLifeRecord, pushLog, resolvePendingDecision } from './life';
 import { SeededRng } from './rng';
 import type { FocusId, GameState, LifeRecord, OdActionId, ScenarioConfig } from './types';
+import { canCallDiplomaticSummit, runDiplomaticSummit } from './world';
 import {
   advanceWarBeat,
   ensureWarClockDefaults,
@@ -100,6 +102,31 @@ export class ShinobiSim {
       'epilogue',
       `At age ${this.state.age}, you fold your frontline gear away and enter quiet retirement. Mobilization orders will no longer call your name.`,
       { title: 'Twilight Years Begin' },
+    );
+    this.notify(true);
+    return true;
+  }
+
+  callDiplomaticSummit(): boolean {
+    if (!canCallDiplomaticSummit(this.state)) return false;
+    const rng = new SeededRng(this.state.rng.seed, this.state.rng.state);
+    const { drop, omenCleared } = runDiplomaticSummit(this.state, rng);
+    this.state.rng = rng.snapshot();
+    const roleLabel =
+      this.state.specialStatus === 'kage' ? kageTitle(this.state) : `Senior Jonin Envoy of ${VILLAGE_MAP[this.state.villageId].name}`;
+    pushLog(
+      this.state,
+      'bond',
+      `Acting as ${roleLabel}, you convene a Five-Nation Diplomatic Summit and broker a border pullback (-${drop}% World Tension${omenCleared ? '; War Omen cleared' : ''}).`,
+      {
+        title: 'Diplomatic Summit Convened',
+        deltas: [
+          { stat: 'tension', label: 'World Tension', delta: -drop },
+          { stat: 'ryo', label: 'Ryo', delta: -8 },
+          { stat: 'bonds', label: 'Bonds', delta: 3 },
+          { stat: 'will', label: 'Will', delta: 2 },
+        ],
+      },
     );
     this.notify(true);
     return true;
@@ -250,7 +277,11 @@ export class ShinobiSim {
     if (
       pending.kind === 'war_battle_round' &&
       this.state.war?.activeBattle &&
-      (picked.id === 'taijutsu' || picked.id === 'ninjutsu' || picked.id === 'genjutsu' || picked.id === 'ultimate')
+      (picked.id === 'taijutsu' ||
+        picked.id === 'kenjutsu' ||
+        picked.id === 'ninjutsu' ||
+        picked.id === 'genjutsu' ||
+        picked.id === 'ultimate')
     ) {
       const odOpts = getAvailableOdActions(this.state).filter((a) => !a.disabled);
       const war = this.state.war;

@@ -648,13 +648,13 @@ export function openDayPhase(state: GameState, rng: SeededRng): void {
         },
         ...(war.resolves > 0
           ? [
-              {
-                id: 'rescue_resolve',
-                label: `Burn 1 Resolve: Instant Body Flicker Rescue (${war.resolves} left)`,
-                sublabel: 'Saves the captive cleanly without fighting (+3 Body Strain).',
-                autoEligible: true,
-              },
-            ]
+            {
+              id: 'rescue_resolve',
+              label: `Burn 1 Resolve: Instant Body Flicker Rescue (${war.resolves} left)`,
+              sublabel: 'Saves the captive cleanly without fighting (+3 Body Strain).',
+              autoEligible: true,
+            },
+          ]
           : []),
         {
           id: 'abandon_hostage',
@@ -775,13 +775,13 @@ export function openDayPhase(state: GameState, rng: SeededRng): void {
       meta: { pressureType: playerIsHunted ? 'hunted' : 'hunt', enemyId: target.id },
       options: playerIsHunted
         ? [
-            { id: 'hunted_fight', label: 'Turn and cut down the lead bounty hunter', autoEligible: war.hp >= 60 },
-            { id: 'hunted_evade', label: 'Burn decoys and vanish into the cliffs (-12 CP, -8 HP)', autoEligible: true },
-          ]
+          { id: 'hunted_fight', label: 'Turn and cut down the lead bounty hunter', autoEligible: war.hp >= 60 },
+          { id: 'hunted_evade', label: 'Burn decoys and vanish into the cliffs (-12 CP, -8 HP)', autoEligible: true },
+        ]
         : [
-            { id: 'hunt_join', label: 'Join the hunt (+10 prep bonus, +1 Resolve if you finish them)', autoEligible: war.hp >= 65 },
-            { id: 'hunt_ignore', label: 'Stay clear and conserve your strength (+6 CP)', autoEligible: true },
-          ],
+          { id: 'hunt_join', label: 'Join the hunt (+10 prep bonus, +1 Resolve if you finish them)', autoEligible: war.hp >= 65 },
+          { id: 'hunt_ignore', label: 'Stay clear and conserve your strength (+6 CP)', autoEligible: true },
+        ],
     };
     return;
   }
@@ -843,7 +843,7 @@ export function openDayPhase(state: GameState, rng: SeededRng): void {
     }
   }
 
-  // Priority 6.5: War Partner Bond Scene (K2: Trust >= 60, up to 2 per war)
+  // Priority 6.5: War Partner Bond Scene (K2 — Trust >= 60, up to 2 per war)
   if (
     war.partner &&
     war.partner.active &&
@@ -1500,14 +1500,14 @@ function runNightThreatCheck(state: GameState, rng: SeededRng): boolean {
   const coalitionBoost = war.coalitionEnemyIds.some((id) => raiders.some((r) => r.id === id)) ? 0.1 : 0;
   const raidProb = clamp(
     0.12 +
-      war.exposure * 0.003 +
-      war.day * 0.011 +
-      war.npcExtraRaidPressure +
-      coalitionBoost -
-      (war.hidTonight ? 0.12 : 0) -
-      Math.min(war.fort, 50) * 0.0015 +
-      (war.resolves === 0 ? 0.06 : 0) -
-      stealthSkill,
+    war.exposure * 0.003 +
+    war.day * 0.011 +
+    war.npcExtraRaidPressure +
+    coalitionBoost -
+    (war.hidTonight ? 0.12 : 0) -
+    Math.min(war.fort, 50) * 0.0015 +
+    (war.resolves === 0 ? 0.06 : 0) -
+    stealthSkill,
     0.03,
     0.62,
   );
@@ -1579,11 +1579,11 @@ export function runDawnTick(state: GameState, rng: SeededRng): void {
   );
   war.cp = clamp(
     war.cp +
-      9 +
-      Math.round(state.stats.chakra * 0.08) +
-      (hasUzumaki ? 5 : 0) +
-      (war.workshop >= 100 ? 3 : 0) +
-      strategicBonus,
+    9 +
+    Math.round(state.stats.chakra * 0.08) +
+    (hasUzumaki ? 5 : 0) +
+    (war.workshop >= 100 ? 3 : 0) +
+    strategicBonus,
     0,
     100,
   );

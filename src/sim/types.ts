@@ -4,6 +4,7 @@ export type LifePhase = 'life' | 'war' | 'retirement' | 'posthumous' | 'ended';
 
 export type ShinobiRank = 'civilian' | 'academy' | 'genin' | 'chunin' | 'jonin';
 export type SpecialStatus = 'none' | 'anbu' | 'missing_nin' | 'kage';
+export type ChuninExamStage = 1 | 2 | 3 | 4 | 5 | 6;
 
 export type OriginId =
   | 'clan_heir'
@@ -551,6 +552,7 @@ export interface WorldState {
   warsSurvived: number;
   truePeace: boolean;
   peaceAccordUntilAge?: number;
+  lastSummitAge?: number;
   vengeanceTargetId?: string | null;
   seededCrisis: CrisisId;
   bijuuName?: string;

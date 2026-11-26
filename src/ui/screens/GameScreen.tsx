@@ -17,7 +17,7 @@ import { canEnterRetirement } from '../../sim/epilogue';
 import { computeCombatProjection, getChakraCap, XP_NEED_FOR_NEXT } from '../../sim/powers';
 import { getRelStageLabel, getTrustTier } from '../../sim/team';
 import type { FocusId, GameState } from '../../sim/types';
-import { getTensionLabel, MAX_CRISIS_CLUES } from '../../sim/world';
+import { canCallDiplomaticSummit, getTensionLabel, MAX_CRISIS_CLUES } from '../../sim/world';
 import { DecisionDialog } from '../components/DecisionDialog';
 
 interface GameScreenProps {
@@ -32,6 +32,7 @@ interface GameScreenProps {
   onSetFocus: (focus: FocusId) => void;
   onResolve: (optionId: string, freeText?: string) => void;
   onRetire: () => void;
+  onCallSummit?: () => void;
   onOpenSettings: () => void;
   onBackToLobby: () => void;
 }
@@ -50,6 +51,7 @@ export function GameScreen({
   onSetFocus,
   onResolve,
   onRetire,
+  onCallSummit,
   onOpenSettings,
   onBackToLobby,
 }: GameScreenProps) {
@@ -62,6 +64,7 @@ export function GameScreen({
   const village = VILLAGE_MAP[state.villageId];
   const origin = ORIGIN_MAP[state.originId];
   const retireAvailable = canEnterRetirement(state);
+  const summitAvailable = canCallDiplomaticSummit(state);
   const newestFirstLogs = [...state.logs].reverse();
 
   // Keep newest log visible at top without yanking users who scrolled down into older history
@@ -387,25 +390,34 @@ export function GameScreen({
                         <span className={`chip ${state.rank === 'jonin' ? 'pos' : ''}`}>
                           {state.rank === 'jonin' ? '✓' : '·'} Jonin
                         </span>
-                        <span className={`chip ${state.age >= 28 ? 'pos' : ''}`}>
-                          {state.age >= 28 ? '✓' : '·'} Age {state.age}/28
+                        <span className={`chip ${state.age >= 26 ? 'pos' : ''}`}>
+                          {state.age >= 26 ? '✓' : '·'} Age {state.age}/26
                         </span>
                         <span
                           className={`chip ${
-                            state.stats.bonds >= (state.nindo === 'become_kage' ? 50 : 55) ? 'pos' : ''
+                            state.stats.bonds >=
+                            (state.nindo === 'become_kage' ? 50 : 55) - (state.flags.kage_endorsed ? 10 : 0)
+                              ? 'pos'
+                              : ''
                           }`}
                         >
-                          {state.stats.bonds >= (state.nindo === 'become_kage' ? 50 : 55) ? '✓' : '·'} Bonds{' '}
-                          {state.stats.bonds}/{state.nindo === 'become_kage' ? 50 : 55}
+                          Bonds {state.stats.bonds}/
+                          {(state.nindo === 'become_kage' ? 50 : 55) - (state.flags.kage_endorsed ? 10 : 0)}
                         </span>
                         <span
                           className={`chip ${
-                            state.missions.s >= (state.nindo === 'become_kage' ? 1 : 2) ? 'pos' : ''
+                            state.missions.s >=
+                            Math.max(0, (state.nindo === 'become_kage' ? 1 : 2) - (state.flags.kage_endorsed ? 1 : 0))
+                              ? 'pos'
+                              : ''
                           }`}
                         >
-                          {state.missions.s >= (state.nindo === 'become_kage' ? 1 : 2) ? '✓' : '·'} S-Rank{' '}
-                          {state.missions.s}/{state.nindo === 'become_kage' ? 1 : 2}
+                          S-Rank {state.missions.s}/
+                          {Math.max(0, (state.nindo === 'become_kage' ? 1 : 2) - (state.flags.kage_endorsed ? 1 : 0))}
                         </span>
+                      </div>
+                      <div className="disc-sub" style={{ marginTop: 4 }}>
+                        Also offered via 2+ Wars Survived (Will 65+) or S-Rank Threat Tier (Bonds 45+).
                       </div>
                     </div>
                   )}
@@ -430,6 +442,19 @@ export function GameScreen({
                       );
                     })}
                   </div>
+                  {summitAvailable && onCallSummit && (
+                    <div style={{ marginTop: 12 }}>
+                      <button
+                        type="button"
+                        className="btn btn-ghost"
+                        style={{ width: '100%', borderColor: 'var(--accent-gold)', color: 'var(--accent-gold)' }}
+                        onClick={onCallSummit}
+                        title="Spend 8 Ryo to convene a Five-Nation Summit and reduce World Tension (4-year cooldown)"
+                      >
+                        Convene Diplomatic Summit (-8 Ryo · Lower World Tension)
+                      </button>
+                    </div>
+                  )}
                   {retireAvailable && (
                     <div style={{ marginTop: 14 }}>
                       <button type="button" className="btn btn-primary" style={{ width: '100%' }} onClick={onRetire}>

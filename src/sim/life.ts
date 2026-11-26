@@ -57,6 +57,7 @@ import {
 import type {
   ChakraElement,
   CheckResultChip,
+  ChuninExamStage,
   FamilyMember,
   FocusId,
   GameState,
@@ -197,38 +198,128 @@ export function buildNindoChoiceDecision(state: GameState): PendingDecision {
   };
 }
 
-export function canTriggerKageSuccession(state: GameState): boolean {
-  if (state.rank !== 'jonin') return false;
-  if (state.specialStatus === 'kage' || state.specialStatus === 'missing_nin') return false;
-  if (state.flags.declined_kage) return false;
-  if (state.age < 28) return false;
+export type KageOfferReason = 'council' | 'war_hero' | 'legend';
+
+export function getKageOfferReason(state: GameState): KageOfferReason | null {
+  if (state.rank !== 'jonin') return null;
+  if (state.specialStatus === 'kage' || state.specialStatus === 'missing_nin') return null;
+  if (state.flags.declined_kage) return null;
+
   const endorsed = Boolean(state.flags.kage_endorsed);
   const reqBonds = (state.nindo === 'become_kage' ? 50 : 55) - (endorsed ? 10 : 0);
   const reqSMissions = Math.max(0, (state.nindo === 'become_kage' ? 1 : 2) - (endorsed ? 1 : 0));
-  return state.stats.bonds >= reqBonds && state.missions.s >= reqSMissions;
+
+  if (state.age >= 26 && state.stats.bonds >= reqBonds && state.missions.s >= reqSMissions) {
+    return 'council';
+  }
+  if (state.age >= 24 && state.world.warsSurvived >= 2 && state.stats.will >= 65 && state.stats.bonds >= 45) {
+    return 'war_hero';
+  }
+  if (state.age >= 25 && computeCombatProjection(state).threatTier === 'S' && state.stats.bonds >= 45) {
+    return 'legend';
+  }
+  return null;
 }
 
-export function buildKageSuccessionDecision(state: GameState): PendingDecision {
+export function canTriggerKageSuccession(state: GameState): boolean {
+  return getKageOfferReason(state) !== null;
+}
+
+export function buildKageSuccessionDecision(
+  state: GameState,
+  stage: 1 | 2 = 1,
+  offerReason?: KageOfferReason,
+): PendingDecision {
   const title = kageTitle(state);
   const vName = VILLAGE_MAP[state.villageId].name;
+  const reason = offerReason ?? getKageOfferReason(state) ?? 'council';
+
+  if (stage === 2) {
+    return {
+      id: `kage_inauguration_${state.age}`,
+      kind: 'kage_succession',
+      eventId: 'kage_inauguration',
+      title: `Inauguration of the ${title}: Your First Decree`,
+      body: `Stepping onto the sunlit balcony above ${vName}, your white-and-flame ${title} cloak catches the breeze while thousands of villagers and shinobi cheer below. The council awaits your very first decree.`,
+      manual: true,
+      meta: { kageStage: 2, offerReason: reason },
+      options: [
+        {
+          id: 'decree_peace',
+          label: 'Dispatch peace envoys to every Great Nation (-18 World Tension, +6 Bonds)',
+          sublabel: 'Opens an era of border detente and Will of Fire diplomacy.',
+          statHints: ['Bonds', 'Will'],
+          autoEligible: true,
+        },
+        {
+          id: 'decree_academy',
+          label: 'Reform the Shinobi Academy & shield young Genin (+8 Bonds, +5 Intel)',
+          sublabel: 'Deepens trust across surviving comrades and strengthens the next generation.',
+          statHints: ['Bonds', 'Intel'],
+          autoEligible: true,
+        },
+        {
+          id: 'decree_fortress',
+          label: 'Fortify the borders and expand the elite Jonin corps (+6 Chakra, +6 Will, +15 Ryo)',
+          sublabel: 'Signals unmistakable military strength across the frontier.',
+          statHints: ['Chakra', 'Will'],
+          autoEligible: true,
+        },
+        {
+          id: 'decree_shadow',
+          label: 'Empower ANBU & preemptive frontier intelligence (+8 Intel, +2 Crisis Clues)',
+          sublabel: 'Uncovers hidden continental threats before they strike.',
+          statHints: ['Intel'],
+          autoEligible: true,
+        },
+      ],
+    };
+  }
+
+  const comradeName =
+    state.permanentPartner?.alive
+      ? state.permanentPartner.name
+      : state.team?.members.find((m) => m.alive && m.specialStatus !== 'missing_nin')?.name ?? 'a trusted senior Jonin';
+
+  const bodyByReason: Record<KageOfferReason, string> = {
+    council: `After years of Jonin service, ${state.missions.s} S-Rank operations, and the deep trust of your peers (Bonds ${state.stats.bonds}), the Daimyo and elder council summon you to the tower and formally offer you the ${title} hat of ${vName}.`,
+    war_hero: `Following ${state.world.warsSurvived} brutal Great Shinobi Wars, the previous ${title} steps aside. Standing before an emergency summit of clan heads and the Daimyo, the elders unanimously offer you the ${title} mantle to steady ${vName}.`,
+    legend: `Your S-Rank battlefield renown has outgrown every dossier in the Five Great Nations. Two sealed envoys from the Daimyo track you down and lay the ${title} hat upon the table, asking you to take command of ${vName}.`,
+  };
+
   return {
     id: `kage_succession_${state.age}`,
     kind: 'kage_succession',
     eventId: 'kage_succession',
-    title: `Nomination for ${title} of ${vName}`,
-    body: `After decades of Jonin service, ${state.missions.s} S-Rank operations, and the deep trust of your peers (Bonds ${state.stats.bonds}), the village council summons you to receive the ${title} hat.`,
+    title: `Summons from the Daimyo: Offered the ${title} Hat`,
+    body: bodyByReason[reason],
     manual: true,
+    meta: { kageStage: 1, offerReason: reason, comradeName },
     options: [
       {
         id: 'accept_kage',
-        label: `Accept the mantle and ascend as ${title}`,
-        sublabel: `Become leader of ${vName}, etching your name into shinobi history.`,
+        label: `Accept the mantle and ascend as ${title} of ${vName}`,
+        sublabel: 'Proceed to your inauguration ceremony and issue your first village decree.',
         statHints: ['Bonds', 'Will'],
         autoEligible: true,
       },
       {
+        id: 'negotiate_authority',
+        label: 'Demand full command over border peace & military policy before accepting',
+        sublabel: 'Tests Intel & Will against the Elders; success adds +6 Will, +15 Ryo & -8 World Tension.',
+        statHints: ['Intel', 'Will'],
+        autoEligible: state.stats.intel >= 60,
+      },
+      {
+        id: 'recommend_comrade',
+        label: `Turn down the hat and endorse ${comradeName} for the seat instead`,
+        sublabel: 'Stay free on the field (+10 Bonds, +6 Will, -6 World Tension, +8 Squad Trust).',
+        statHints: ['Bonds'],
+        autoEligible: false,
+      },
+      {
         id: 'decline_kage',
-        label: 'Decline the hat and keep protecting the village from the field (+5 Will, +5 Bonds)',
+        label: 'Decline the hat quietly and keep guarding the village from the frontlines (+6 Will, +4 Bonds)',
         statHints: ['Will'],
         autoEligible: false,
       },
@@ -859,6 +950,18 @@ function rollPoolDecision(state: GameState, rng: SeededRng): PendingDecision | n
         autoEligible: state.stats.health >= 55,
       });
     }
+    if (
+      state.world.tension >= 30 &&
+      (state.rank === 'chunin' || state.rank === 'jonin' || state.stats.bonds >= 50)
+    ) {
+      boardOptions.push({
+        id: 'diplomatic_mission',
+        label: 'Diplomatic Peacekeeping: Border Summit Escort (-8 to -14 World Tension)',
+        sublabel: 'Escort neutral envoys to de-escalate border friction (+10 Ryo, +4 Bonds). Tests Intel & Bonds.',
+        statHints: ['Bonds', 'Intel'],
+        autoEligible: state.world.tension >= 55,
+      });
+    }
     boardOptions.push({
       id: 'pass_mission',
       label: 'Pass on the Mission Board and run village drills (+2 Ryo)',
@@ -1029,6 +1132,25 @@ export function advanceYear(state: GameState): void {
 
   // World Tension & Crisis Foreshadowing tick
   const worldTick = tickWorldTension(state, rng);
+  if (worldTick.detenteLogged && worldTick.detenteDelta) {
+    pushLog(
+      state,
+      'bond',
+      `Diplomatic envoys renew border trade accords across the Five Great Nations, easing frontier hostilities.`,
+      {
+        title: 'Diplomatic Detente',
+        deltas: [{ stat: 'tension', label: 'World Tension', delta: worldTick.detenteDelta }],
+      },
+    );
+  }
+  if (worldTick.omenCleared) {
+    pushLog(
+      state,
+      'normal',
+      'Frontier garrisons stand down from red alert as border tensions cool below crisis threshold.',
+      { title: 'War Omen Subsides' },
+    );
+  }
   if (worldTick.omenLogged) {
     pushLog(
       state,
@@ -1096,9 +1218,16 @@ export function advanceYear(state: GameState): void {
     nextDecision = buildJoninEvaluationDecision(state);
   }
 
-  // Priority 7.5: Kage Succession Path (Jonin, Age 30+, Bonds >= 60, S-Rank >= 3)
-  if (!nextDecision && canTriggerKageSuccession(state)) {
-    nextDecision = buildKageSuccessionDecision(state);
+  // Priority 7.5: Kage Offer & Succession Arc (Council / War Hero / S-Rank Legend)
+  if (!nextDecision) {
+    const offerReason = getKageOfferReason(state);
+    if (offerReason) {
+      const offerChance =
+        offerReason === 'council' || state.flags.kage_endorsed ? 0.55 : 0.35;
+      if (rng.chance(offerChance)) {
+        nextDecision = buildKageSuccessionDecision(state, 1, offerReason);
+      }
+    }
   }
 
   // Priority 8: Bloodline (Kekkei Genkai) Awakening / Refinement
@@ -1473,35 +1602,153 @@ export function resolvePendingDecision(
 
     case 'kage_succession': {
       const title = kageTitle(state);
-      if (optionId === 'accept_kage') {
+      const vName = VILLAGE_MAP[state.villageId].name;
+      const kageStage = Number(decision.meta?.kageStage ?? 1);
+      const offerReason = String(decision.meta?.offerReason ?? 'council') as KageOfferReason;
+      const comradeName = String(decision.meta?.comradeName ?? 'a trusted comrade');
+
+      if (kageStage === 2) {
         state.specialStatus = 'kage';
         state.stats.will += 6;
         state.stats.bonds += 6;
+        let tensionDelta = 0;
+        let decreeSummary = '';
+
+        if (optionId === 'decree_peace') {
+          const prevT = state.world.tension;
+          state.world.tension = clamp(state.world.tension - 18, 5, 100);
+          tensionDelta = state.world.tension - prevT;
+          if (state.world.omenActive && state.world.tension < 65) {
+            state.world.omenActive = false;
+          }
+          state.stats.bonds += 6;
+          addLeaning(state, 'will_of_fire', 2);
+          decreeSummary = `Your first decree dispatches peace envoys to every Great Nation, cooling border tensions immediately.`;
+        } else if (optionId === 'decree_academy') {
+          state.stats.bonds += 8;
+          state.stats.intel += 5;
+          addLeaning(state, 'will_of_fire', 1);
+          if (state.team) {
+            state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 8));
+          }
+          decreeSummary = `Your first decree reforms the Shinobi Academy and raises safety standards for young Genin squads.`;
+        } else if (optionId === 'decree_fortress') {
+          state.stats.chakra += 6;
+          state.stats.will += 6;
+          state.stats.ryo += 15;
+          addLeaning(state, 'ambition', 1);
+          decreeSummary = `Your first decree fortifies the outer watchtowers and expands the elite Jonin response corps.`;
+        } else {
+          state.stats.intel += 8;
+          state.world.crisisClues = clamp(state.world.crisisClues + 2, 0, MAX_CRISIS_CLUES);
+          addLeaning(state, 'ruthless', 1);
+          decreeSummary = `Your first decree empowers ANBU border networks, uncovering deep intelligence on hidden threats.`;
+        }
+
         clampStats(state);
-        recordMemory(state, 'promotion', `Accepted the ${title} hat of ${VILLAGE_MAP[state.villageId].name}.`);
+        const chips = [...diffStats(before, state.stats)];
+        if (tensionDelta !== 0) {
+          chips.push({ stat: 'tension', label: 'World Tension', delta: tensionDelta });
+        }
+        recordMemory(state, 'promotion', `Ascended as ${title} of ${vName} and issued your first village decree.`);
         pushLog(
           state,
           'milestone',
-          `Before the entire village square, you place the ${title} hat upon your head and swear to guard every soul within ${VILLAGE_MAP[state.villageId].name}.`,
-          { title: `Acclaimed as ${title}`, deltas: diffStats(before, state.stats) },
+          `Before the entire village square, you place the ${title} hat upon your head. ${decreeSummary}`,
+          { title: `Acclaimed as ${title}`, deltas: chips },
         );
-      } else {
+        break;
+      }
+
+      if (optionId === 'accept_kage') {
+        pushLog(
+          state,
+          'milestone',
+          `You bow calmly before the Daimyo and elder council, accepting the burden of becoming ${title} of ${vName}.`,
+        );
+        state.pending = buildKageSuccessionDecision(state, 2, offerReason);
+        break;
+      }
+
+      if (optionId === 'negotiate_authority') {
+        const passed = state.stats.intel + state.stats.will + rng.int(0, 30) > 125;
+        checks.push({ label: 'Council Authority Negotiation', passed });
+        if (passed) {
+          const prevT = state.world.tension;
+          state.world.tension = clamp(state.world.tension - 8, 5, 100);
+          if (state.world.omenActive && state.world.tension < 65) state.world.omenActive = false;
+          state.stats.will += 6;
+          state.stats.ryo += 15;
+          clampStats(state);
+          const chips = [...diffStats(before, state.stats)];
+          if (state.world.tension - prevT !== 0) {
+            chips.push({ stat: 'tension', label: 'World Tension', delta: state.world.tension - prevT });
+          }
+          pushLog(
+            state,
+            'milestone',
+            `The Daimyo admires your iron composure and grants you full authority over ${vName}'s war and peace councils!`,
+            { deltas: chips, checks },
+          );
+          state.pending = buildKageSuccessionDecision(state, 2, offerReason);
+        } else {
+          state.stats.will += 3;
+          state.stats.bonds -= 2;
+          clampStats(state);
+          pushLog(
+            state,
+            'normal',
+            `The elder council balks at your terms, forcing a tense compromise before confirming your inauguration as ${title}.`,
+            { deltas: diffStats(before, state.stats), checks },
+          );
+          state.pending = buildKageSuccessionDecision(state, 2, offerReason);
+        }
+        break;
+      }
+
+      if (optionId === 'recommend_comrade') {
         state.flags.declined_kage = true;
-        state.stats.will += 5;
-        state.stats.bonds += 5;
+        const prevT = state.world.tension;
+        state.world.tension = clamp(state.world.tension - 6, 5, 100);
+        if (state.world.omenActive && state.world.tension < 65) state.world.omenActive = false;
+        state.stats.bonds += 10;
+        state.stats.will += 6;
+        if (state.team) {
+          state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 8));
+        }
+        if (state.permanentPartner?.alive) {
+          state.permanentPartner.trust = clamp(state.permanentPartner.trust + 8, 0, 100);
+        }
         clampStats(state);
+        const chips = [...diffStats(before, state.stats)];
+        if (state.world.tension - prevT !== 0) {
+          chips.push({ stat: 'tension', label: 'World Tension', delta: state.world.tension - prevT });
+        }
+        recordMemory(state, 'promotion', `Declined the ${title} hat and endorsed ${comradeName} to lead ${vName}.`);
         pushLog(
           state,
           'bond',
-          `You decline the ${title} nomination with a quiet smile, preferring to shield ${VILLAGE_MAP[state.villageId].name} from the frontlines.`,
-          { deltas: diffStats(before, state.stats) },
+          `You decline the ${title} hat with an easy grin and endorse ${comradeName} before the Daimyo, staying free to guard ${vName} from the open road.`,
+          { title: `Declined the ${title} Mantle`, deltas: chips },
         );
+        break;
       }
+
+      state.flags.declined_kage = true;
+      state.stats.will += 6;
+      state.stats.bonds += 4;
+      clampStats(state);
+      pushLog(
+        state,
+        'bond',
+        `You decline the ${title} offer with a quiet bow, choosing to keep shielding ${vName} from the frontlines.`,
+        { deltas: diffStats(before, state.stats) },
+      );
       break;
     }
 
     case 'chunin_exam_stage': {
-      const stage = Number(decision.meta?.stage ?? 1) as 1 | 2 | 3;
+      const stage = Number(decision.meta?.stage ?? 1) as ChuninExamStage;
 
       if (stage === 1) {
         if (optionId === 'withdraw_exam') {
@@ -1509,16 +1756,24 @@ export function resolvePendingDecision(
           break;
         }
         const passed =
-          optionId === 'intel_gather'
-            ? state.stats.intel + rng.int(0, 30) > 42
-            : state.stats.will + rng.int(0, 30) > 46;
-        checks.push({ label: optionId === 'intel_gather' ? 'Stealth Info Gathering' : 'Tenth Question Resolve', passed });
+          optionId === 'bloodline_sensory_cheat'
+            ? state.stats.intel + state.stats.chakra * 0.4 + rng.int(0, 30) > 36
+            : optionId === 'intel_gather'
+              ? state.stats.intel + rng.int(0, 30) > 40
+              : state.stats.will + rng.int(0, 30) > 44;
+        const label =
+          optionId === 'bloodline_sensory_cheat'
+            ? 'Sensory / Dojutsu Information Gathering'
+            : optionId === 'intel_gather'
+              ? 'Stealth Info Gathering'
+              : 'Tenth Question Resolve';
+        checks.push({ label, passed });
 
         if (passed) {
-          state.stats.intel += 2;
+          state.stats.intel += optionId === 'bloodline_sensory_cheat' ? 3 : 2;
           state.stats.will += 2;
           clampStats(state);
-          pushLog(state, 'milestone', 'You clear Stage 1 of the Chunin Exams and advance to the Forest of Death.', {
+          pushLog(state, 'milestone', 'You clear Stage 1 (Written Cipher) and march into the Forest of Death!', {
             deltas: diffStats(before, state.stats),
             checks,
           });
@@ -1527,7 +1782,6 @@ export function resolvePendingDecision(
           pushLog(state, 'normal', 'Caught out by the proctor’s trap, you are eliminated in Stage 1 of the Chunin Exams.', {
             checks,
           });
-          // Even if player fails, check if a teammate still earned Chunin independently!
           const matesPassed = evaluateTeammatesChuninPass(state, rng);
           if (matesPassed.length > 0 && state.team?.active) {
             state.pending = disbandGeninTeam(state, 'teammate_chunin', matesPassed);
@@ -1535,41 +1789,44 @@ export function resolvePendingDecision(
         }
       } else if (stage === 2) {
         let passed = false;
-        let checkLabel = 'Forest Survival';
+        let checkLabel = 'Forest Scroll Hunt';
         if (optionId === 'ambush_hunt') {
           checkLabel = 'Scroll Ambush';
-          passed = state.stats.chakra + state.stats.health * 0.5 + rng.int(0, 32) > 84;
+          passed = state.stats.chakra + state.stats.health * 0.5 + rng.int(0, 34) > 78;
         } else if (optionId === 'squad_cover') {
           checkLabel = 'Squad Formation';
-          passed = state.stats.bonds + state.stats.will * 0.5 + rng.int(0, 32) > 78;
+          passed = state.stats.bonds + state.stats.will * 0.5 + rng.int(0, 34) > 72;
+        } else if (optionId === 'barter_trap') {
+          checkLabel = 'Decoy Scroll Snare';
+          passed = state.stats.intel + state.stats.chakra * 0.45 + rng.int(0, 34) > 74;
         } else {
           checkLabel = 'Forest Stealth';
-          passed = state.stats.intel + state.stats.will * 0.5 + rng.int(0, 32) > 74;
+          passed = state.stats.intel + state.stats.will * 0.5 + rng.int(0, 34) > 70;
         }
         checks.push({ label: checkLabel, passed });
 
         if (passed) {
-          state.stats.will += 3;
-          state.stats.health = Math.max(1, state.stats.health - 4);
+          state.stats.will += 2;
+          state.stats.health = Math.max(1, state.stats.health - 3);
           if (state.team?.active) {
-            state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 4));
+            state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 3));
           }
           clampStats(state);
           pushLog(
             state,
             'milestone',
-            'Bruised and mud-streaked, you reach the central tower with both Heaven and Earth scrolls before the five-day horn sounds.',
+            'You secure the missing Earth Scroll on Day 2 and begin the perilous push toward the Central Tower!',
             { deltas: diffStats(before, state.stats), checks },
           );
           state.pending = buildChuninExamStage(state, 3);
         } else {
-          state.stats.health -= optionId === 'ambush_hunt' ? 16 : 9;
+          state.stats.health -= optionId === 'ambush_hunt' ? 14 : 8;
           clampStats(state);
           const loyalMate = state.team?.active
             ? state.team.members.find((m) => m.role === 'teammate' && m.alive && m.trust >= 65)
             : undefined;
-          const fatalRisk = optionId === 'ambush_hunt' && state.stats.health < 35 && !loyalMate;
-          if (state.stats.health <= 0 || (fatalRisk && rng.chance(0.18))) {
+          const fatalRisk = optionId === 'ambush_hunt' && state.stats.health < 30 && !loyalMate;
+          if (state.stats.health <= 0 || (fatalRisk && rng.chance(0.14))) {
             killCharacter(state, 'mortally wounded inside the Forest of Death during the Chunin Exams');
             break;
           }
@@ -1586,21 +1843,199 @@ export function resolvePendingDecision(
             state.pending = disbandGeninTeam(state, 'teammate_chunin', matesPassed);
           }
         }
+      } else if (stage === 3) {
+        let passed = false;
+        let checkLabel = 'Tower Gate Sprint';
+        if (optionId === 'hold_the_line') {
+          checkLabel = 'Bridge Breakthrough';
+          passed = state.stats.chakra + state.stats.health * 0.5 + rng.int(0, 34) > 78;
+        } else if (optionId === 'protect_teammate') {
+          checkLabel = 'Squad Rearguard';
+          passed = state.stats.bonds + state.stats.will * 0.5 + rng.int(0, 34) > 72;
+        } else {
+          checkLabel = 'Smoke Diversion';
+          passed = state.stats.intel + state.stats.will * 0.5 + rng.int(0, 34) > 70;
+        }
+        checks.push({ label: checkLabel, passed });
+
+        if (passed) {
+          state.stats.will += 3;
+          state.stats.health = Math.max(1, state.stats.health - 3);
+          if (state.team?.active) {
+            state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, optionId === 'protect_teammate' ? 6 : 3));
+          }
+          clampStats(state);
+          pushLog(
+            state,
+            'milestone',
+            'Mud-streaked and breathless, you slam through the Central Tower doors with both Heaven and Earth scrolls before the five-day horn sounds!',
+            { deltas: diffStats(before, state.stats), checks },
+          );
+          state.pending = buildChuninExamStage(state, 4);
+        } else {
+          state.stats.health -= optionId === 'hold_the_line' ? 12 : 7;
+          clampStats(state);
+          if (state.stats.health <= 0) {
+            killCharacter(state, 'overwhelmed at the Central Tower ravine during the Chunin Exams');
+            break;
+          }
+          pushLog(
+            state,
+            'danger',
+            'Pinned down outside the ravine bridge until the five-day horn rings, you miss the tower cutoff.',
+            { deltas: diffStats(before, state.stats), checks },
+          );
+          const matesPassed = evaluateTeammatesChuninPass(state, rng);
+          if (matesPassed.length > 0 && state.team?.active) {
+            state.pending = disbandGeninTeam(state, 'teammate_chunin', matesPassed);
+          }
+        }
+      } else if (stage === 4) {
+        // Tower Preliminaries (1v1 Elimination)
+        const kenLevel = state.disciplines.find((d) => d.id === 'kenjutsu')?.level ?? 0;
+        let statScore = 0;
+        let checkLabel = 'Tower Preliminary Bout';
+        if (optionId === 'prelim_kenjutsu') {
+          checkLabel = 'Preliminary Kenjutsu Clash';
+          statScore = state.stats.health * 0.45 + state.stats.will * 0.45 + kenLevel * 6;
+        } else if (optionId === 'prelim_ninjutsu') {
+          checkLabel = 'Preliminary Ninjutsu Clash';
+          statScore = state.stats.chakra * 0.6 + state.stats.intel * 0.35;
+        } else if (optionId === 'prelim_genjutsu') {
+          checkLabel = 'Preliminary Genjutsu Feint';
+          statScore = state.stats.intel * 0.55 + state.stats.will * 0.4;
+        } else {
+          checkLabel = 'Preliminary Taijutsu Bout';
+          statScore = state.stats.health * 0.55 + state.stats.will * 0.4;
+        }
+        const passed = statScore + rng.int(0, 36) > 64;
+        checks.push({ label: checkLabel, passed });
+
+        if (passed) {
+          state.stats.will += 2;
+          if (state.disciplines.length > 0) {
+            const main = state.disciplines.find((d) => d.isMain) ?? state.disciplines[0];
+            main.xp += 4;
+          }
+          clampStats(state);
+          pushLog(
+            state,
+            'milestone',
+            'Victory in the Tower Preliminaries! Your name flashes across the electronic match board for next month’s Stadium Finals.',
+            { deltas: diffStats(before, state.stats), checks },
+          );
+          state.pending = buildChuninExamStage(state, 5);
+        } else {
+          state.stats.health = Math.max(8, state.stats.health - 8);
+          state.stats.will += 2;
+          clampStats(state);
+          pushLog(
+            state,
+            'normal',
+            'Your opponent edges you out in a fierce Tower Preliminary bout. You watch the remaining qualifiers from the balcony, hungry for next year.',
+            { deltas: diffStats(before, state.stats), checks },
+          );
+          const matesPassed = evaluateTeammatesChuninPass(state, rng);
+          if (matesPassed.length > 0 && state.team?.active) {
+            state.pending = disbandGeninTeam(state, 'teammate_chunin', matesPassed);
+          }
+        }
+      } else if (stage === 5) {
+        // One-Month Finals Training Window
+        let prepBonus = 7;
+        let prepMsg = '';
+        if (optionId === 'prep_jutsu') {
+          state.stats.chakra += 4;
+          if (state.disciplines.length > 0) {
+            const main = state.disciplines.find((d) => d.isMain) ?? state.disciplines[0];
+            main.xp += 6;
+          }
+          prepBonus = 8;
+          prepMsg = 'Thirty relentless days on the cliffside sharpen your signature Jutsu to a razor edge.';
+        } else if (optionId === 'prep_blade_body') {
+          state.stats.health += 4;
+          state.stats.will += 3;
+          const ken = state.disciplines.find((d) => d.id === 'kenjutsu');
+          if (ken) ken.xp += 5;
+          prepBonus = 8;
+          prepMsg = 'Weighted dawn sprints and endless form drills harden your footing for the stadium sand.';
+        } else if (optionId === 'prep_tactics') {
+          state.stats.intel += 5;
+          state.stats.will += 2;
+          prepBonus = 9;
+          prepMsg = 'You dissect every finalist’s preliminary habits until you can predict their third move before their first.';
+        } else {
+          state.stats.bonds += 4;
+          state.stats.will += 2;
+          if (state.team?.active) {
+            state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 5));
+          }
+          prepBonus = 7;
+          prepMsg = 'Daily spars beside your comrades fill you with calm fire heading into the stadium.';
+        }
+        clampStats(state);
+        pushLog(state, 'milestone', `${prepMsg} The month flies by; stadium drums roll for the Finals!`, {
+          deltas: diffStats(before, state.stats),
+        });
+        state.pending = buildChuninExamStage(state, 6, { finalsRound: 1, prepBonus, finalsScore: 0 });
       } else {
-        // Stage 3: Arena Finals
+        // Stage 6: Stadium Finals (Round 1 Opening -> Round 2 Climax)
+        const finalsRound = Number(decision.meta?.finalsRound ?? 2);
+        const prepBonus = Number(decision.meta?.prepBonus ?? 0);
+        const prevScore = Number(decision.meta?.finalsScore ?? 0);
         const proj = computeCombatProjection(state);
+        const kenLevel = state.disciplines.find((d) => d.id === 'kenjutsu')?.level ?? 0;
+
+        if (finalsRound === 1) {
+          let openBonus = 0;
+          if (optionId === 'open_tactical_read') openBonus = state.stats.intel * 0.35 + state.stats.will * 0.25;
+          else if (optionId === 'open_pressure') openBonus = state.stats.chakra * 0.38 + proj.score * 0.22;
+          else if (optionId === 'open_kenjutsu_draw') openBonus = state.stats.health * 0.3 + state.stats.will * 0.3 + kenLevel * 5;
+          else openBonus = state.stats.health * 0.35 + state.stats.will * 0.25;
+
+          const roundWon = openBonus + prepBonus * 0.5 + rng.int(0, 30) > 50;
+          checks.push({ label: 'Finals Opening Exchange', passed: roundWon });
+          const nextScore = roundWon ? 12 : 4;
+          pushLog(
+            state,
+            roundWon ? 'milestone' : 'normal',
+            roundWon
+              ? 'Your opening sequence seizes the center of the stadium as the crowd erupts!'
+              : 'Your opponent forces you back across the sand in a blistering opening exchange, but the match is far from over!',
+            { checks },
+          );
+          state.pending = buildChuninExamStage(state, 6, {
+            finalsRound: 2,
+            prepBonus,
+            finalsScore: nextScore,
+          });
+          break;
+        }
+
+        // Round 2: Climax & Chunin Promotion Evaluation
         let scoreBonus = 0;
         if (optionId === 'tactical_outplay') scoreBonus = state.stats.intel * 0.35 + state.stats.will * 0.25;
         else if (optionId === 'full_power') scoreBonus = state.stats.chakra * 0.4 + proj.score * 0.25;
+        else if (optionId === 'kenjutsu_finisher') scoreBonus = state.stats.health * 0.32 + state.stats.will * 0.3 + kenLevel * 6;
         else scoreBonus = state.stats.health * 0.35 + state.stats.will * 0.25;
 
-        const playerPassed = scoreBonus + rng.int(0, 34) > 54;
-        checks.push({ label: 'Chunin Arena Evaluation', passed: playerPassed });
+        const totalRoll = scoreBonus + prepBonus + prevScore + rng.int(0, 32);
+        const matchWon = totalRoll > 62;
+        const tacticalPromotion =
+          !matchWon &&
+          totalRoll > 50 &&
+          (state.stats.intel + state.stats.will) / 2 >= 58;
+        const playerPassed = matchWon || tacticalPromotion;
+
+        checks.push({
+          label: tacticalPromotion ? 'Tactical Composure Promotion' : 'Chunin Arena Finals',
+          passed: playerPassed,
+        });
         const matesPassed = evaluateTeammatesChuninPass(state, rng);
 
         if (playerPassed) {
           promoteRank(state, 'chunin');
-          state.stats.ryo += 10;
+          state.stats.ryo += 12;
           state.stats.will += 4;
           state.stats.bonds += 3;
           clampStats(state);
@@ -1615,9 +2050,11 @@ export function resolvePendingDecision(
           pushLog(
             state,
             'milestone',
-            rivalName
-              ? `After a fierce Arena Finals clash against your rival ${rivalName}, the examiners award you the green flak jacket and promote you to Chunin!`
-              : 'The examiners commend your composure and tactical judgment in the Arena Finals. You are awarded the green flak jacket and promoted to Chunin!',
+            tacticalPromotion
+              ? 'Though your opponent edged out the final clash, the Kage and Jonin examiners applaud your calm strategic command and award you the Chunin flak jacket anyway!'
+              : rivalName
+                ? `After a thrilling two-round Finals clash against your rival ${rivalName}, the examiners award you the green flak jacket and promote you to Chunin!`
+                : 'The examiners commend your composure and tactical judgment across the Finals. You are awarded the green flak jacket and promoted to Chunin!',
             { title: 'Promoted to Chunin!', deltas: diffStats(before, state.stats), checks },
           );
           if (state.team?.active) {
@@ -2015,6 +2452,51 @@ export function resolvePendingDecision(
         pushLog(state, 'normal', 'Completed a D-Rank village contract cleanly, earning modest pay and goodwill.', {
           deltas: diffStats(before, state.stats),
         });
+        break;
+      }
+
+      if (optionId === 'diplomatic_mission') {
+        const score = (state.stats.intel + state.stats.bonds) / 2;
+        const passed = score + rng.int(0, 32) > 54;
+        checks.push({ label: 'Border Diplomacy & Escort', passed });
+        if (passed) {
+          const prevT = state.world.tension;
+          const drop = rng.int(8, 14);
+          state.world.tension = clamp(state.world.tension - drop, 5, 100);
+          if (state.world.omenActive && state.world.tension < 65) {
+            state.world.omenActive = false;
+          }
+          state.missions.b += 1;
+          state.stats.ryo += 10;
+          state.stats.bonds += 4;
+          state.stats.intel += 2;
+          addLeaning(state, 'will_of_fire', 1);
+          clampStats(state);
+          const actualDelta = state.world.tension - prevT;
+          pushLog(
+            state,
+            'bond',
+            `Diplomatic Peacekeeping succeeded! Your steady escort brings rival envoys to the table, easing frontier hostility.`,
+            {
+              title: 'Border Tension De-escalated',
+              deltas: [
+                ...diffStats(before, state.stats),
+                ...(actualDelta !== 0 ? [{ stat: 'tension' as const, label: 'World Tension', delta: actualDelta }] : []),
+              ],
+              checks,
+            },
+          );
+        } else {
+          state.stats.health = Math.max(8, state.stats.health - 6);
+          state.stats.will += 2;
+          clampStats(state);
+          pushLog(
+            state,
+            'danger',
+            'Hardliners ambushed the border conference before talks concluded; you extracted the envoys safely, but tension remains high.',
+            { deltas: diffStats(before, state.stats), checks },
+          );
+        }
         break;
       }
 
