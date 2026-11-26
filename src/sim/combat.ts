@@ -1,16 +1,17 @@
 import {
   formatHandSeals,
+  getAvailableModes,
   getJutsuBasePower,
   getJutsuMasteryInfo,
   getKnownJutsu,
   getNextTierLockedJutsu,
+  MODE_MAP,
   type JutsuDefinition,
 } from '../data/jutsu';
 import { BLOODLINE_MAP, DISCIPLINE_MAP, ELEMENT_NAMES } from '../data/powers';
 import { ARCHETYPE_AVG, ELEMENT_BEATS, ROSTER_MAP } from '../data/roster';
 import { getSummonPowerTier, SUMMON_CLAN_MAP } from '../data/summons';
 import { modRel } from './ai';
-import { getUnlockedHidenCombatBonus } from './clan-heritage';
 import { recordWarFact } from './narrative';
 import { applyResolvePartnerReaction, syncPartnerBackToState } from './partner';
 import { clamp, computeCombatProjection } from './powers';
@@ -21,10 +22,14 @@ import type {
   ChakraElement,
   CombatTier,
   GameState,
+  ModeId,
   NpcOfficialRank,
   PendingDecision,
   PowerGapLabel,
+  SelfStateId,
+  SetupFlag,
   SkillTag,
+  StatusId,
   UltimateScope,
   WarCompetitor,
   WarState,
@@ -156,18 +161,225 @@ export function getPlayerSignatureUltimate(state: GameState): PlayerUltimateInfo
     };
   }
 
-  if (state.bloodline && state.bloodline.stage !== 'latent') {
-    const bDef = BLOODLINE_MAP[state.bloodline.id];
-    return {
-      name: `${bDef?.name ?? 'Bloodline'} Secret Release`,
-      rankVal: 4.0 + state.bloodline.grade * 0.25,
-      cost: 30,
-      element: state.element,
-      scope: 'squad',
-      jutsuId: `bloodline_secret_${state.bloodline.id}`,
-    };
+  return null;
+}
+
+/**
+ * Ensures all Effect Model v2 maps exist on an ActiveBattleState (safe for legacy saves and test fixtures).
+ */
+export function ensureBattleV2State(battle: ActiveBattleState): void {
+  if (!battle.enemyStatus) battle.enemyStatus = {};
+  if (!battle.playerStatus) battle.playerStatus = {};
+  if (!battle.playerSelf) battle.playerSelf = {};
+  if (!battle.enemySelf) battle.enemySelf = {};
+  if (battle.playerDojutsuMode === undefined) battle.playerDojutsuMode = null;
+  if (battle.playerBodyMode === undefined) battle.playerBodyMode = null;
+  if (!battle.modeCooldowns) battle.modeCooldowns = {};
+  if (!battle.setupFlags) battle.setupFlags = {};
+  if (!battle.usesThisBattle) battle.usesThisBattle = {};
+
+  // Sync legacy numeric counters if a test fixture populated them directly
+  if (battle.playerWardRounds > 0 && !battle.playerSelf.guard) {
+    battle.playerSelf.guard = { rounds: battle.playerWardRounds, value: 35 };
+  }
+  if (battle.playerCloneEvade && !battle.playerSelf.evade) {
+    battle.playerSelf.evade = { rounds: 1, value: 1 };
+  }
+  if (battle.enemyDebuffRounds > 0 && Object.keys(battle.enemyStatus).length === 0) {
+    battle.enemyStatus.slow = { rounds: battle.enemyDebuffRounds, value: 9 };
+  }
+  if (battle.enemyWallRounds > 0 && !battle.enemySelf.wall) {
+    battle.enemySelf.wall = { rounds: battle.enemyWallRounds, value: 24 };
+  }
+  if (battle.enemyFieldRounds > 0 && !battle.enemySelf.field) {
+    battle.enemySelf.field = { rounds: battle.enemyFieldRounds, value: 7 };
+  }
+}
+
+/**
+ * Runs Round-1 battle initialization for Effect Model v2:
+ * - Byakugan 360-degree vision reveals full enemy intel immediately.
+ * - Killing Intent (Fear) applies automatically when Combat Rating gap >= 2 unless resisted by Willpower.
+ */
+export function initBattleV2State(
+  state: GameState,
+  enemy: WarCompetitor,
+  battle: ActiveBattleState,
+): void {
+  ensureBattleV2State(battle);
+
+  // Byakugan 360-degree vision immediately reveals full intel & skills
+  if (state.bloodline?.id === 'byakugan' && state.bloodline.stage !== 'latent') {
+    enemy.intel = 100;
+    enemy.skillsRevealed = true;
   }
 
+  // Killing Intent (Fear) when CR gap >= 2
+  if (!battle.killingIntentApplied) {
+    battle.killingIntentApplied = true;
+    const pCR = getCombatRating(getPlayerRanks(state, false));
+    const eCR = getCombatRating(enemy.ranks);
+    const enemyGap = eCR - pCR;
+    const playerGap = pCR - eCR;
+
+    if (enemyGap >= 2) {
+      const resistThreshold = enemyGap >= 3 ? 85 : 65;
+      if (state.stats.will < resistThreshold) {
+        const rounds = enemyGap >= 3 ? 2 : 1;
+        battle.playerStatus!.fear = {
+          rounds,
+          value: 8,
+          sourcePower: eCR,
+          sourceName: 'Killing Intent',
+        };
+        battle.sceneLine += ` Overwhelming Killing Intent washes over you, imposing Fear (${rounds}r)!`;
+      }
+    } else if (playerGap >= 2) {
+      const rounds = playerGap >= 3 ? 2 : 1;
+      battle.enemyStatus!.fear = {
+        rounds,
+        value: 8,
+        sourcePower: pCR,
+        sourceName: 'Killing Intent',
+      };
+    }
+  }
+}
+
+export function getActivePlayerModes(battle: ActiveBattleState): ModeId[] {
+  const list: ModeId[] = [];
+  if (battle.playerDojutsuMode) list.push(battle.playerDojutsuMode);
+  if (battle.playerBodyMode) list.push(battle.playerBodyMode);
+  return list;
+}
+
+export function getModeUpkeepCp(state: GameState, modeId: ModeId): number {
+  const def = MODE_MAP[modeId];
+  if (!def) return 0;
+  const transplantMult = def.slot === 'dojutsu' && state.bloodline?.transplanted ? 2 : 1;
+  return def.upkeepCp * transplantMult;
+}
+
+export function canToggleBattleMode(
+  state: GameState,
+  war: WarState,
+  battle: ActiveBattleState,
+  modeId: ModeId,
+): { allowed: boolean; isActive: boolean; reason?: string } {
+  ensureBattleV2State(battle);
+  const def = MODE_MAP[modeId];
+  if (!def) return { allowed: false, isActive: false, reason: 'Unknown mode' };
+
+  const isActive =
+    (def.slot === 'dojutsu' && battle.playerDojutsuMode === modeId) ||
+    (def.slot === 'body' && battle.playerBodyMode === modeId);
+
+  if (isActive) {
+    return { allowed: true, isActive: true };
+  }
+
+  const available = getAvailableModes(state);
+  if (!available.some((m) => m.id === modeId)) {
+    return { allowed: false, isActive: false, reason: 'Mode not unlocked' };
+  }
+  if (battle.playerStatus?.tenketsu_seal) {
+    return { allowed: false, isActive: false, reason: 'Blocked by Tenketsu Seal' };
+  }
+  const cd = battle.modeCooldowns?.[modeId] ?? 0;
+  if (cd > 0) {
+    return { allowed: false, isActive: false, reason: `Cooldown (${cd}r)` };
+  }
+  const upkeep = getModeUpkeepCp(state, modeId);
+  if (war.cp < upkeep) {
+    return { allowed: false, isActive: false, reason: `Requires ${upkeep} CP` };
+  }
+  return { allowed: true, isActive: false };
+}
+
+/**
+ * Instant Mode Toggle: free action that does NOT consume the combat round.
+ * Supports 1 Dojutsu mode + 1 Body mode simultaneously.
+ */
+export function toggleBattleMode(
+  state: GameState,
+  modeId: ModeId,
+): { ok: boolean; active: boolean; message: string } {
+  const war = state.war;
+  const battle = war?.activeBattle;
+  if (!war || !battle) return { ok: false, active: false, message: 'No active battle' };
+
+  const check = canToggleBattleMode(state, war, battle, modeId);
+  if (!check.allowed) {
+    return { ok: false, active: check.isActive, message: check.reason ?? 'Cannot toggle mode' };
+  }
+
+  const def = MODE_MAP[modeId];
+  if (check.isActive) {
+    if (def.slot === 'dojutsu') battle.playerDojutsuMode = null;
+    else battle.playerBodyMode = null;
+    battle.modeCooldowns![modeId] = 1;
+    return { ok: true, active: false, message: `${def.name} deactivated (1r cooldown).` };
+  }
+
+  // Replacing an already-active mode in the same slot puts the previous one on 1-round cooldown
+  if (def.slot === 'dojutsu') {
+    if (battle.playerDojutsuMode) {
+      battle.modeCooldowns![battle.playerDojutsuMode] = 1;
+    }
+    battle.playerDojutsuMode = modeId;
+  } else {
+    if (battle.playerBodyMode) {
+      battle.modeCooldowns![battle.playerBodyMode] = 1;
+    }
+    battle.playerBodyMode = modeId;
+  }
+
+  // Activating Byakugan also reveals full enemy intel immediately
+  if (modeId === 'byakugan') {
+    const enemy = war.enemies.find((e) => e.id === battle.enemyId);
+    if (enemy) {
+      enemy.intel = 100;
+      enemy.skillsRevealed = true;
+    }
+  }
+
+  return {
+    ok: true,
+    active: true,
+    message: `${def.name} activated (-${getModeUpkeepCp(state, modeId)} CP/rd upkeep).`,
+  };
+}
+
+export function isJutsuBlockedByBattleState(
+  state: GameState,
+  war: WarState,
+  battle: ActiveBattleState,
+  jutsu: JutsuDefinition,
+): string | null {
+  ensureBattleV2State(battle);
+  const effCost = getEffectiveJutsuCost(state, jutsu, war);
+  if (war.cp < effCost) {
+    return `Requires ${effCost} CP`;
+  }
+  if (battle.playerStatus?.tenketsu_seal && jutsu.chakraCost > 0 && jutsu.category !== 'taijutsu' && jutsu.category !== 'kenjutsu') {
+    return 'Blocked by Tenketsu Seal';
+  }
+  if (jutsu.effect.costs?.usesPerBattle) {
+    const used = battle.usesThisBattle?.[jutsu.id] ?? 0;
+    if (used >= jutsu.effect.costs.usesPerBattle) {
+      return `Limit reached (${jutsu.effect.costs.usesPerBattle}/battle)`;
+    }
+  }
+  if (jutsu.effect.costs?.hp && war.hp <= jutsu.effect.costs.hp) {
+    return `Requires >${jutsu.effect.costs.hp} HP`;
+  }
+  if (jutsu.effect.setup?.requires) {
+    for (const flag of jutsu.effect.setup.requires) {
+      if (!battle.setupFlags?.[flag]) {
+        return `Requires ${flag.replace('_', ' ')} setup`;
+      }
+    }
+  }
   return null;
 }
 
@@ -360,6 +572,7 @@ export function computePlayerRoundPower(
   enemy: WarCompetitor,
   battle: ActiveBattleState,
 ): { power: number; topFactor: string } {
+  ensureBattleV2State(battle);
   const ranks = getPlayerRanks(state, battle.resolveBoostThisRound);
   const base = unitBasePower(ranks, war.hp);
   let total = base;
@@ -385,6 +598,14 @@ export function computePlayerRoundPower(
     terms.push({ label: `Ambush Initiative (+${amb})`, val: amb });
   }
 
+  // Effect Model v2: Active Modes (Dojutsu + Body can stack!)
+  for (const mId of getActivePlayerModes(battle)) {
+    const mDef = MODE_MAP[mId];
+    if (!mDef) continue;
+    total += mDef.powerBonus;
+    terms.push({ label: `${mDef.name} Mode (+${mDef.powerBonus})`, val: mDef.powerBonus });
+  }
+
   if (battle.bloodlineActiveRounds > 0 && state.bloodline) {
     const bId = state.bloodline.id;
     let bBoost = 9 + state.bloodline.grade * 2;
@@ -397,6 +618,12 @@ export function computePlayerRoundPower(
   if (battle.playerBuffRounds > 0) {
     total += 8;
     terms.push({ label: 'Tactical Buff (+8)', val: 8 });
+  }
+
+  if (battle.playerSelf?.field) {
+    const fVal = battle.playerSelf.field.value ?? 7;
+    total += fVal;
+    terms.push({ label: `Terrain Control (+${fVal})`, val: fVal });
   }
 
   if (battle.weaknessExploited) {
@@ -420,13 +647,13 @@ export function computePlayerRoundPower(
     const pSkillMod =
       war.partner.trust >= 60
         ? Math.min(
-            2,
-            Math.round(
-              skillSum(war.partner.skills, 'power') * 0.22 +
-                (battle.isDefense ? skillSum(war.partner.skills, 'fort') * 0.22 : 0) +
-                (enemy.hp < 75 ? skillSum(war.partner.skills, 'slayer') * 0.22 : 0),
-            ),
-          )
+          2,
+          Math.round(
+            skillSum(war.partner.skills, 'power') * 0.22 +
+            (battle.isDefense ? skillSum(war.partner.skills, 'fort') * 0.22 : 0) +
+            (enemy.hp < 75 ? skillSum(war.partner.skills, 'slayer') * 0.22 : 0),
+          ),
+        )
         : 0;
     const partnerTotal = pTrustMod + pSkillMod;
     total += partnerTotal;
@@ -442,6 +669,42 @@ export function computePlayerRoundPower(
     terms.push({ label: 'Limit Break: Surpass Limits (+3 Ranks)', val: 24 });
   }
 
+  // Effect Model v2: Active Status Penalties on Player
+  const ps = battle.playerStatus!;
+  if (ps.fear) {
+    const pen = ps.fear.value ?? 8;
+    total -= pen;
+    terms.push({ label: `Fear (-${pen})`, val: pen });
+  }
+  if (ps.shock) {
+    const pen = ps.shock.value ?? 8;
+    total -= pen;
+    terms.push({ label: `Shock (-${pen})`, val: pen });
+  }
+  if (ps.slow) {
+    const pen = ps.slow.value ?? 7;
+    total -= pen;
+    terms.push({ label: `Slow (-${pen})`, val: pen });
+  }
+  if (ps.blind) {
+    const ignoresBlind =
+      battle.playerDojutsuMode === 'byakugan' ||
+      battle.playerBodyMode === 'sennin' ||
+      state.disciplines.some((d) => d.id === 'sensory');
+    if (!ignoresBlind) {
+      total -= 9;
+      terms.push({ label: 'Blinded (-9)', val: 9 });
+    }
+  }
+  if (ps.genjutsu) {
+    const resistsGen =
+      battle.playerDojutsuMode === 'sharingan' || battle.playerDojutsuMode === 'byakugan';
+    if (!resistsGen) {
+      total -= 14;
+      terms.push({ label: 'Caught in Genjutsu (-14)', val: 14 });
+    }
+  }
+
   if (war.cp <= 0) {
     total -= 22;
     terms.push({ label: 'Chakra Exhaustion (-22)', val: 22 });
@@ -450,9 +713,10 @@ export function computePlayerRoundPower(
     terms.push({ label: 'Low Chakra (-8)', val: 8 });
   }
 
-  if (battle.enemyFieldRounds > 0) {
-    total -= 7;
-    terms.push({ label: 'Enemy Terrain Field (-7)', val: 7 });
+  if (battle.enemyFieldRounds > 0 || battle.enemySelf?.field) {
+    const pen = battle.enemySelf?.field?.value ?? 7;
+    total -= pen;
+    terms.push({ label: `Enemy Terrain Field (-${pen})`, val: pen });
   }
 
   terms.sort((a, b) => b.val - a.val);
@@ -464,6 +728,7 @@ export function computeEnemyRoundPower(
   enemy: WarCompetitor,
   battle: ActiveBattleState,
 ): number {
+  ensureBattleV2State(battle);
   let total = unitBasePower(enemy.ranks, enemy.hp);
   total += skillSum(enemy.skills, 'power') * 1.4;
   if (battle.round >= 2) total += skillSum(enemy.skills, 'insight') * 0.9;
@@ -477,7 +742,19 @@ export function computeEnemyRoundPower(
   if (war.hp < 75) {
     total += Math.round(skillSum(enemy.skills, 'slayer') * 1.6);
   }
-  if (battle.enemyDebuffRounds > 0) total -= 9;
+
+  // Effect Model v2: Structured enemy statuses
+  const es = battle.enemyStatus!;
+  let statusPenalty = 0;
+  if (es.slow) statusPenalty += es.slow.value ?? 8;
+  if (es.shock) statusPenalty += es.shock.value ?? 8;
+  if (es.fear) statusPenalty += es.fear.value ?? 8;
+  if (es.blind && skillSum(enemy.skills, 'insight') < 4) statusPenalty += 10;
+  if (es.genjutsu) statusPenalty += 14;
+  if (es.tenketsu_seal) statusPenalty += 12;
+  if (statusPenalty === 0 && battle.enemyDebuffRounds > 0) statusPenalty += 9;
+  total -= Math.min(28, statusPenalty);
+
   if (enemy.cp <= 0) total -= 18;
 
   return total;
@@ -495,44 +772,71 @@ export function npcUltimateChance(enemy: WarCompetitor, playerHp: number, isFina
 }
 
 /**
- * Heuristic auto-jutsu picker used by Auto-Play and as the foundation for future NPC jutsu AI.
+ * Effect Model v2 tactical auto-jutsu picker.
+ * Evaluates reactive counters, status freshness, setup synergies, walls/evasion,
+ * and gentle anti-repetition variety so optimal play uses a rich kit rather than spamming one art.
  */
 export function pickAutoJutsu(state: GameState, rng?: SeededRng): string {
   const war = state.war;
   const battle = war?.activeBattle;
   if (!war || !battle) return 'jutsu:basic_strike';
+  ensureBattleV2State(battle);
   const enemy = war.enemies.find((e) => e.id === battle.enemyId);
   const known = getKnownJutsu(state);
 
-  const affordable = known.filter((j) => war.cp >= getEffectiveJutsuCost(state, j, war));
+  const usable = known.filter((j) => isJutsuBlockedByBattleState(state, war, battle, j) === null);
+  if (usable.length === 0) return 'jutsu:basic_strike';
 
-  // 1. Heal when wounded and medical jutsu is affordable
+  // 1. Reactive Counter: break active Genjutsu immediately with Kai
+  if (battle.playerStatus?.genjutsu) {
+    const breaker = usable.find((j) => j.effect.counters?.includes('genjutsu'));
+    if (breaker) return `jutsu:${breaker.id}`;
+  }
+
+  // 2. Reactive Counter: clear Blind with Sensory or Wind gale
+  if (battle.playerStatus?.blind) {
+    const clearer = usable.find((j) => j.effect.counters?.includes('blind'));
+    if (clearer) return `jutsu:${clearer.id}`;
+  }
+
+  // 3. Heal when wounded and medical jutsu is usable
   if (war.hp < 55) {
-    const healJutsu = affordable.find((j) => j.role === 'heal');
+    const healJutsu = usable.find((j) => j.role === 'heal');
     if (healJutsu) return `jutsu:${healJutsu.id}`;
   }
 
-  // 2. Raise defense on Round 1 (50% chance) if not already warded
-  if (battle.round === 1 && battle.playerWardRounds === 0) {
-    const defJutsu = affordable.find((j) => j.role === 'defense');
+  // 4. Raise defense on Round 1 (50% chance) if unguarded
+  if (battle.round === 1 && !battle.playerSelf?.guard && !battle.playerSelf?.wall) {
+    const defJutsu = usable.find((j) => j.role === 'defense');
     if (defJutsu && (rng ? rng.chance(0.5) : false)) {
       return `jutsu:${defJutsu.id}`;
     }
   }
 
-  // 3. Clash jutsu when enemy is weakened or on the Final Night
+  // 5. Clash jutsu when enemy is weakened or on the Final Night
   if (enemy && (enemy.hp <= 55 || battle.isFinal)) {
-    const clashJutsu = affordable.find((j) => j.role === 'clash');
+    const clashJutsu = usable.find((j) => j.role === 'clash');
     if (clashJutsu) return `jutsu:${clashJutsu.id}`;
   }
 
-  // 4. Best affordable attack by expected damage per chakra
-  const attacks = affordable.filter(
-    (j) => j.role === 'damage' || j.role === 'multi_hit' || j.role === 'pierce' || j.role === 'control',
+  // 6. Score offensive / tactical options with Counter Matrix + status freshness + anti-spam variety
+  const attacks = usable.filter(
+    (j) =>
+      j.role === 'damage' ||
+      j.role === 'multi_hit' ||
+      j.role === 'pierce' ||
+      j.role === 'control' ||
+      (j.role === 'evasion' && !battle.playerSelf?.evade && battle.round <= 2),
   );
   if (attacks.length > 0 && enemy) {
     const pRanks = getPlayerRanks(state, battle.resolveBoostThisRound);
     const eRanks = getDisplayEnemyRanks(enemy);
+    const lastUsedName = battle.rounds[battle.rounds.length - 1]?.jutsuName;
+    const recentCounts = new Map<string, number>();
+    for (const r of battle.rounds) {
+      if (r.jutsuName) recentCounts.set(r.jutsuName, (recentCounts.get(r.jutsuName) ?? 0) + 1);
+    }
+
     let best = attacks[0];
     let bestScore = -1;
 
@@ -552,8 +856,39 @@ export function pickAutoJutsu(state: GameState, rng?: SeededRng): string {
       const mastery = getJutsuMasteryInfo(uses);
       const effCost = getEffectiveJutsuCost(state, j, war);
       const expectedPower = getJutsuBasePower(j) * mastery.powerMult * mult;
-      const wallBonus = battle.enemyWallRounds > 0 && j.effect.pierceWall ? 1.25 : 1.0;
-      const score = (expectedPower * wallBonus) / Math.max(4, effCost * 0.35 + 4);
+
+      let tacticalMult = 1.0;
+      // Counter Matrix bonuses
+      if ((battle.enemyWallRounds > 0 || battle.enemySelf?.wall) && (j.effect.pierce || j.effect.pierceWall)) {
+        tacticalMult *= 1.38;
+      }
+      if (battle.enemySelf?.evade && j.effect.aoe) {
+        tacticalMult *= 1.35;
+      }
+      if (battle.setupFlags?.mist && j.id === 'muon_satsujin') {
+        tacticalMult *= 1.35;
+      }
+      if (j.effect.onHit && j.effect.onHit.length > 0) {
+        let freshStatuses = 0;
+        for (const st of j.effect.onHit) {
+          if (!battle.enemyStatus?.[st.status]) freshStatuses += 1;
+        }
+        tacticalMult *= freshStatuses > 0 ? 1 + freshStatuses * 0.18 : 0.85;
+      }
+      if (j.role === 'evasion' && !battle.playerSelf?.evade) {
+        tacticalMult *= 1.05;
+      }
+      // Diversity factor so optimal play weaves combos rather than repeating a single move endlessly
+      if (j.name === lastUsedName) {
+        tacticalMult *= 0.68;
+      }
+      const priorUses = recentCounts.get(j.name) ?? 0;
+      if (priorUses >= 2) {
+        tacticalMult *= 0.72;
+      }
+
+      const jitter = rng ? rng.float(0.92, 1.08) : 1.0;
+      const score = ((expectedPower * tacticalMult) / Math.max(4.5, effCost * 0.28 + 4.5)) * jitter;
       if (score > bestScore) {
         bestScore = score;
         best = j;
@@ -607,7 +942,8 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
     const effCost = getEffectiveJutsuCost(state, jutsu, war);
     const uses = state.jutsuMastery?.[jutsu.id] ?? 0;
     const mastery = getJutsuMasteryInfo(uses);
-    const disabled = war.cp < effCost;
+    const blockReason = isJutsuBlockedByBattleState(state, war, battle, jutsu);
+    const disabled = blockReason !== null;
     const isAutoAttack = `jutsu:${jutsu.id}` === autoPickId;
 
     options.push({
@@ -616,8 +952,23 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
       sublabel: `${jutsu.description} [${mastery.label} ${mastery.uses}]`,
       statHints: [jutsu.role, `${effCost} CP`],
       disabled,
-      disabledReason: disabled ? `Requires ${effCost} CP` : undefined,
+      disabledReason: blockReason ?? undefined,
       autoEligible: !disabled && isAutoAttack,
+    });
+  }
+
+  // Instant Mode Toggles (free action; rendered in dedicated Mode Bar in BattleDialog)
+  for (const mode of getAvailableModes(state)) {
+    const check = canToggleBattleMode(state, war, battle, mode.id);
+    const upkeep = getModeUpkeepCp(state, mode.id);
+    options.push({
+      id: `toggle_mode:${mode.id}`,
+      label: `${check.isActive ? 'Deactivate' : 'Activate'} ${mode.name} (-${upkeep} CP/rd)`,
+      sublabel: mode.description,
+      statHints: ['Mode', mode.slot],
+      disabled: !check.allowed,
+      disabledReason: check.reason,
+      autoEligible: false,
     });
   }
 
@@ -719,7 +1070,13 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
   };
 }
 
-export type BattleResolutionStatus = 'continue' | 'player_won' | 'player_dead' | 'retreated' | 'dawn_break';
+export type BattleResolutionStatus =
+  | 'continue'
+  | 'mode_toggled'
+  | 'player_won'
+  | 'player_dead'
+  | 'retreated'
+  | 'dawn_break';
 
 interface PreRoundCounters {
   ward: boolean;
@@ -728,6 +1085,12 @@ interface PreRoundCounters {
   bloodline: boolean;
   wall: boolean;
   field: boolean;
+  enemyStatusKeys: StatusId[];
+  playerStatusKeys: StatusId[];
+  playerSelfKeys: SelfStateId[];
+  enemySelfKeys: SelfStateId[];
+  setupFlagKeys: SetupFlag[];
+  cooldownKeys: ModeId[];
 }
 
 function resolveSummonSupportJutsu(
@@ -816,6 +1179,24 @@ export function resolveBattleRound(
   const battle = war.activeBattle!;
   const enemy = war.enemies.find((e) => e.id === battle.enemyId)!;
   if (!state.jutsuMastery) state.jutsuMastery = {};
+  ensureBattleV2State(battle);
+
+  // Instant Mode Toggle: free action, does NOT advance the round or trigger enemy attack!
+  if (optionId.startsWith('toggle_mode:')) {
+    const modeId = optionId.slice('toggle_mode:'.length) as ModeId;
+    const res = toggleBattleMode(state, modeId);
+    const summary: BattleRoundSummary = {
+      round: battle.round,
+      playerAction: res.active ? `Mode ON: ${MODE_MAP[modeId]?.name ?? modeId}` : `Mode OFF: ${MODE_MAP[modeId]?.name ?? modeId}`,
+      enemyAction: 'No round elapsed',
+      outcome: 'support',
+      playerDmgTaken: 0,
+      enemyDmgTaken: 0,
+      whyLine: res.message,
+      narrative: res.message,
+    };
+    return { status: 'mode_toggled', summary };
+  }
 
   // Snapshot which counters were already active BEFORE this round's actions,
   // so newly applied buffs/debuffs never lose a turn on the same round!
@@ -826,6 +1207,12 @@ export function resolveBattleRound(
     bloodline: battle.bloodlineActiveRounds > 0,
     wall: battle.enemyWallRounds > 0,
     field: battle.enemyFieldRounds > 0,
+    enemyStatusKeys: Object.keys(battle.enemyStatus!) as StatusId[],
+    playerStatusKeys: Object.keys(battle.playerStatus!) as StatusId[],
+    playerSelfKeys: Object.keys(battle.playerSelf!) as SelfStateId[],
+    enemySelfKeys: Object.keys(battle.enemySelf!) as SelfStateId[],
+    setupFlagKeys: Object.keys(battle.setupFlags!) as SetupFlag[],
+    cooldownKeys: Object.keys(battle.modeCooldowns!) as ModeId[],
   };
 
   // Instant Resolve actions that modify state and resolve or exit
@@ -873,7 +1260,7 @@ export function resolveBattleRound(
       narrative: `Limit Break: You force dormant reserves open (+40 CP) while absorbing a ${chip}-damage glancing blow.${rx.note}`,
     };
     battle.rounds.push(summary);
-    return advanceRoundCounter(battle, summary, preCounters);
+    return advanceRoundCounter(state, war, enemy, battle, summary, preCounters);
   }
 
   let resolvePartnerNote = '';
@@ -1028,8 +1415,9 @@ export function resolveBattleRound(
   }
 
   const effCost = getEffectiveJutsuCost(state, chosenJutsu, war);
-  if (war.cp < effCost) {
-    throw new Error(`Insufficient CP (${war.cp} < ${effCost}) for jutsu: ${chosenJutsu.id}`);
+  const blockReason = isJutsuBlockedByBattleState(state, war, battle, chosenJutsu);
+  if (blockReason) {
+    throw new Error(`Jutsu ${chosenJutsu.id} cannot be executed: ${blockReason}`);
   }
 
   // Read current mastery BEFORE incrementing, then increment usage counter
@@ -1037,26 +1425,98 @@ export function resolveBattleRound(
   const mastery = getJutsuMasteryInfo(usesBefore);
   state.jutsuMastery[chosenJutsu.id] = usesBefore + 1;
 
-  // Pay unified Chakra cost
+  // Track per-battle use limits and extra costs (HP / strain)
+  battle.usesThisBattle![chosenJutsu.id] = (battle.usesThisBattle![chosenJutsu.id] ?? 0) + 1;
+  if (chosenJutsu.effect.costs?.hp) {
+    war.hp = Math.max(1, war.hp - chosenJutsu.effect.costs.hp);
+  }
+  if (chosenJutsu.effect.costs?.strain) {
+    state.bodyStrain += chosenJutsu.effect.costs.strain;
+  }
+
+  // Pay unified Chakra cost & record setup flags
   war.cp = Math.max(0, war.cp - effCost);
+  if (chosenJutsu.element) {
+    battle.prevPlayerElement = chosenJutsu.element;
+  }
+  if (chosenJutsu.effect.setup?.sets) {
+    for (const flag of chosenJutsu.effect.setup.sets) {
+      battle.setupFlags![flag] = 3;
+      preCounters.setupFlagKeys = preCounters.setupFlagKeys.filter((k) => k !== flag);
+    }
+  }
+
+  // Apply counters/cleanses immediately (e.g., Kai breaks Genjutsu, Shosen cleanses Bleed/Poison, Kagura/Daitoppa clears Blind)
+  const cleansedNotes: string[] = [];
+  if (chosenJutsu.effect.counters) {
+    for (const c of chosenJutsu.effect.counters) {
+      if (c === 'genjutsu' && battle.playerStatus!.genjutsu) {
+        delete battle.playerStatus!.genjutsu;
+        cleansedNotes.push('shattered Genjutsu');
+      }
+      if (c === 'blind' && battle.playerStatus!.blind) {
+        delete battle.playerStatus!.blind;
+        cleansedNotes.push('cleared Blind');
+      }
+      if (c === 'bleed' && battle.playerStatus!.bleed) {
+        delete battle.playerStatus!.bleed;
+        cleansedNotes.push('staunched Bleed');
+      }
+      if (c === 'poison' && battle.playerStatus!.poison) {
+        delete battle.playerStatus!.poison;
+        cleansedNotes.push('purged Poison');
+      }
+      if (c === 'burn' && battle.playerStatus!.burn) {
+        delete battle.playerStatus!.burn;
+        cleansedNotes.push('quenched Burn');
+      }
+      if (c === 'evade' && battle.enemySelf!.evade) {
+        delete battle.enemySelf!.evade;
+        cleansedNotes.push('exposed enemy decoy');
+      }
+    }
+  }
+
+  // Helper to apply player self-states from jutsu.effect.self
+  const applyPlayerSelfStates = (jutsu: JutsuDefinition): void => {
+    if (!jutsu.effect.self) return;
+    for (const s of jutsu.effect.self) {
+      const existing = battle.playerSelf![s.state];
+      battle.playerSelf![s.state] = {
+        rounds: Math.max(existing?.rounds ?? 0, s.rounds),
+        value: s.value ?? existing?.value,
+      };
+      preCounters.playerSelfKeys = preCounters.playerSelfKeys.filter((k) => k !== s.state);
+      if (s.state === 'guard') {
+        battle.playerWardRounds = Math.max(battle.playerWardRounds, s.rounds);
+        preCounters.ward = false;
+      }
+      if (s.state === 'evade') {
+        battle.playerCloneEvade = true;
+      }
+    }
+  };
 
   const sealPrefix =
     chosenJutsu.seals.length > 0
       ? `${formatHandSeals(chosenJutsu.seals)}: ${chosenJutsu.name}! `
       : `${chosenJutsu.name}! `;
 
-  // === DATA-DRIVEN SUPPORT JUTSU ROUTE (heal | defense | evasion | summon) ===
+  // === DATA-DRIVEN SUPPORT JUTSU ROUTE (heal | defense | evasion | summon | support-control) ===
   if (
     chosenJutsu.role === 'heal' ||
     chosenJutsu.role === 'defense' ||
     chosenJutsu.role === 'evasion' ||
-    chosenJutsu.role === 'summon'
+    chosenJutsu.role === 'summon' ||
+    (chosenJutsu.role === 'control' && chosenJutsu.style === 'support')
   ) {
     let playerAction = chosenJutsu.name;
     let whyLine = `Key Factor: ${chosenJutsu.name} (${mastery.label})`;
     let narrative = '';
     let enemyChip = rng.int(4, 10);
     let enemyDmgTaken = 0;
+
+    applyPlayerSelfStates(chosenJutsu);
 
     if (chosenJutsu.role === 'heal') {
       const healAmt = Math.round((chosenJutsu.effect.heal ?? 15) * mastery.powerMult);
@@ -1066,28 +1526,56 @@ export function resolveBattleRound(
       }
       enemyChip = rng.int(3, 8);
       playerAction = `${chosenJutsu.name} (+${healAmt} HP)`;
-      whyLine = `Key Factor: Medical chakra restored ${healAmt} HP mid-fight (-${effCost} CP)`;
+      whyLine = `Key Factor: Medical chakra restored ${healAmt} HP mid-fight (-${effCost} CP)${cleansedNotes.length > 0 ? ` · ${cleansedNotes.join(', ')}` : ''}`;
       narrative = `${sealPrefix}Green medical chakra knits torn tissue back together (+${healAmt} HP) while you pivot clear of a direct blow.`;
     } else if (chosenJutsu.role === 'defense') {
-      const rounds = chosenJutsu.effect.wardRounds ?? 2;
+      const rounds = chosenJutsu.effect.wardRounds ?? chosenJutsu.effect.self?.[0]?.rounds ?? 2;
       battle.playerWardRounds = Math.max(battle.playerWardRounds, rounds);
       preCounters.ward = false;
-      enemyChip = Math.round(enemyChip * 0.65);
-      whyLine = `Key Factor: Defensive barrier cuts incoming damage by 35% for ${rounds} rounds (-${effCost} CP)`;
-      narrative = `${sealPrefix}A fortified barrier erupts in front of you, blunting the enemy's follow-up pressure.`;
+      if (chosenJutsu.effect.tags?.includes('intel_reveal')) {
+        enemy.intel = 100;
+        enemy.skillsRevealed = true;
+        cleansedNotes.push('Intel 100%');
+      }
+      enemyChip = Math.round(enemyChip * 0.6);
+      whyLine = `Key Factor: ${chosenJutsu.id === 'kai' ? 'Chakra surge disrupted hostile genjutsu & raised guard' : `Defensive wall/ward cuts incoming damage for ${rounds} rounds`} (-${effCost} CP)${cleansedNotes.length > 0 ? ` · ${cleansedNotes.join(', ')}` : ''}`;
+      narrative = `${sealPrefix}${cleansedNotes.length > 0 ? `You ${cleansedNotes.join(' and ')} as a` : 'A'} fortified barrier snaps up, blunting the enemy follow-up.`;
     } else if (chosenJutsu.role === 'evasion') {
       battle.playerCloneEvade = true;
       if (chosenJutsu.id === 'kage_bunshin') {
         battle.playerBuffRounds = Math.max(battle.playerBuffRounds, 1);
         preCounters.buff = false;
         enemyChip = rng.int(0, 4);
-        whyLine = `Key Factor: Solid Shadow Clone decoy (+22% dodge, +8 next attack, -${effCost} CP)`;
+        whyLine = `Key Factor: Solid Shadow Clone decoy (Evade primed, +8 next attack, -${effCost} CP)`;
         narrative = `${sealPrefix}A solid Shadow Clone intercepts the rush and bursts into smoke, opening a sharp counter angle.`;
       } else {
         enemyChip = rng.int(1, 5);
-        whyLine = `Key Factor: Evasion decoy primed (+22% dodge & +15% retreat chance, -${effCost} CP)`;
-        narrative = `${sealPrefix}You slip away in a sudden blur, leaving a decoy to soak the enemy's probe.`;
+        whyLine = `Key Factor: Evasion decoy primed (dodges next single-target strike & +15% retreat, -${effCost} CP)`;
+        narrative = `${sealPrefix}You slip away in a sudden blur, leaving a decoy to soak the enemy probe.`;
       }
+    } else if (chosenJutsu.role === 'control') {
+      // Support control tools/jutsu (Kirigakure, Smoke Bomb, Kagura Shingan)
+      const applied: string[] = [];
+      if (chosenJutsu.effect.onHit) {
+        for (const st of chosenJutsu.effect.onHit) {
+          battle.enemyStatus![st.status] = {
+            rounds: Math.max(battle.enemyStatus![st.status]?.rounds ?? 0, st.rounds),
+            value: st.value,
+            sourcePower: getCombatRating(pRanks),
+            sourceName: chosenJutsu.name,
+          };
+          preCounters.enemyStatusKeys = preCounters.enemyStatusKeys.filter((k) => k !== st.status);
+          applied.push(`${st.status} (${st.rounds}r)`);
+        }
+      }
+      if (chosenJutsu.id === 'kagura_shingan' || chosenJutsu.effect.tags?.includes('intel_reveal')) {
+        enemy.intel = 100;
+        enemy.skillsRevealed = true;
+        applied.push('Intel 100%');
+      }
+      enemyChip = rng.int(1, 5);
+      whyLine = `Key Factor: Tactical control applied ${[...applied, ...cleansedNotes].join(', ') || chosenJutsu.name} (-${effCost} CP)`;
+      narrative = `${sealPrefix}Battlefield visibility shifts in your favor (${[...applied, ...cleansedNotes].join(', ') || 'control established'}).`;
     } else {
       const sumRes = resolveSummonSupportJutsu(
         state,
@@ -1104,6 +1592,14 @@ export function resolveBattleRound(
       narrative = sumRes.narrative;
       enemyDmgTaken = sumRes.bonusEnemyDmg;
       enemyChip = sumRes.enemyChip;
+    }
+
+    // Wall / Intangible mitigation on incoming chip
+    if (battle.playerSelf?.intangible) {
+      enemyChip = 0;
+    } else if (battle.playerSelf?.wall && enemyChip > 0) {
+      const absorb = Math.min(enemyChip, battle.playerSelf.wall.value ?? 20);
+      enemyChip = Math.max(0, enemyChip - absorb);
     }
 
     war.hp = Math.max(0, war.hp - enemyChip);
@@ -1124,8 +1620,14 @@ export function resolveBattleRound(
     return resolveNonCombatLethalCheck(state, war, battle, summary, preCounters, rng);
   }
 
-  // Decide whether Enemy fires Ultimate this round
-  const enemyUsesUlt = rng.chance(npcUltimateChance(enemy, war.hp, battle.isFinal));
+  // Apply any self-states on offensive jutsu (e.g., Chidori Nagashi guard, Hiraishin evade)
+  applyPlayerSelfStates(chosenJutsu);
+
+  // Check if enemy is Sealed / Bound / Genjutsu-locked from firing Ultimate
+  const enemyBlockedFromUlt = Boolean(
+    battle.enemyStatus?.tenketsu_seal || battle.enemyStatus?.bind || battle.enemyStatus?.genjutsu,
+  );
+  const enemyUsesUlt = !enemyBlockedFromUlt && rng.chance(npcUltimateChance(enemy, war.hp, battle.isFinal));
   if (enemyUsesUlt) {
     enemy.cp = Math.max(0, enemy.cp - enemy.ultimate.cost);
     enemy.ultimateSeen = true;
@@ -1237,11 +1739,11 @@ export function resolveBattleRound(
     const dmg = clamp(
       Math.round(
         (12 + clashRankVal * 5.2) *
-          mastery.powerMult *
-          (battle.resolveBoostThisRound ? 1.3 : 1) *
-          elemInfo.mult *
-          mrMit *
-          rng.float(0.9, 1.1),
+        mastery.powerMult *
+        (battle.resolveBoostThisRound ? 1.3 : 1) *
+        elemInfo.mult *
+        mrMit *
+        rng.float(0.9, 1.1),
       ),
       12,
       MAX_EXCHANGE_DAMAGE,
@@ -1276,10 +1778,14 @@ export function resolveBattleRound(
 
     if (enemy.ultimate.role === 'wall') {
       battle.enemyWallRounds = 2;
+      battle.enemySelf!.wall = { rounds: 2, value: 26 };
+      preCounters.enemySelfKeys = preCounters.enemySelfKeys.filter((k) => k !== 'wall');
       pTaken = Math.round(rng.int(4, 9) * wardMult);
       narrative = `${enemy.name} raises ${enemy.ultimate.name}, fortifying their guard for 2 rounds!`;
     } else if (enemy.ultimate.role === 'field' || enemy.ultimate.role === 'debuff') {
       battle.enemyFieldRounds = 2;
+      battle.enemySelf!.field = { rounds: 2, value: 7 };
+      preCounters.enemySelfKeys = preCounters.enemySelfKeys.filter((k) => k !== 'field');
       pTaken = Math.round(rng.int(10, 18) * wardMult);
       narrative = `${enemy.name} activates ${enemy.ultimate.name}, seizing the terrain and hitting you for ${pTaken} damage!`;
     } else if (enemy.ultimate.role === 'heal') {
@@ -1289,6 +1795,9 @@ export function resolveBattleRound(
     } else if (enemy.ultimate.role === 'buff') {
       battle.enemyWallRounds = 2;
       battle.enemyFieldRounds = 2;
+      battle.enemySelf!.wall = { rounds: 2, value: 24 };
+      battle.enemySelf!.field = { rounds: 2, value: 7 };
+      preCounters.enemySelfKeys = preCounters.enemySelfKeys.filter((k) => k !== 'wall' && k !== 'field');
       pTaken = Math.round(rng.int(6, 12) * wardMult);
       narrative = `${enemy.name} surges with ${enemy.ultimate.name}, bolstering defense and terrain control (${pTaken} damage)!`;
     } else {
@@ -1328,14 +1837,61 @@ export function resolveBattleRound(
     return finalizeCombatOutcomes(state, war, enemy, battle, summary, preCounters, rng);
   }
 
-  // === STANDARD TACTICAL EXCHANGE (Individual Jutsu Mechanics, Phase 3 & 6) ===
+  // === STANDARD TACTICAL EXCHANGE (Effect Model v2 + Counter Matrix 1.6) ===
   const { power: pBase, topFactor } = computePlayerRoundPower(state, war, enemy, battle);
   const eBase = computeEnemyRoundPower(war, enemy, battle);
 
-  const hidenBonus = getUnlockedHidenCombatBonus(state);
-  const pRoll = pBase + hidenBonus + rng.int(-14, 14);
-  const eRoll = eBase + rng.int(-14, 14);
-  const diff = pRoll - eRoll;
+  const playerCR = getCombatRating(pRanks);
+  const enemyCR = getCombatRating(enemy.ranks);
+
+  // Bind Escape Check: targets >= 2 tiers above the binder break out immediately!
+  let enemyBoundThisRound = false;
+  let bindBreakNote = '';
+  if (battle.enemyStatus?.bind) {
+    const gap = enemyCR - playerCR;
+    if (gap >= 2) {
+      delete battle.enemyStatus.bind;
+      bindBreakNote = ' Enemy power shatters the bind immediately!';
+    } else {
+      const escapeChance = clamp(0.18 + gap * 0.25, 0.08, 0.72);
+      if (rng.chance(escapeChance)) {
+        delete battle.enemyStatus.bind;
+        bindBreakNote = ' Enemy wrenches free from the bind!';
+      } else {
+        enemyBoundThisRound = true;
+      }
+    }
+  }
+
+  // Speed Priority (1.6): faster control jutsu gain +8 Speed Interrupt momentum
+  const activeModes = getActivePlayerModes(battle);
+  const modeSpeedBonus = activeModes.reduce((acc, mId) => acc + (MODE_MAP[mId]?.speedBonus ?? 0), 0);
+  const playerSpeedMod =
+    (chosenJutsu.effect.speed ?? 0) +
+    modeSpeedBonus -
+    (battle.playerStatus?.fear ? 1 : 0) -
+    (battle.playerStatus?.slow ? 1 : 0) -
+    (battle.playerStatus?.shock ? 1 : 0);
+  const enemySpeedMod =
+    (enemy.tactic === 'reckless' || enemy.tactic === 'hunter' ? 1 : 0) -
+    (battle.enemyStatus?.fear ? 1 : 0) -
+    (battle.enemyStatus?.slow ? 1 : 0) -
+    (battle.enemyStatus?.shock ? 1 : 0);
+  const isControlInterrupt =
+    playerSpeedMod > enemySpeedMod &&
+    Boolean(chosenJutsu.effect.onHit?.some((s) => s.status === 'bind' || s.status === 'shock' || s.status === 'genjutsu' || s.status === 'tenketsu_seal'));
+  const speedInterruptBonus = isControlInterrupt ? 8 : 0;
+
+  const byakuganBlindSpotBonus =
+    battle.round === 1 &&
+    state.bloodline?.id === 'byakugan' &&
+    state.bloodline.stage !== 'mastered' &&
+    skillSum(enemy.skills, 'stealth') >= 4
+      ? 4
+      : 0;
+  const pRoll = pBase + speedInterruptBonus + (enemyBoundThisRound ? 22 : 0) + rng.int(-14, 14);
+  const eRoll = eBase + byakuganBlindSpotBonus + rng.int(-14, 14);
+  const diff = enemyBoundThisRound ? Math.max(14, pRoll - eRoll) : pRoll - eRoll;
 
   const styleKey: BattleAttackStyle = chosenJutsu.style === 'support' ? 'taijutsu' : chosenJutsu.style;
   const { mult: stanceMult, elemLabel } = computeStanceMultiplier(
@@ -1348,7 +1904,13 @@ export function resolveBattleRound(
     styleKey,
     chosenJutsu.element,
   );
-  const jutsuPower = getJutsuBasePower(chosenJutsu);
+  const mistBonus = chosenJutsu.id === 'muon_satsujin' && battle.setupFlags?.mist ? 1.25 : 1.0;
+  const naraNightPenalty =
+    Boolean(chosenJutsu.effect.tags?.includes('shadow')) &&
+    battle.startedInPhase === 'night' &&
+    !battle.setupFlags?.prev_fire;
+  const shadowMult = naraNightPenalty ? 0.8 : 1.0;
+  const jutsuPower = getJutsuBasePower(chosenJutsu) * mistBonus * shadowMult;
   const attackMult = stanceMult * jutsuPower * mastery.powerMult;
 
   let stanceReason = '';
@@ -1368,57 +1930,126 @@ export function resolveBattleRound(
   let narrative = '';
   let whyLine = '';
 
-  if (Math.abs(diff) < 8) {
+  if (Math.abs(diff) < 8 && !enemyBoundThisRound) {
     pTaken = rng.int(4, 8);
     eTaken = rng.int(4, 8);
     outcome = 'draw';
     whyLine = `Key Factor: Even clash (Δ${Math.round(diff)}) · ${stanceReason}`;
-    narrative = `${boostTag}${sealPrefix}Sparks and chakra collide evenly: both shinobi trade glancing wounds (${eTaken} dealt, ${pTaken} taken).`;
+    narrative = `${boostTag}${sealPrefix}Sparks and chakra collide evenly: both shinobi trade glancing wounds (${eTaken} dealt, ${pTaken} taken).${bindBreakNote}`;
   } else {
-    // Phase 3 Reversal scaling: only occurs between near-peer fighters!
-    let playerWins = diff > 0;
-    const playerCR = getCombatRating(pRanks);
-    const enemyCR = getCombatRating(enemy.ranks);
-    const winnerCR = playerWins ? playerCR : enemyCR;
-    const loserCR = playerWins ? enemyCR : playerCR;
-    const crGap = Math.max(0, winnerCR - loserCR);
-    const reversalScale = clamp(1 - crGap / 2, 0, 1);
-    const loserIns = playerWins ? enemy.ranks[4] : pRanks[4];
-    const reversal = rng.chance((0.06 + (loserIns * 0.08) / 6) * reversalScale);
-    if (reversal) playerWins = !playerWins;
+    // Phase 3 Reversal scaling: only occurs between near-peer fighters (disabled if enemy is bound!)
+    let playerWins = enemyBoundThisRound ? true : diff > 0;
+    if (!enemyBoundThisRound) {
+      const winnerCR = playerWins ? playerCR : enemyCR;
+      const loserCR = playerWins ? enemyCR : playerCR;
+      const crGap = Math.max(0, winnerCR - loserCR);
+      const reversalScale = clamp(1 - crGap / 2, 0, 1);
+      const loserIns = playerWins ? enemy.ranks[4] : pRanks[4];
+      const reversal = rng.chance((0.06 + (loserIns * 0.08) / 6) * reversalScale);
+      if (reversal) playerWins = !playerWins;
+    }
 
     if (playerWins) {
+      // Counter Matrix 1.6: Enemy Intangible vs Genjutsu/Seal
+      const bypassesIntangible =
+        chosenJutsu.category === 'genjutsu' ||
+        Boolean(chosenJutsu.effect.tags?.includes('seal')) ||
+        Boolean(chosenJutsu.effect.tags?.includes('genjutsu'));
+      const enemyIsIntangible = Boolean(battle.enemySelf?.intangible) && !bypassesIntangible;
+
+      // Counter Matrix 1.6: Enemy Evade vs AoE
+      const enemyEvadeTriggered = Boolean(battle.enemySelf?.evade) && !chosenJutsu.effect.aoe;
+      const aoeBrokeEvade = Boolean(battle.enemySelf?.evade) && Boolean(chosenJutsu.effect.aoe);
+      if (battle.enemySelf?.evade) {
+        delete battle.enemySelf.evade;
+      }
+
       const baseDodge = clamp(
         0.05 + (enemy.ranks[1] - pRanks[1]) * 0.012 + skillSum(enemy.skills, 'evade') * 0.02,
         0.03,
         0.24,
       );
-      const dodgeMult = chosenJutsu.effect.dodgeMult ?? (styleKey === 'ninjutsu' ? 0.85 : 1.0);
-      if (rng.chance(baseDodge * dodgeMult)) {
-        eTaken = rng.int(2, 5);
+      const dodgeMult = chosenJutsu.effect.aoe
+        ? 0.25
+        : (chosenJutsu.effect.dodgeMult ?? (styleKey === 'ninjutsu' ? 0.85 : 1.0));
+
+      if (enemyIsIntangible) {
+        eTaken = 0;
         pTaken = rng.int(1, 3);
-        outcome = 'win';
-        whyLine = `Key Factor: Enemy evaded brunt of attack · ${stanceReason}`;
-        narrative = `${boostTag}${sealPrefix}Your strike nearly connects cleanly, grazing them for ${eTaken} damage as they twist clear.`;
+        outcome = 'draw';
+        whyLine = 'Key Factor: Enemy phased through attack (Intangible; use Genjutsu or Seal)';
+        narrative = `${boostTag}${sealPrefix}Your strike passes straight through their intangible silhouette!`;
+      } else if (enemyEvadeTriggered || (!enemyBoundThisRound && rng.chance(baseDodge * dodgeMult))) {
+        eTaken = enemyEvadeTriggered ? 0 : rng.int(2, 5);
+        pTaken = rng.int(1, 3);
+        outcome = enemyEvadeTriggered ? 'draw' : 'win';
+        whyLine = enemyEvadeTriggered
+          ? 'Key Factor: Enemy decoy absorbed single-target strike (use AoE to hit through)'
+          : `Key Factor: Enemy evaded brunt of attack · ${stanceReason}`;
+        narrative = enemyEvadeTriggered
+          ? `${boostTag}${sealPrefix}Your target bursts into smoke, evading the single-target hit cleanly!`
+          : `${boostTag}${sealPrefix}Your strike nearly connects cleanly, grazing them for ${eTaken} damage as they twist clear.`;
       } else {
+        const hasEnemyWall = battle.enemyWallRounds > 0 || Boolean(battle.enemySelf?.wall);
         const wallPierced =
-          battle.enemyWallRounds > 0 &&
-          (Boolean(chosenJutsu.effect.pierceWall) || activeBloodlineId === 'yoton');
-        const wallMult = battle.enemyWallRounds > 0 && !wallPierced ? 0.65 : 1;
-        eTaken = clamp(
-          Math.round((7 + Math.abs(diff) * 0.34) * attackMult * wallMult),
-          5,
-          MAX_EXCHANGE_DAMAGE,
-        );
-        pTaken = rng.int(1, 5);
+          hasEnemyWall &&
+          (Boolean(chosenJutsu.effect.pierce) ||
+            Boolean(chosenJutsu.effect.pierceWall) ||
+            activeBloodlineId === 'yoton');
+        const wallMult = hasEnemyWall && !wallPierced ? 0.65 : 1;
+        let rawETaken = Math.round((7 + Math.abs(diff) * 0.34) * attackMult * wallMult);
+        if (hasEnemyWall && !wallPierced && battle.enemySelf?.wall?.value) {
+          rawETaken = Math.max(4, rawETaken - Math.round(battle.enemySelf.wall.value * 0.35));
+        }
+        if (wallPierced && battle.enemySelf?.wall) {
+          delete battle.enemySelf.wall;
+          battle.enemyWallRounds = 0;
+        }
+
+        // Counter Matrix 1.6: Enemy Reflect (e.g., Kaiten) vs Single-Target vs AoE/Genjutsu
+        const reflected =
+          Boolean(battle.enemySelf?.reflect) &&
+          !chosenJutsu.effect.aoe &&
+          chosenJutsu.category !== 'genjutsu';
+
+        eTaken = clamp(reflected ? Math.round(rawETaken * 0.5) : rawETaken, 5, MAX_EXCHANGE_DAMAGE);
+        pTaken = reflected ? Math.max(4, Math.round(rawETaken * 0.5)) : enemyBoundThisRound ? 0 : rng.int(1, 5);
         outcome = 'win';
 
         const effectNotes: string[] = [];
-        if (chosenJutsu.effect.debuffRounds) {
+        if (enemyBoundThisRound) effectNotes.push('struck while Bound');
+        if (isControlInterrupt) effectNotes.push('Speed Interrupt');
+        if (naraNightPenalty) effectNotes.push('night dimness -20%');
+        if (aoeBrokeEvade) effectNotes.push('AoE shattered decoy');
+        if (reflected) effectNotes.push('50% reflected back by Rotation');
+
+        // Apply structured Effect Model v2 onHit statuses
+        if (chosenJutsu.effect.onHit) {
+          for (const st of chosenJutsu.effect.onHit) {
+            if (st.chance !== undefined && !rng.chance(st.chance)) continue;
+            battle.enemyStatus![st.status] = {
+              rounds: Math.max(battle.enemyStatus![st.status]?.rounds ?? 0, st.rounds),
+              value: st.value,
+              sourcePower: playerCR,
+              sourceName: chosenJutsu.name,
+            };
+            preCounters.enemyStatusKeys = preCounters.enemyStatusKeys.filter((k) => k !== st.status);
+            effectNotes.push(`${st.status.replace('_', ' ')} (${st.rounds}r)`);
+            if (st.status === 'tenketsu_seal') {
+              delete battle.enemySelf!.wall;
+              delete battle.enemySelf!.field;
+              battle.enemyWallRounds = 0;
+              battle.enemyFieldRounds = 0;
+            }
+          }
+        } else if (chosenJutsu.effect.debuffRounds) {
           battle.enemyDebuffRounds = Math.max(battle.enemyDebuffRounds, chosenJutsu.effect.debuffRounds);
+          battle.enemyStatus!.slow = { rounds: chosenJutsu.effect.debuffRounds, value: 9, sourceName: chosenJutsu.name };
           preCounters.debuff = false;
+          preCounters.enemyStatusKeys = preCounters.enemyStatusKeys.filter((k) => k !== 'slow');
           effectNotes.push(`disrupts foe (${chosenJutsu.effect.debuffRounds}r)`);
         }
+
         if (chosenJutsu.effect.cpDrain) {
           enemy.cp = Math.max(0, enemy.cp - chosenJutsu.effect.cpDrain);
           effectNotes.push(`drains -${chosenJutsu.effect.cpDrain} Enemy CP`);
@@ -1431,59 +2062,102 @@ export function resolveBattleRound(
           effectNotes.push('cleaves straight through their Guard Wall');
         }
 
-        whyLine = `Key Factor: ${reversal ? 'Instinct Reversal! ' : ''}${stanceReason} · ${topFactor}`;
+        whyLine = `Key Factor: ${stanceReason} · ${topFactor}`;
         const suffix = effectNotes.length > 0 ? ` (${effectNotes.join(', ')})!` : '!';
-        narrative = `${boostTag}${sealPrefix}Breaks their guard for ${eTaken} damage${suffix}`;
+        narrative = `${boostTag}${sealPrefix}Breaks their guard for ${eTaken} damage${suffix}${bindBreakNote}`;
       }
     } else {
-      const bloodlineDodge =
-        activeBloodlineId === 'hyoton'
-          ? 0.16
-          : activeBloodlineId === 'sharingan'
-            ? 0.14
-            : battle.bloodlineActiveRounds > 0
-              ? 0.1
-              : 0;
-      const pDodgeP = clamp(
-        0.05 + (pRanks[1] - enemy.ranks[1]) * 0.012 + (battle.playerCloneEvade ? 0.22 : 0) + bloodlineDodge,
-        0.04,
-        0.44,
-      );
-      if (rng.chance(pDodgeP)) {
-        pTaken = rng.int(2, 5);
-        eTaken = rng.int(2, 5);
+      // Enemy wins the exchange: apply Player Self-States (Intangible, Evade, Reflect, Wall, Guard, Modes)
+      if (battle.playerSelf?.intangible) {
+        pTaken = 0;
+        eTaken = rng.int(1, 3);
         outcome = 'draw';
-        whyLine = 'Key Factor: High-speed evasion turned a heavy hit into a graze';
-        narrative = `${sealPrefix}Your opponent answers fast, forcing you to twist clear at the last instant (${pTaken} taken, ${eTaken} dealt).`;
+        whyLine = 'Key Factor: Intangible phase negated incoming physical/ninjutsu blow';
+        narrative = `${sealPrefix}The enemy counterattack passes harmlessly through your phased form!`;
       } else {
-        const wardMult =
-          (battle.playerWardRounds > 0 ? 0.65 : 1) *
-          (activeBloodlineId === 'jiton' || activeBloodlineId === 'shikotsumyaku' ? 0.82 : 1);
-        let rawPTaken = Math.round((7 + Math.abs(diff) * 0.32) * wardMult);
+        const modeDodge = activeModes.reduce((acc, mId) => acc + (MODE_MAP[mId]?.dodgeBonus ?? 0), 0);
+        const bloodlineDodge =
+          activeBloodlineId === 'hyoton'
+            ? 0.16
+            : activeBloodlineId === 'sharingan'
+              ? 0.14
+              : battle.bloodlineActiveRounds > 0
+                ? 0.1
+                : 0;
+        const hasPlayerEvade = battle.playerCloneEvade || Boolean(battle.playerSelf?.evade);
+        const pDodgeP = clamp(
+          0.05 + (pRanks[1] - enemy.ranks[1]) * 0.012 + (hasPlayerEvade ? 0.35 : 0) + bloodlineDodge + modeDodge,
+          0.04,
+          0.62,
+        );
+        if (rng.chance(pDodgeP)) {
+          pTaken = hasPlayerEvade ? 0 : rng.int(2, 5);
+          eTaken = rng.int(2, 5);
+          outcome = 'draw';
+          whyLine = hasPlayerEvade
+            ? 'Key Factor: Evasion decoy absorbed the enemy counterattack'
+            : 'Key Factor: High-speed evasion turned a heavy hit into a graze';
+          narrative = `${sealPrefix}Your opponent answers fast, but you twist clear through evasion (${pTaken} taken, ${eTaken} dealt).`;
+        } else {
+          const suikaLightningShock =
+            battle.playerBodyMode === 'suika' && enemy.element === 'lightning';
+          const modeGuardPct = activeModes.reduce(
+            (acc, mId) => acc + (mId === 'suika' && suikaLightningShock ? 0 : (MODE_MAP[mId]?.guardPct ?? 0)),
+            0,
+          );
+          const guardPct = Math.max(
+            battle.playerSelf?.guard?.value ?? 0,
+            battle.playerWardRounds > 0 ? 35 : 0,
+            modeGuardPct,
+          );
+          const wardMult =
+            (1 - Math.min(60, guardPct) / 100) *
+            (activeBloodlineId === 'jiton' || activeBloodlineId === 'shikotsumyaku' ? 0.82 : 1) *
+            (suikaLightningShock ? 1.18 : 1);
+          let rawPTaken = Math.round((7 + Math.abs(diff) * 0.32) * wardMult);
 
-        // Self-risk penalty on exchange loss (Chidori tunnel-vision bypassed by Sharingan/Byakugan/Sensory/Debuff!)
-        let riskNote = '';
-        if (chosenJutsu.effect.selfRisk) {
-          const chidoriProtected =
-            chosenJutsu.id === 'chidori' &&
-            (activeBloodlineId === 'sharingan' ||
-              activeBloodlineId === 'byakugan' ||
-              state.disciplines.some((d) => d.id === 'sensory') ||
-              battle.enemyDebuffRounds > 0);
-          if (!chidoriProtected) {
-            rawPTaken += chosenJutsu.effect.selfRisk;
-            riskNote =
-              chosenJutsu.id === 'chidori'
-                ? ' Tunnel-vision leaves you open to a brutal counter!'
-                : ' Recoil strain amplifies the counterblow!';
+          // Wall absorption on player
+          if (battle.playerSelf?.wall?.value) {
+            const absorbed = Math.min(rawPTaken - 2, Math.round(battle.playerSelf.wall.value * 0.45));
+            if (absorbed > 0) rawPTaken = Math.max(2, rawPTaken - absorbed);
           }
-        }
 
-        pTaken = clamp(rawPTaken, 5, MAX_EXCHANGE_DAMAGE);
-        eTaken = rng.int(1, 5);
-        outcome = 'lose';
-        whyLine = `Key Factor: ${reversal ? 'Enemy Reversal! ' : ''}Enemy outpaced round (+${Math.round(Math.abs(diff))} power)`;
-        narrative = `${sealPrefix}Your opponent reads the opening and lands a clean counter for ${pTaken} damage!${riskNote}`;
+          // Self-risk penalty on exchange loss (Chidori tunnel-vision bypassed by Sharingan/Byakugan/Sensory/Debuff!)
+          let riskNote = suikaLightningShock ? ' Enemy Lightning arcs straight through Hydrification!' : '';
+          if (chosenJutsu.effect.selfRisk) {
+            const chidoriProtected =
+              chosenJutsu.id === 'chidori' &&
+              (activeBloodlineId === 'sharingan' ||
+                activeBloodlineId === 'byakugan' ||
+                battle.playerDojutsuMode === 'sharingan' ||
+                battle.playerDojutsuMode === 'byakugan' ||
+                state.disciplines.some((d) => d.id === 'sensory') ||
+                Object.keys(battle.enemyStatus ?? {}).length > 0 ||
+                battle.enemyDebuffRounds > 0);
+            if (!chidoriProtected) {
+              rawPTaken += chosenJutsu.effect.selfRisk;
+              riskNote =
+                chosenJutsu.id === 'chidori'
+                  ? ' Tunnel-vision leaves you open to a brutal counter!'
+                  : ' Recoil strain amplifies the counterblow!';
+            }
+          }
+
+          // Player Reflect (e.g., Kaiten) bounces 50% back to enemy
+          if (battle.playerSelf?.reflect) {
+            const bounce = Math.max(4, Math.round(rawPTaken * 0.5));
+            rawPTaken = Math.max(2, Math.round(rawPTaken * 0.5));
+            eTaken = bounce;
+            riskNote += ` Rotation reflects ${bounce} damage back!`;
+          } else {
+            eTaken = rng.int(1, 5);
+          }
+
+          pTaken = clamp(rawPTaken, 3, MAX_EXCHANGE_DAMAGE);
+          outcome = 'lose';
+          whyLine = `Key Factor: Enemy outpaced round (+${Math.round(Math.abs(diff))} power)`;
+          narrative = `${sealPrefix}Your opponent reads the opening and lands a clean counter for ${pTaken} damage!${riskNote}${bindBreakNote}`;
+        }
       }
     }
   }
@@ -1501,6 +2175,9 @@ export function resolveBattleRound(
   war.hp = Math.max(0, war.hp - pTaken);
   enemy.hp = Math.max(0, enemy.hp - eTaken);
   battle.playerCloneEvade = false;
+  if (battle.playerSelf?.evade && preCounters.playerSelfKeys.includes('evade')) {
+    delete battle.playerSelf.evade;
+  }
   battle.resolveBoostThisRound = false;
 
   const summary: BattleRoundSummary = {
@@ -1631,15 +2308,15 @@ function resolveNonCombatLethalCheck(
     war.hp = 10;
     summary.narrative += ' Sheer shinobi willpower keeps you standing at 10 HP!';
   }
+  const foe = war.enemies.find((e) => e.id === battle.enemyId)!;
   if (war.hp <= 0) {
-    const foe = war.enemies.find((e) => e.id === battle.enemyId);
-    const rosterDef = foe ? ROSTER_MAP[foe.rosterId] : undefined;
+    const rosterDef = ROSTER_MAP[foe.rosterId];
     if (rosterDef?.lines.win && !summary.narrative.includes(rosterDef.lines.win)) {
       summary.narrative += ` ${rosterDef.lines.win}`;
     }
     return { status: 'player_dead', summary };
   }
-  return advanceRoundCounter(battle, summary, preCounters);
+  return advanceRoundCounter(state, war, foe, battle, summary, preCounters);
 }
 
 /**
@@ -1766,20 +2443,117 @@ function finalizeCombatOutcomes(
     return { status: 'player_won', summary };
   }
 
-  return advanceRoundCounter(battle, summary, preCounters);
+  return advanceRoundCounter(state, war, enemy, battle, summary, preCounters);
 }
 
 function advanceRoundCounter(
+  state: GameState,
+  war: WarState,
+  enemy: WarCompetitor,
   battle: ActiveBattleState,
   summary: BattleRoundSummary,
   preCounters: PreRoundCounters,
 ): { status: BattleResolutionStatus; summary: BattleRoundSummary } {
+  ensureBattleV2State(battle);
+  const tickNotes: string[] = [];
+
+  // 1. End-of-round DoT & Drain ticks on Enemy (burn, bleed, poison, drain)
+  const es = battle.enemyStatus!;
+  for (const dotKey of ['burn', 'bleed', 'poison'] as const) {
+    const inst = es[dotKey];
+    if (inst && enemy.hp > 0) {
+      const dmg = Math.max(2, inst.value ?? 5);
+      enemy.hp = Math.max(1, enemy.hp - dmg);
+      tickNotes.push(`${dotKey} -${dmg} enemy HP`);
+    }
+  }
+  if (es.drain && enemy.hp > 0) {
+    const siphoned = Math.min(enemy.cp, es.drain.value ?? 6);
+    if (siphoned > 0) {
+      enemy.cp = Math.max(0, enemy.cp - siphoned);
+      war.cp = clamp(war.cp + siphoned, 0, 100);
+      tickNotes.push(`drained +${siphoned} CP`);
+    }
+  }
+
+  // 2. End-of-round DoT ticks on Player (non-lethal chip or clamped to 1 HP unless direct lethal)
+  const ps = battle.playerStatus!;
+  for (const dotKey of ['burn', 'bleed', 'poison'] as const) {
+    const inst = ps[dotKey];
+    if (inst && war.hp > 1) {
+      const dmg = Math.max(2, inst.value ?? 4);
+      war.hp = Math.max(1, war.hp - dmg);
+      tickNotes.push(`${dotKey} -${dmg} your HP`);
+    }
+  }
+
+  // 3. Mode Upkeep (CP & optional HP); auto-deactivates at CP 0 with 1-round cooldown
+  for (const mId of getActivePlayerModes(battle)) {
+    const def = MODE_MAP[mId];
+    if (!def) continue;
+    const cpCost = getModeUpkeepCp(state, mId);
+    war.cp = Math.max(0, war.cp - cpCost);
+    if (def.upkeepHp) {
+      war.hp = Math.max(1, war.hp - def.upkeepHp);
+    }
+    if (war.cp <= 0) {
+      if (def.slot === 'dojutsu') battle.playerDojutsuMode = null;
+      else battle.playerBodyMode = null;
+      battle.modeCooldowns![mId] = 1;
+      preCounters.cooldownKeys = preCounters.cooldownKeys.filter((k) => k !== mId);
+      tickNotes.push(`${def.name} auto-off (0 CP)`);
+    }
+  }
+
+  if (tickNotes.length > 0) {
+    summary.narrative += ` [End of round: ${tickNotes.join(', ')}]`;
+  }
+
+  // 4. Decrement legacy counters
   if (preCounters.ward && battle.playerWardRounds > 0) battle.playerWardRounds -= 1;
   if (preCounters.buff && battle.playerBuffRounds > 0) battle.playerBuffRounds -= 1;
   if (preCounters.debuff && battle.enemyDebuffRounds > 0) battle.enemyDebuffRounds -= 1;
   if (preCounters.bloodline && battle.bloodlineActiveRounds > 0) battle.bloodlineActiveRounds -= 1;
   if (preCounters.wall && battle.enemyWallRounds > 0) battle.enemyWallRounds -= 1;
   if (preCounters.field && battle.enemyFieldRounds > 0) battle.enemyFieldRounds -= 1;
+
+  // 5. Decrement ONLY pre-round v2 statuses, self-states, setup flags, and mode cooldowns
+  for (const k of preCounters.enemyStatusKeys) {
+    const inst = battle.enemyStatus![k];
+    if (!inst) continue;
+    inst.rounds -= 1;
+    if (inst.rounds <= 0) delete battle.enemyStatus![k];
+  }
+  for (const k of preCounters.playerStatusKeys) {
+    const inst = battle.playerStatus![k];
+    if (!inst) continue;
+    inst.rounds -= 1;
+    if (inst.rounds <= 0) delete battle.playerStatus![k];
+  }
+  for (const k of preCounters.playerSelfKeys) {
+    const inst = battle.playerSelf![k];
+    if (!inst) continue;
+    inst.rounds -= 1;
+    if (inst.rounds <= 0) delete battle.playerSelf![k];
+  }
+  for (const k of preCounters.enemySelfKeys) {
+    const inst = battle.enemySelf![k];
+    if (!inst) continue;
+    inst.rounds -= 1;
+    if (inst.rounds <= 0) delete battle.enemySelf![k];
+  }
+  for (const k of preCounters.setupFlagKeys) {
+    const left = battle.setupFlags![k];
+    if (left === undefined) continue;
+    if (left <= 1) delete battle.setupFlags![k];
+    else battle.setupFlags![k] = left - 1;
+  }
+  for (const k of preCounters.cooldownKeys) {
+    const left = battle.modeCooldowns![k];
+    if (left === undefined) continue;
+    if (left <= 1) delete battle.modeCooldowns![k];
+    else battle.modeCooldowns![k] = left - 1;
+  }
 
   battle.round += 1;
   if (!battle.isFinal && battle.round > battle.maxRounds) {

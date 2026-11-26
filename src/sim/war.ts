@@ -15,6 +15,7 @@ import {
 } from './ai';
 import {
   buildBattleRoundDecision,
+  initBattleV2State,
   resolveBattleRound,
   resolveNpcSkirmish,
   skillSum,
@@ -1208,8 +1209,18 @@ export function startWarBattle(
     usedDesperation: false,
     usedNindoResolve: false,
     resolveBoostThisRound: false,
+    enemyStatus: {},
+    playerStatus: {},
+    playerSelf: {},
+    enemySelf: {},
+    playerDojutsuMode: null,
+    playerBodyMode: null,
+    modeCooldowns: {},
+    setupFlags: {},
+    usesThisBattle: {},
     rounds: [],
   };
+  initBattleV2State(state, enemy, war.activeBattle);
 
   const label = enemy.intel >= 80 ? `${enemy.name} (${enemy.epithet})` : `an enemy ${enemy.archetype}`;
   pushLog(
@@ -2861,6 +2872,11 @@ export function handleWarDecision(
     const battle = war.activeBattle!;
     const enemy = war.enemies.find((e) => e.id === battle.enemyId)!;
     const { status, summary } = resolveBattleRound(state, optionId, rng);
+
+    if (status === 'mode_toggled') {
+      state.pending = buildBattleRoundDecision(state);
+      return;
+    }
 
     pushLog(
       state,

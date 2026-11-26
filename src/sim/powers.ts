@@ -1,5 +1,5 @@
+import { CLAN_MAP } from '../data/clans';
 import {
-  BLOODLINES,
   BLOODLINE_GRADE_NAMES,
   BLOODLINE_MAP,
   BLOODLINE_STAGE_LABELS,
@@ -122,22 +122,46 @@ export function computeCombatProjection(state: GameState): CombatProjection {
   };
 }
 
-export function rollBirthBloodline(seed: number, originId: GameState['originId']): BloodlineState | null {
-  const origin = ORIGIN_MAP[originId];
-  const chance = 0.03 * origin.bloodlineMult;
-  const roll = hashRand(seed, 0, 'bloodline_chance');
-  if (roll >= chance) return null;
+const RARE_ELEMENTAL_MUTATIONS = ['hyoton', 'yoton', 'jiton'] as const;
+const RARE_MUTATION_CHANCE = 0.003;
 
-  const totalWeight = BLOODLINES.reduce((sum, b) => sum + b.weight, 0);
-  let pickRoll = hashRand(seed, 0, 'bloodline_pick') * totalWeight;
-  let chosen = BLOODLINES[0];
-  for (const b of BLOODLINES) {
-    pickRoll -= b.weight;
-    if (pickRoll <= 0) {
-      chosen = b;
-      break;
+/**
+ * Canon-gated birth bloodline roll:
+ * - Dojutsu (Sharingan, Byakugan, Ketsuryugan, Rinnegan) NEVER spawn outside their lineage clan.
+ * - Hyuga always start with Byakugan already awakened (100% birth trait).
+ * - Bloodline clans roll strictly for their own Kekkei Genkai at clan.bloodlineChance.
+ * - Non-clan or non-bloodline-clan births only have a 0.3% chance of a rare elemental KG (Hyoton/Yoton/Jiton).
+ * - Rinnegan and Sage Body never roll randomly at birth (event-only).
+ */
+export function rollBirthBloodline(
+  seed: number,
+  _originId: GameState['originId'],
+  clanId?: string | null,
+): BloodlineState | null {
+  const clan = clanId ? CLAN_MAP[clanId] : null;
+  let chosenId: string | null = null;
+  let startStage: BloodlineState['stage'] = 'latent';
+
+  if (clan?.bloodlineId) {
+    const chance = clan.bloodlineChance ?? 0.5;
+    const roll = hashRand(seed, 0, 'bloodline_chance');
+    if (roll < chance && BLOODLINE_MAP[clan.bloodlineId]) {
+      chosenId = clan.bloodlineId;
+      if (chosenId === 'byakugan') {
+        startStage = 'awakened';
+      }
+    }
+  } else {
+    const roll = hashRand(seed, 0, 'bloodline_chance');
+    if (roll < RARE_MUTATION_CHANCE) {
+      const idx = Math.floor(hashRand(seed, 0, 'bloodline_pick') * RARE_ELEMENTAL_MUTATIONS.length);
+      chosenId = RARE_ELEMENTAL_MUTATIONS[idx] ?? 'hyoton';
     }
   }
+
+  if (!chosenId) return null;
+  const chosen = BLOODLINE_MAP[chosenId];
+  if (!chosen) return null;
 
   const [minG, maxG] = chosen.gradeRange;
   const gradeSpan = maxG - minG + 1;
@@ -146,9 +170,10 @@ export function rollBirthBloodline(seed: number, originId: GameState['originId']
   return {
     id: chosen.id,
     grade,
-    stage: 'latent',
+    stage: startStage,
     lastEventAge: 0,
     declined: false,
+    eyeStrain: 0,
   };
 }
 
@@ -156,11 +181,31 @@ export function pickStartingDiscipline(
   seed: number,
   originId: GameState['originId'],
   element: ChakraElement,
+  clanId?: string | null,
 ): DisciplineProgress | null {
   const origin = ORIGIN_MAP[originId];
   if (!origin.isShinobiHouse || origin.familyDisciplines.length === 0) return null;
-  const idx = Math.floor(hashRand(seed, 0, 'family_discipline') * origin.familyDisciplines.length);
-  const chosenId = origin.familyDisciplines[idx] ?? `${element}_release`;
+
+  // Hyuga clan members naturally train Gentle Fist from childhood; non-Hyuga never roll it.
+  if (clanId === 'hyuga') {
+    const hyugaPool = ['gentle_fist', 'gentle_fist', 'sensory', 'strong_fist'];
+    const idx = Math.floor(hashRand(seed, 0, 'family_discipline') * hyugaPool.length);
+    const chosenId = hyugaPool[idx] ?? 'gentle_fist';
+    return {
+      id: chosenId,
+      level: 1,
+      xp: 0,
+      lastLevelAge: 0,
+      quality: 1,
+      isMain: true,
+      declinedUntilAge: 0,
+    };
+  }
+
+  const allowedPool = origin.familyDisciplines.filter((id) => id !== 'gentle_fist');
+  if (allowedPool.length === 0) return null;
+  const idx = Math.floor(hashRand(seed, 0, 'family_discipline') * allowedPool.length);
+  const chosenId = allowedPool[idx] ?? `${element}_release`;
   if (!DISCIPLINE_MAP[chosenId]) return null;
 
   return {
@@ -172,6 +217,17 @@ export function pickStartingDiscipline(
     isMain: true,
     declinedUntilAge: 0,
   };
+}
+
+/**
+ * Records a jutsu discovered via Sharingan copying or allied demonstration.
+ * Non-bloodline, non-hiden elemental/ninjutsu techniques are eligible.
+ */
+export function recordDiscoveredJutsu(state: GameState, jutsuId: string): boolean {
+  if (!state.discoveredJutsu) state.discoveredJutsu = [];
+  if (state.discoveredJutsu.includes(jutsuId)) return false;
+  state.discoveredJutsu.push(jutsuId);
+  return true;
 }
 
 export function ensureAcademyElementDiscipline(state: GameState): void {
@@ -403,6 +459,7 @@ export function tryDisciplineEvent(state: GameState, rng: SeededRng): PendingDec
 
       const candidates = DISCIPLINES.filter((def) => {
         if (owned.has(def.id)) return false;
+        if (def.id === 'gentle_fist' && state.clanId !== 'hyuga') return false;
         if (def.id === 'senjutsu' && state.age < 18) return false;
         if (def.id === 'space_time' && state.stats.intel < 50) return false;
         if (def.branch === 'taijutsu') return taiCount < 2;

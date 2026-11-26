@@ -10,7 +10,12 @@ import {
   ELEMENT_NAMES,
 } from '../../data/powers';
 import { VILLAGES, VILLAGE_MAP } from '../../data/villages';
-import { CUSTOM_BUDGET, evaluateCustomBuild } from '../../sim/custom';
+import {
+  CUSTOM_BUDGET,
+  evaluateCustomBuild,
+  isBloodlineAllowedForClan,
+  isDisciplineAllowedForClan,
+} from '../../sim/custom';
 import type {
   BloodlineStage,
   ChakraElement,
@@ -104,15 +109,28 @@ export function CustomBuilderPanel({
 
   const chakraCap = 40 + 12 * capacity;
   const selectedOrigin = ORIGIN_MAP[originId];
+  const villageClans = getClansForVillage(villageId);
+  const safeClanId = villageClans.some((c) => c.id === clanId) ? clanId : '';
+
   const allowedDisciplines =
     mode === 'free'
       ? DISCIPLINES
-      : DISCIPLINES.filter((d) => d.id !== 'senjutsu' && d.id !== 'space_time');
+      : DISCIPLINES.filter(
+          (d) =>
+            d.id !== 'senjutsu' &&
+            d.id !== 'space_time' &&
+            isDisciplineAllowedForClan(d.id, safeClanId || null).allowed,
+        );
+
+  const allowedBloodlines =
+    mode === 'free'
+      ? BLOODLINES
+      : BLOODLINES.filter((b) => isBloodlineAllowedForClan(b.id, safeClanId || null).allowed);
 
   const safeStartDiscId =
-    mode === 'points' && (startDisciplineId === 'senjutsu' || startDisciplineId === 'space_time')
-      ? ''
-      : startDisciplineId;
+    allowedDisciplines.some((d) => d.id === startDisciplineId) ? startDisciplineId : '';
+  const safeBloodlineId =
+    allowedBloodlines.some((b) => b.id === latentBloodlineId) ? latentBloodlineId : '';
   const selectedDiscDef = safeStartDiscId ? DISCIPLINE_MAP[safeStartDiscId] : undefined;
   const maxDiscLevel = selectedDiscDef?.maxLevel ?? 4;
   const clampedDiscLevel = Math.min(startDisciplineLevel, maxDiscLevel) as 1 | 2 | 3 | 4;
@@ -121,9 +139,6 @@ export function CustomBuilderPanel({
     ...directStats,
     chakra: Math.min(directStats.chakra, chakraCap),
   };
-
-  const villageClans = getClansForVillage(villageId);
-  const safeClanId = villageClans.some((c) => c.id === clanId) ? clanId : '';
 
   const cfg: CustomBuildConfig = {
     mode,
@@ -138,8 +153,8 @@ export function CustomBuilderPanel({
     directStats: mode === 'free' ? effectiveDirectStats : undefined,
     startDisciplineId: safeStartDiscId || undefined,
     startDisciplineLevel: mode === 'free' && safeStartDiscId ? clampedDiscLevel : undefined,
-    latentBloodlineId: latentBloodlineId || undefined,
-    startBloodlineStage: mode === 'free' && latentBloodlineId ? startBloodlineStage : undefined,
+    latentBloodlineId: safeBloodlineId || undefined,
+    startBloodlineStage: mode === 'free' && safeBloodlineId ? startBloodlineStage : undefined,
   };
 
   const validation = evaluateCustomBuild(cfg);
@@ -349,15 +364,17 @@ export function CustomBuilderPanel({
         )}
         <div className="field">
           <label htmlFor="cb-blood">
-            {mode === 'points' ? 'Latent Kekkei Genkai (4 to 9 pts)' : 'Kekkei Genkai'}
+            {mode === 'points'
+              ? 'Latent Kekkei Genkai (Clan-gated, 4 to 6 pts)'
+              : 'Kekkei Genkai (Free Mode bypasses clan rules)'}
           </label>
           <select
             id="cb-blood"
-            value={latentBloodlineId}
+            value={safeBloodlineId}
             onChange={(e) => setLatentBloodlineId(e.target.value)}
           >
             <option value="">Natural Birth Roll {mode === 'points' ? '(0 pts)' : ''}</option>
-            {BLOODLINES.map((b) => (
+            {allowedBloodlines.map((b) => (
               <option key={b.id} value={b.id}>
                 {b.name}
                 {mode === 'points'
@@ -367,7 +384,7 @@ export function CustomBuilderPanel({
             ))}
           </select>
         </div>
-        {mode === 'free' && latentBloodlineId && (
+        {mode === 'free' && safeBloodlineId && (
           <div className="field">
             <label htmlFor="cb-blood-stage">Starting Bloodline Stage</label>
             <select

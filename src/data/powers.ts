@@ -287,6 +287,16 @@ export const BLOODLINES: readonly BloodlineDef[] = [
     bonusSummary: '+Sensory Intel, +Crisis Clues, +Precision strikes.',
   },
   {
+    id: 'ketsuryugan',
+    name: 'Ketsuryugan',
+    category: 'dojutsu',
+    weight: 8,
+    gradeRange: [2, 4],
+    strainCost: 5,
+    description: 'Blood-red Chinoike eyes granting potent ocular genjutsu and iron-rich liquid manipulation.',
+    bonusSummary: '+Genjutsu, +Bleed/Control pressure, +Interrogation.',
+  },
+  {
     id: 'hyoton',
     name: 'Ice Release (Hyoton)',
     category: 'elemental',

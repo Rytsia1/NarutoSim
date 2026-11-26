@@ -437,8 +437,8 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
     }
   }
 
-  const bloodline = rollBirthBloodline(seed, origin.id);
-  const startDisc = pickStartingDiscipline(seed, origin.id, element);
+  const bloodline = rollBirthBloodline(seed, origin.id, clanId);
+  const startDisc = pickStartingDiscipline(seed, origin.id, element, clanId);
   const seededCrisis = rollSeededCrisis(rng, scenario);
 
   const leanings: Record<LeaningKey, number> = {
@@ -500,6 +500,8 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
 
     disciplines: startDisc ? [startDisc] : [],
     jutsuMastery: {},
+    discoveredJutsu: [],
+    permanentDisability: false,
     bloodline,
     hasClanLegacy: false,
     legacyScar: false,

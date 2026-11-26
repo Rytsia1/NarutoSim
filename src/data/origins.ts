@@ -29,7 +29,7 @@ export const ORIGINS: readonly OriginDef[] = [
     alwaysSibling: false,
     isOrphan: false,
     bloodlineMult: 2.0,
-    familyDisciplines: ['fire_release', 'lightning_release', 'genjutsu', 'fuinjutsu', 'gentle_fist', 'kenjutsu'],
+    familyDisciplines: ['fire_release', 'lightning_release', 'genjutsu', 'fuinjutsu', 'kenjutsu'],
   },
   {
     id: 'clan_branch',
@@ -43,7 +43,7 @@ export const ORIGINS: readonly OriginDef[] = [
     alwaysSibling: true,
     isOrphan: false,
     bloodlineMult: 1.8,
-    familyDisciplines: ['wind_release', 'earth_release', 'gentle_fist', 'kenjutsu', 'sensory'],
+    familyDisciplines: ['wind_release', 'earth_release', 'kenjutsu', 'sensory'],
   },
   {
     id: 'fallen_clan',

@@ -71,22 +71,6 @@ export function getBranchLabel(branch: LineageBranch): string {
   }
 }
 
-export function getUnlockedHidenCombatBonus(state: GameState): number {
-  const ch = state.clanHeritage;
-  if (!ch || ch.unlockedHiden.length === 0) return 0;
-  const clan = CLAN_MAP[ch.clanId];
-  if (!clan) return 0;
-  let bonus = 0;
-  for (const hId of ch.unlockedHiden) {
-    const art = clan.hidenArts.find((a) => a.id === hId);
-    if (art) {
-      const m = ch.hidenMastery[hId] ?? 1;
-      bonus += Math.round(art.combatBonus * (0.8 + m * 0.2));
-    }
-  }
-  return Math.min(10, bonus);
-}
-
 export function bumpClanTraumaCatalyst(state: GameState, amount: number): void {
   if (!state.clanHeritage) return;
   state.clanHeritage.traumaCatalyst = clamp(state.clanHeritage.traumaCatalyst + amount, 0, 100);

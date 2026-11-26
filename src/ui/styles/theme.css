@@ -1850,6 +1850,102 @@ dialog.battle-dialog::backdrop {
   gap: 6px;
 }
 
+.battle-mode-strip {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid #3c3448;
+  background: rgba(24, 19, 30, 0.72);
+}
+
+.mode-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  border: 1px solid #524861;
+  background: #1c1824;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.mode-toggle-btn:hover:not(:disabled) {
+  border-color: var(--accent-gold);
+}
+
+.mode-toggle-btn.active {
+  border-color: var(--accent-gold);
+  background: rgba(214, 163, 74, 0.22);
+  color: #f9e2b3;
+}
+
+.mode-toggle-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.effect-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid #484054;
+  background: rgba(38, 33, 46, 0.75);
+  color: #d6cee0;
+}
+
+.effect-chip.fast {
+  border-color: rgba(114, 189, 240, 0.55);
+  background: rgba(30, 82, 122, 0.32);
+  color: #a7d9ff;
+}
+
+.effect-chip.pierce {
+  border-color: rgba(235, 162, 84, 0.6);
+  background: rgba(122, 68, 22, 0.34);
+  color: #fbd09e;
+}
+
+.effect-chip.aoe {
+  border-color: rgba(186, 134, 240, 0.55);
+  background: rgba(78, 42, 118, 0.32);
+  color: #e0c3ff;
+}
+
+.effect-chip.status {
+  border-color: rgba(217, 108, 126, 0.58);
+  background: rgba(110, 32, 48, 0.34);
+  color: #f6b2be;
+}
+
+.effect-chip.def {
+  border-color: rgba(94, 179, 122, 0.58);
+  background: rgba(24, 78, 44, 0.34);
+  color: #a6e9bc;
+}
+
+.effect-chip.cost {
+  border-color: rgba(217, 74, 74, 0.65);
+  background: rgba(115, 22, 22, 0.38);
+  color: #f59f9f;
+}
+
+.effect-chip.warn {
+  border-color: rgba(214, 163, 74, 0.6);
+  background: rgba(105, 76, 20, 0.32);
+  color: #f4d697;
+}
+
 .battle-jutsu-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));

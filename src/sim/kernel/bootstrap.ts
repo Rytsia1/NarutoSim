@@ -64,6 +64,45 @@ export function ensureKernelBootstrapped(
     },
   });
 
+  defaultMigrationRegistry.register({
+    id: 'effect_model_v2_defaults',
+    order: 50,
+    apply: (state) => {
+      if (!state.discoveredJutsu) state.discoveredJutsu = [];
+      if (state.permanentDisability === undefined) state.permanentDisability = false;
+      if (state.bloodline && state.bloodline.eyeStrain === undefined) {
+        state.bloodline.eyeStrain = 0;
+      }
+      const b = state.war?.activeBattle;
+      if (b) {
+        if (!b.enemyStatus) b.enemyStatus = {};
+        if (!b.playerStatus) b.playerStatus = {};
+        if (!b.playerSelf) b.playerSelf = {};
+        if (!b.enemySelf) b.enemySelf = {};
+        if (b.playerDojutsuMode === undefined) b.playerDojutsuMode = null;
+        if (b.playerBodyMode === undefined) b.playerBodyMode = null;
+        if (!b.modeCooldowns) b.modeCooldowns = {};
+        if (!b.setupFlags) b.setupFlags = {};
+        if (!b.usesThisBattle) b.usesThisBattle = {};
+        if (b.enemyDebuffRounds > 0 && !b.enemyStatus.slow) {
+          b.enemyStatus.slow = { rounds: b.enemyDebuffRounds, value: 9 };
+        }
+        if (b.playerWardRounds > 0 && !b.playerSelf.guard) {
+          b.playerSelf.guard = { rounds: b.playerWardRounds, value: 35 };
+        }
+        if (b.playerCloneEvade && !b.playerSelf.evade) {
+          b.playerSelf.evade = { rounds: 1, value: 1 };
+        }
+        if (b.enemyWallRounds > 0 && !b.enemySelf.wall) {
+          b.enemySelf.wall = { rounds: b.enemyWallRounds, value: 22 };
+        }
+        if (b.enemyFieldRounds > 0 && !b.enemySelf.field) {
+          b.enemySelf.field = { rounds: b.enemyFieldRounds, value: 7 };
+        }
+      }
+    },
+  });
+
   // 2. Domain Decision Handlers registered cleanly per Engine!
   defaultDecisionRouter.register('academy_event', ({ state, decision, optionId, rng }) => {
     const before = snapshotStats(state);

@@ -7,6 +7,76 @@ import type { CustomBuildConfig, GameState, StatKey } from './types';
 
 export const CUSTOM_BUDGET = 12;
 
+/**
+ * Canon clan ownership rules for Kekkei Genkai in Point-Buy mode.
+ * Free Mode bypasses these rules for sandbox builds.
+ */
+export const BLOODLINE_REQUIRED_CLANS: Record<string, readonly string[]> = {
+  sharingan: ['uchiha'],
+  byakugan: ['hyuga'],
+  ketsuryugan: ['chinoike'],
+  mokuton: ['senju'],
+  shikotsumyaku: ['kaguya'],
+  uzumaki_chains: ['uzushio_seal_keepers'],
+};
+
+export const EVENT_ONLY_BIRTH_BLOODLINES = new Set(['rinne_eye', 'sage_body']);
+const RARE_MUTATION_BLOODLINES = new Set(['hyoton', 'yoton', 'jiton']);
+
+export function isBloodlineAllowedForClan(
+  bloodlineId: string,
+  clanId?: string | null,
+): { allowed: boolean; reason?: string } {
+  if (EVENT_ONLY_BIRTH_BLOODLINES.has(bloodlineId)) {
+    const bName = BLOODLINE_MAP[bloodlineId]?.name ?? bloodlineId;
+    return {
+      allowed: false,
+      reason: `${bName} cannot be selected at birth in Point-Buy mode (event-only or Free Mode).`,
+    };
+  }
+
+  const requiredClans = BLOODLINE_REQUIRED_CLANS[bloodlineId];
+  if (requiredClans) {
+    if (!clanId || !requiredClans.includes(clanId)) {
+      const bName = BLOODLINE_MAP[bloodlineId]?.name ?? bloodlineId;
+      const clanNames = requiredClans.map((id) => CLAN_MAP[id]?.name ?? id).join(' or ');
+      return {
+        allowed: false,
+        reason: `${bName} requires belonging to the ${clanNames}.`,
+      };
+    }
+    return { allowed: true };
+  }
+
+  // Elemental KG (Hyoton, Yoton, Jiton): allowed for matching clan OR clanless rare mutation,
+  // but rejected if paired with a clan that owns a different Kekkei Genkai.
+  if (RARE_MUTATION_BLOODLINES.has(bloodlineId) && clanId) {
+    const clan = CLAN_MAP[clanId];
+    if (clan?.bloodlineId && clan.bloodlineId !== bloodlineId) {
+      const bName = BLOODLINE_MAP[bloodlineId]?.name ?? bloodlineId;
+      return {
+        allowed: false,
+        reason: `${bName} does not match ${clan.name}'s bloodline lineage.`,
+      };
+    }
+  }
+
+  return { allowed: true };
+}
+
+export function isDisciplineAllowedForClan(
+  disciplineId: string,
+  clanId?: string | null,
+): { allowed: boolean; reason?: string } {
+  if (disciplineId === 'gentle_fist' && clanId !== 'hyuga') {
+    return {
+      allowed: false,
+      reason: 'Gentle Fist (Juken) is restricted to the Hyuga Clan in Point-Buy mode.',
+    };
+  }
+  return { allowed: true };
+}
+
 export interface CustomBuildValidation {
   valid: boolean;
   pointsSpent: number;
@@ -55,7 +125,7 @@ export function evaluateCustomBuild(cfg: CustomBuildConfig): CustomBuildValidati
     }
   }
 
-  // Starting discipline validation (fix I1/I2/I4; Free Mode unlocks all 22 disciplines)
+  // Starting discipline validation (fix I1/I2/I4; Free Mode unlocks all 22 disciplines and bypasses clan gating)
   if (cfg.startDisciplineId) {
     const def = DISCIPLINE_MAP[cfg.startDisciplineId];
     if (!def) {
@@ -63,22 +133,36 @@ export function evaluateCustomBuild(cfg: CustomBuildConfig): CustomBuildValidati
     } else if (cfg.mode === 'points' && (def.id === 'senjutsu' || def.id === 'space_time')) {
       errors.push(`${def.name} cannot be chosen as a childhood starting discipline.`);
     } else {
-      const isFamilyDiscount = origin.familyDisciplines.includes(def.id);
+      if (cfg.mode === 'points') {
+        const discGate = isDisciplineAllowedForClan(def.id, cfg.clanId);
+        if (!discGate.allowed && discGate.reason) {
+          errors.push(discGate.reason);
+        }
+      }
+      const isFamilyDiscount = origin.familyDisciplines.includes(def.id) || (def.id === 'gentle_fist' && cfg.clanId === 'hyuga');
       points += isFamilyDiscount ? 1 : 3;
     }
   }
 
-  // Guaranteed latent Kekkei Genkai
+  // Guaranteed latent Kekkei Genkai (Point-Buy enforces canon clan ownership; Free Mode bypasses)
   if (cfg.latentBloodlineId) {
     const bDef = BLOODLINE_MAP[cfg.latentBloodlineId];
     if (!bDef) {
       errors.push('Unknown Kekkei Genkai selected.');
-    } else if (bDef.id === 'rinne_eye') {
-      points += 9;
-    } else if (bDef.id === 'mokuton' || bDef.id === 'sharingan') {
-      points += 6;
     } else {
-      points += 4;
+      if (cfg.mode === 'points') {
+        const blGate = isBloodlineAllowedForClan(bDef.id, cfg.clanId);
+        if (!blGate.allowed && blGate.reason) {
+          errors.push(blGate.reason);
+        }
+      }
+      if (bDef.id === 'rinne_eye') {
+        points += 9;
+      } else if (bDef.id === 'mokuton' || bDef.id === 'sharingan') {
+        points += 6;
+      } else {
+        points += 4;
+      }
     }
   }
 
@@ -150,7 +234,8 @@ export function applyCustomBuild(state: GameState, cfg: CustomBuildConfig): void
 
   if (cfg.latentBloodlineId && BLOODLINE_MAP[cfg.latentBloodlineId]) {
     const bDef = BLOODLINE_MAP[cfg.latentBloodlineId];
-    const startStage = cfg.mode === 'free' && cfg.startBloodlineStage ? cfg.startBloodlineStage : 'latent';
+    const defaultStage = bDef.id === 'byakugan' && state.clanId === 'hyuga' ? 'awakened' : 'latent';
+    const startStage = cfg.mode === 'free' && cfg.startBloodlineStage ? cfg.startBloodlineStage : defaultStage;
     const startGrade =
       startStage === 'mastered' ? bDef.gradeRange[1] : bDef.gradeRange[0];
     state.bloodline = {
@@ -159,9 +244,10 @@ export function applyCustomBuild(state: GameState, cfg: CustomBuildConfig): void
       stage: startStage,
       lastEventAge: 0,
       declined: false,
+      eyeStrain: 0,
     };
   } else if (check.valid && cfg.latentBloodlineId === undefined) {
-    // Keep natural rolled bloodline for the selected custom origin
+    // Keep natural rolled bloodline for the selected custom origin & clan
   }
 
   // Enforce chakra cap

@@ -51,7 +51,8 @@ describe('Solo Tactical Combat & Jutsu Clash Engine', () => {
     expect(menu.options.some((o) => o.id === 'jutsu:basic_strike')).toBe(true);
     expect(menu.options.some((o) => o.id === 'jutsu:gokakyu')).toBe(true);
     expect(menu.options.some((o) => o.id === 'jutsu:magen_narakumi')).toBe(true);
-    expect(menu.options.some((o) => o.id === 'jutsu:bloodline_secret_sharingan')).toBe(true);
+    expect(menu.options.some((o) => o.id === 'toggle_mode:sharingan')).toBe(true);
+    expect(menu.options.some((o) => o.id === 'jutsu:bloodline_secret_sharingan')).toBe(false);
     expect(menu.options.some((o) => o.id === 'bloodline')).toBe(true);
     expect(menu.options.some((o) => o.id === 'resolve_boost')).toBe(true);
     expect(menu.options.some((o) => o.id === 'resolve_flee')).toBe(true);

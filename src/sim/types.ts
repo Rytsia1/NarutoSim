@@ -371,6 +371,65 @@ export interface WarBeat {
   npcId?: string;
 }
 
+export type StatusId =
+  | 'burn'
+  | 'shock'
+  | 'bind'
+  | 'genjutsu'
+  | 'drain'
+  | 'tenketsu_seal'
+  | 'bleed'
+  | 'blind'
+  | 'slow'
+  | 'fear'
+  | 'poison';
+
+export type SelfStateId =
+  | 'guard'
+  | 'wall'
+  | 'evade'
+  | 'reflect'
+  | 'intangible'
+  | 'field';
+
+export type ModeId =
+  | 'sharingan'
+  | 'byakugan'
+  | 'baika'
+  | 'raiton_yoroi'
+  | 'suika'
+  | 'makyo_hyosho'
+  | 'sennin'
+  | 'ketsuryugan'
+  | 'suna_tate'
+  | 'shikyaku';
+
+export type ModeSlot = 'dojutsu' | 'body';
+
+export type SetupFlag =
+  | 'prev_fire'
+  | 'prev_water'
+  | 'mist'
+  | 'mark'
+  | 'oil'
+  | 'shadows_present'
+  | 'bone_armor'
+  | 'puppet_out'
+  | 'insects_planted'
+  | 'sand_field';
+
+export interface StatusInstance {
+  rounds: number;
+  value?: number;
+  sourcePower?: number;
+  sourceName?: string;
+}
+
+export interface SelfStateInstance {
+  rounds: number;
+  value?: number;
+}
+
 export interface ActiveBattleState {
   enemyId: string;
   round: number;
@@ -394,6 +453,19 @@ export interface ActiveBattleState {
   usedNindoResolve?: boolean;
   partnerIntercepted?: boolean;
   resolveBoostThisRound: boolean;
+  // Effect Model v2 structured state maps
+  enemyStatus?: Partial<Record<StatusId, StatusInstance>>;
+  playerStatus?: Partial<Record<StatusId, StatusInstance>>;
+  playerSelf?: Partial<Record<SelfStateId, SelfStateInstance>>;
+  enemySelf?: Partial<Record<SelfStateId, SelfStateInstance>>;
+  playerDojutsuMode?: ModeId | null;
+  playerBodyMode?: ModeId | null;
+  modeCooldowns?: Partial<Record<ModeId, number>>;
+  setupFlags?: Partial<Record<SetupFlag, number>>;
+  usesThisBattle?: Record<string, number>;
+  prevPlayerElement?: ChakraElement;
+  gate8Used?: boolean;
+  killingIntentApplied?: boolean;
   rounds: BattleRoundSummary[];
 }
 
@@ -504,6 +576,12 @@ export interface BloodlineState {
   stage: BloodlineStage;
   lastEventAge: number;
   declined: boolean;
+  eyeStrain?: number;
+  mangekyoAwakened?: boolean;
+  mangekyoArts?: string[];
+  eternalMangekyo?: boolean;
+  blinded?: boolean;
+  transplanted?: boolean;
 }
 
 export interface KizunaMember {
@@ -1302,6 +1380,8 @@ export interface GameState {
 
   disciplines: DisciplineProgress[];
   jutsuMastery?: Record<string, number>;
+  discoveredJutsu?: string[];
+  permanentDisability?: boolean;
   bloodline: BloodlineState | null;
   hasClanLegacy: boolean;
   legacyScar: boolean;

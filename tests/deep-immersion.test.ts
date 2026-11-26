@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { CLAN_MAP } from '../src/data/clans';
+import { getKnownJutsu } from '../src/data/jutsu';
 import { initAcademyState, pickAcademyEventDecision, resolveAcademyEventDecision, tickAcademyYear } from '../src/sim/academy';
-import { getUnlockedHidenCombatBonus, pickClanPoliticsDecision, resolveClanPoliticsDecision } from '../src/sim/clan-heritage';
+import { pickClanPoliticsDecision, resolveClanPoliticsDecision } from '../src/sim/clan-heritage';
 import { ShinobiSim } from '../src/sim/engine';
 import { createNewLife } from '../src/sim/life';
 import {
@@ -140,7 +141,7 @@ describe('6 Deep Immersion Pillars', () => {
     expect(ch.cagedBirdSealed).toBe(true);
     // Not given peak Hiden automatically at birth!
     expect(ch.unlockedHiden.length).toBe(0);
-    expect(getUnlockedHidenCombatBonus(hyugaBranch)).toBe(0);
+    expect(getKnownJutsu(hyugaBranch).some((j) => j.id === 'hakke_kaiten')).toBe(false);
 
     // Konoha Aburame & Inuzuka clans exist with full Hiden metadata
     expect(CLAN_MAP.aburame.hidenArts.length).toBeGreaterThanOrEqual(2);
@@ -164,7 +165,11 @@ describe('6 Deep Immersion Pillars', () => {
     expect(trial!.meta?.clanScenario).toBe('hiden_trial');
     resolveClanPoliticsDecision(hyugaBranch, 'master_hiden', trial!.meta, rng);
     expect(ch.unlockedHiden.length).toBeGreaterThanOrEqual(1);
-    expect(getUnlockedHidenCombatBonus(hyugaBranch)).toBeGreaterThan(0);
+    const unlockedArt = CLAN_MAP.hyuga.hidenArts.find((a) => ch.unlockedHiden.includes(a.id))!;
+    const knownAfter = getKnownJutsu(hyugaBranch);
+    for (const jId of unlockedArt.jutsuIds) {
+      expect(knownAfter.some((j) => j.id === jId)).toBe(true);
+    }
   });
 
   it('Pillar 4: supports bidirectional 6-axis Relationship Simulation 2.0 with asymmetry', () => {

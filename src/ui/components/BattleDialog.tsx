@@ -1,9 +1,12 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { t } from '../../data/i18n';
 import {
+  formatJutsuChips,
+  getAvailableModes,
   getJutsuMasteryInfo,
   getKnownJutsu,
   getNextTierLockedJutsu,
+  MODE_MAP,
   ZODIAC_SEAL_KANJI,
   type JutsuDefinition,
 } from '../../data/jutsu';
@@ -11,13 +14,16 @@ import { BLOODLINE_MAP, ELEMENT_KANJI, ELEMENT_NAMES } from '../../data/powers';
 import { ARCHETYPE_LABELS } from '../../data/roster';
 import { VILLAGE_MAP } from '../../data/villages';
 import {
+  canToggleBattleMode,
   COMBAT_TIER_LABELS,
   estimateBattleActionOdds,
   estimateRetreatChance,
+  getActivePlayerModes,
   getCombatTier,
   getDisplayEnemyRanks,
   getEffectiveJutsuCost,
   getHealthConditionLabel,
+  getModeUpkeepCp,
   getPlayerRanks,
   getPlayerSignatureUltimate,
   getPowerGapRead,
@@ -26,7 +32,7 @@ import {
 } from '../../sim/combat';
 import { getPartnerTrustTier } from '../../sim/partner';
 import { rankValueToGrade } from '../../sim/powers';
-import type { GameState, PendingDecision, PowerGapLabel, WarCompetitor } from '../../sim/types';
+import type { GameState, PendingDecision, PowerGapLabel, SelfStateId, StatusId, WarCompetitor } from '../../sim/types';
 
 interface BattleDialogProps {
   state: GameState;
@@ -58,6 +64,30 @@ const ROLE_LABELS: Record<JutsuDefinition['role'], string> = {
   evasion: 'Evasion',
   summon: 'Summon',
   clash: 'Clash Art',
+  mode: 'Mode',
+};
+
+const STATUS_DISPLAY: Record<StatusId, string> = {
+  burn: 'Burn',
+  shock: 'Shock',
+  bind: 'Bind',
+  genjutsu: 'Genjutsu',
+  drain: 'Drain',
+  tenketsu_seal: 'Tenketsu Seal',
+  bleed: 'Bleed',
+  blind: 'Blind',
+  slow: 'Slow',
+  fear: 'Fear',
+  poison: 'Poison',
+};
+
+const SELF_DISPLAY: Record<SelfStateId, string> = {
+  guard: 'Guard',
+  wall: 'Wall',
+  evade: 'Evade',
+  reflect: 'Reflect',
+  intangible: 'Intangible',
+  field: 'Field',
 };
 
 function getTabForJutsu(j: JutsuDefinition): JutsuTabId {
@@ -95,6 +125,8 @@ export function BattleDialog({
 
   const knownJutsu = useMemo(() => getKnownJutsu(state), [state]);
   const lockedNext = useMemo(() => getNextTierLockedJutsu(state), [state]);
+  const availableModes = useMemo(() => getAvailableModes(state), [state]);
+  const activeModes = getActivePlayerModes(battle);
   const optionById = useMemo(
     () => new Map(decision.options.map((o) => [o.id, o])),
     [decision.options],
@@ -265,9 +297,28 @@ export function BattleDialog({
     const bName = BLOODLINE_MAP[state.bloodline.id]?.name ?? 'Bloodline';
     playerMods.push(`▲▲ ${bName} (${battle.bloodlineActiveRounds}r)`);
   }
-  if (battle.playerWardRounds > 0) playerMods.push(`▲ Barrier (${battle.playerWardRounds}r)`);
+  for (const mId of activeModes) {
+    const mDef = MODE_MAP[mId];
+    if (mDef) playerMods.push(`▲▲ ${mDef.name} Mode (-${getModeUpkeepCp(state, mId)} CP/r)`);
+  }
+  if (battle.playerSelf) {
+    for (const [k, inst] of Object.entries(battle.playerSelf)) {
+      if (!inst) continue;
+      const lbl = SELF_DISPLAY[k as SelfStateId] ?? k;
+      playerMods.push(`▲ ${lbl}${inst.value && k === 'wall' ? ` ${inst.value}` : ''} (${inst.rounds}r)`);
+    }
+  } else {
+    if (battle.playerWardRounds > 0) playerMods.push(`▲ Barrier (${battle.playerWardRounds}r)`);
+    if (battle.playerCloneEvade) playerMods.push('▲ Clone Feint');
+  }
+  if (battle.playerStatus) {
+    for (const [k, inst] of Object.entries(battle.playerStatus)) {
+      if (!inst) continue;
+      const lbl = STATUS_DISPLAY[k as StatusId] ?? k;
+      playerMods.push(`▼ ${lbl} (${inst.rounds}r)`);
+    }
+  }
   if (battle.playerBuffRounds > 0) playerMods.push(`▲ Tactical Buff +8 (${battle.playerBuffRounds}r)`);
-  if (battle.playerCloneEvade) playerMods.push('▲ Clone Feint');
   if (battle.weaknessExploited) playerMods.push('▲ Weakness Read');
   if (war.nextBattleBonus > 0) playerMods.push(`▲ Prep Bonus (+${war.nextBattleBonus})`);
   if (war.strategicClaimedBy === 'player') playerMods.push('▲ High Ground (+6)');
@@ -278,9 +329,25 @@ export function BattleDialog({
   if (battle.resolveBoostThisRound) playerMods.push('▲▲ Surpass Limits');
 
   const enemyMods: string[] = [`▲▲ ${TACTIC_LABELS[enemy.tactic]}`];
-  if (battle.enemyWallRounds > 0) enemyMods.push(`▲ Guard Wall (${battle.enemyWallRounds}r)`);
-  if (battle.enemyFieldRounds > 0) enemyMods.push(`▲ Terrain Field (${battle.enemyFieldRounds}r)`);
-  if (battle.enemyDebuffRounds > 0) enemyMods.push(`▼ Disrupted (${battle.enemyDebuffRounds}r)`);
+  if (battle.enemySelf && Object.keys(battle.enemySelf).length > 0) {
+    for (const [k, inst] of Object.entries(battle.enemySelf)) {
+      if (!inst) continue;
+      const lbl = SELF_DISPLAY[k as SelfStateId] ?? k;
+      enemyMods.push(`▲ ${lbl}${inst.value && k === 'wall' ? ` ${inst.value}` : ''} (${inst.rounds}r)`);
+    }
+  } else {
+    if (battle.enemyWallRounds > 0) enemyMods.push(`▲ Guard Wall (${battle.enemyWallRounds}r)`);
+    if (battle.enemyFieldRounds > 0) enemyMods.push(`▲ Terrain Field (${battle.enemyFieldRounds}r)`);
+  }
+  if (battle.enemyStatus && Object.keys(battle.enemyStatus).length > 0) {
+    for (const [k, inst] of Object.entries(battle.enemyStatus)) {
+      if (!inst) continue;
+      const lbl = STATUS_DISPLAY[k as StatusId] ?? k;
+      enemyMods.push(`▼ ${lbl} (${inst.rounds}r)`);
+    }
+  } else if (battle.enemyDebuffRounds > 0) {
+    enemyMods.push(`▼ Disrupted (${battle.enemyDebuffRounds}r)`);
+  }
 
   const inspectedJutsu =
     knownJutsu.find((j) => j.id === inspectedJutsuId) ??
@@ -539,6 +606,34 @@ export function BattleDialog({
             {enemyKnown ? `${enemy.name} (${enemy.epithet}).` : 'An unknown foe.'} Enemy: {enemyCond} · You: {playerCond}
           </p>
 
+          {/* Instant Mode Toggle Strip (Free Action: 1 Dojutsu + 1 Body Mode) */}
+          {availableModes.length > 0 && (
+            <div className="battle-mode-strip" role="region" aria-label="Instant Mode Toggles">
+              <span className="disc-sub" style={{ fontWeight: 600 }}>
+                Modes (Instant):
+              </span>
+              {availableModes.map((mode) => {
+                const check = canToggleBattleMode(state, war, battle, mode.id);
+                const upkeep = getModeUpkeepCp(state, mode.id);
+                return (
+                  <button
+                    key={mode.id}
+                    type="button"
+                    className={`mode-toggle-btn ${check.isActive ? 'active' : ''}`}
+                    disabled={!check.allowed}
+                    title={check.reason ?? mode.description}
+                    onClick={() => onResolve(`toggle_mode:${mode.id}`)}
+                  >
+                    <span>{mode.name}</span>
+                    <span className="tabular" style={{ opacity: 0.85, fontSize: '0.72rem' }}>
+                      {check.isActive ? 'ON' : check.reason ? check.reason : `-${upkeep} CP/r`}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           {/* Phase 5: Jutsu Category Tabs (Ninjutsu / Taijutsu / Genjutsu / Other) */}
           <div className="battle-jutsu-tabs" role="tablist" aria-label="Jutsu Categories">
             {(
@@ -636,6 +731,11 @@ export function BattleDialog({
                         {odds.tier === 'strong' ? '▲' : odds.tier === 'weak' ? '▼' : '◆'} {odds.label}
                       </span>
                     )}
+                    {formatJutsuChips(jutsu, battle).map((chip) => (
+                      <span key={chip.label} className={`effect-chip ${chip.tone}`}>
+                        {chip.label}
+                      </span>
+                    ))}
                   </div>
                   {disabled && opt?.disabledReason && (
                     <div className="disc-sub" style={{ color: '#e69b9b' }}>

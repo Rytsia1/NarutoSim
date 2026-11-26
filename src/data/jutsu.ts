@@ -1,5 +1,18 @@
-import { BLOODLINE_MAP, DISCIPLINE_MAP } from './powers';
-import type { ChakraElement, GameState } from '../sim/types';
+import { CLAN_MAP } from './clans';
+import { DISCIPLINE_MAP } from './powers';
+import { JUTSU_CLANS } from './jutsu-clans';
+import { JUTSU_CORE } from './jutsu-core';
+import type {
+  ActiveBattleState,
+  BloodlineStage,
+  ChakraElement,
+  GameState,
+  ModeId,
+  ModeSlot,
+  SelfStateId,
+  SetupFlag,
+  StatusId,
+} from '../sim/types';
 
 export type JutsuRank = 'D' | 'C' | 'B' | 'A' | 'S';
 
@@ -10,7 +23,8 @@ export type JutsuCategory =
   | 'genjutsu'
   | 'fuinjutsu'
   | 'medical'
-  | 'summoning';
+  | 'summoning'
+  | 'mode';
 
 export type JutsuStyle = 'taijutsu' | 'kenjutsu' | 'ninjutsu' | 'genjutsu' | 'support';
 
@@ -23,12 +37,66 @@ export type JutsuRole =
   | 'heal'
   | 'evasion'
   | 'summon'
-  | 'clash';
+  | 'clash'
+  | 'mode';
 
 export type JutsuMasteryStage = 'learning' | 'proficient' | 'mastered';
 
+export interface OnHitStatusEffect {
+  status: StatusId;
+  rounds: number;
+  chance?: number;
+  value?: number;
+}
+
+export interface SelfStateEffect {
+  state: SelfStateId;
+  rounds: number;
+  value?: number;
+}
+
+export interface JutsuSetupSpec {
+  requires?: readonly SetupFlag[];
+  sets?: readonly SetupFlag[];
+}
+
+export interface JutsuExtraCosts {
+  hp?: number;
+  strain?: number;
+  upkeepCp?: number;
+  upkeepHp?: number;
+  eyeStrain?: number;
+  usesPerBattle?: number;
+}
+
+export interface ModeDefinition {
+  id: ModeId;
+  name: string;
+  slot: ModeSlot;
+  upkeepCp: number;
+  upkeepHp?: number;
+  powerBonus: number;
+  speedBonus?: number;
+  dodgeBonus?: number;
+  guardPct?: number;
+  counters?: readonly string[];
+  requires: JutsuRequirements;
+  description: string;
+}
+
 export interface JutsuEffect {
   power?: number;
+  hits?: number;
+  speed?: -2 | -1 | 0 | 1 | 2;
+  pierce?: boolean;
+  aoe?: boolean;
+  onHit?: readonly OnHitStatusEffect[];
+  self?: readonly SelfStateEffect[];
+  setup?: JutsuSetupSpec;
+  costs?: JutsuExtraCosts;
+  counters?: readonly string[];
+  tags?: readonly string[];
+  // Legacy / convenience fields mapped cleanly in combat resolver
   dodgeMult?: number;
   pierceWall?: boolean;
   debuffRounds?: number;
@@ -45,6 +113,10 @@ export interface JutsuRequirements {
   altDisciplineId?: string;
   level?: 1 | 2 | 3 | 4;
   bloodlineId?: string;
+  minBloodlineStage?: BloodlineStage;
+  clanId?: string;
+  hidenId?: string;
+  mangekyoArtId?: string;
   requiresContractOrDiscipline?: boolean;
 }
 
@@ -59,6 +131,11 @@ export interface JutsuDefinition {
   chakraCost: number;
   requires: JutsuRequirements;
   seals: readonly string[];
+  sealless?: boolean;
+  hiden?: boolean;
+  forbidden?: boolean;
+  modeId?: ModeId;
+  ref: string;
   description: string;
   effect: JutsuEffect;
 }
@@ -95,474 +172,140 @@ export const ZODIAC_SEAL_KANJI: Record<string, string> = {
   I: '亥',
 };
 
-export const JUTSU_DB: readonly JutsuDefinition[] = [
-  // === ACADEMY FUNDAMENTALS (Always known) ===
+/**
+ * Full 10-Mode Registry (3 Dojutsu + 7 Body Modes):
+ * Toggled instantaneously (free action) in BattleDialog; 1 Dojutsu + 1 Body Mode can stack simultaneously.
+ */
+export const MODE_DB: readonly ModeDefinition[] = [
   {
-    id: 'basic_strike',
-    name: 'Basic Strike',
-    category: 'taijutsu',
-    style: 'taijutsu',
-    role: 'damage',
-    rank: 'D',
-    chakraCost: 0,
-    requires: {},
-    seals: [],
-    description: 'Fundamental academy taijutsu exchange. Zero chakra cost and dependable under pressure.',
-    effect: { power: 0.85 },
+    id: 'sharingan',
+    name: 'Sharingan',
+    slot: 'dojutsu',
+    upkeepCp: 4,
+    powerBonus: 12,
+    speedBonus: 1,
+    dodgeBonus: 0.14,
+    counters: ['genjutsu'],
+    requires: { bloodlineId: 'sharingan' },
+    description: 'Reads motion and seals in real time (+12 Power, +1 Speed, +14% Evade, resists sight Genjutsu).',
   },
   {
-    id: 'bunshin',
-    name: 'Bunshin no Jutsu',
-    category: 'ninjutsu',
-    style: 'support',
-    role: 'evasion',
-    rank: 'D',
-    chakraCost: 5,
-    requires: {},
-    seals: ['Hitsuji', 'Mi', 'Tora'],
-    description: 'Creates intangible academy clones to throw off enemy timing and open an escape lane.',
-    effect: { cloneEvade: true },
+    id: 'byakugan',
+    name: 'Byakugan',
+    slot: 'dojutsu',
+    upkeepCp: 3,
+    powerBonus: 10,
+    dodgeBonus: 0.12,
+    counters: ['blind', 'genjutsu'],
+    requires: { bloodlineId: 'byakugan' },
+    description: 'Near-360-degree chakra vision (+10 Power, +12% Evade, ignores Blind/Mist, full Intel).',
   },
   {
-    id: 'kawarimi',
-    name: 'Kawarimi no Jutsu',
-    category: 'ninjutsu',
-    style: 'support',
-    role: 'evasion',
-    rank: 'D',
-    chakraCost: 4,
-    requires: {},
-    seals: ['Hitsuji', 'I', 'Ushi', 'Inu', 'Mi'],
-    description: 'Swaps places with a nearby log or debris at the moment of impact, softening pressure and priming evasion.',
-    effect: { cloneEvade: true, dodgeMult: 0.7 },
-  },
-
-  // === FIRE RELEASE (Katon) ===
-  {
-    id: 'gokakyu',
-    name: 'Katon: Gokakyu no Jutsu',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'damage',
-    element: 'fire',
-    rank: 'C',
-    chakraCost: 12,
-    requires: { disciplineId: 'fire_release', level: 1 },
-    seals: ['Mi', 'Hitsuji', 'Saru', 'I', 'Uma', 'Tora'],
-    description: 'Concentrated sphere of blazing fire that hits hard against Wind users and open guards.',
-    effect: { power: 1.12 },
+    id: 'ketsuryugan',
+    name: 'Ketsuryugan',
+    slot: 'dojutsu',
+    upkeepCp: 4,
+    powerBonus: 11,
+    dodgeBonus: 0.1,
+    counters: ['genjutsu'],
+    requires: { bloodlineId: 'ketsuryugan' },
+    description: 'Crimson illusion vision (+11 Power, +10% Evade, strengthens Genjutsu control).',
   },
   {
-    id: 'hosenka',
-    name: 'Katon: Hosenka no Jutsu',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'multi_hit',
-    element: 'fire',
-    rank: 'C',
-    chakraCost: 10,
-    requires: { disciplineId: 'fire_release', level: 1 },
-    seals: ['Ne', 'Tora', 'Inu', 'Ushi', 'U', 'Tora'],
-    description: 'Volley of scattered phoenix embers with a wide spread that cuts enemy evasion sharply.',
-    effect: { power: 0.96, dodgeMult: 0.4 },
+    id: 'sennin',
+    name: 'Sage Mode (Sennin Modo)',
+    slot: 'body',
+    upkeepCp: 5,
+    powerBonus: 18,
+    speedBonus: 1,
+    guardPct: 20,
+    counters: ['blind'],
+    requires: { disciplineId: 'senjutsu', level: 3 },
+    description: 'Natural energy harmonization (+18 Power, +1 Speed, 20% mitigation, sensory perception).',
   },
   {
-    id: 'ryuka',
-    name: 'Katon: Ryuka no Jutsu',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'pierce',
-    element: 'fire',
-    rank: 'B',
-    chakraCost: 16,
-    requires: { disciplineId: 'fire_release', level: 2 },
-    seals: ['Mi', 'Tatsu', 'U', 'Tora'],
-    description: 'Linear dragon-flame lance guided along taut wire that punches straight through Guard Walls.',
-    effect: { power: 1.24, pierceWall: true },
+    id: 'baika',
+    name: 'Baika Expansion',
+    slot: 'body',
+    upkeepCp: 4,
+    powerBonus: 12,
+    guardPct: 22,
+    requires: { clanId: 'akimichi', hidenId: 'hiden_akimichi_baika' },
+    description: 'Calorie-to-mass Akimichi expansion (+12 Power, 22% physical mitigation).',
   },
   {
-    id: 'goka_mekkyaku',
-    name: 'Katon: Goka Mekkyaku',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'clash',
-    element: 'fire',
-    rank: 'S',
-    chakraCost: 40,
-    requires: { disciplineId: 'fire_release', level: 4 },
-    seals: ['Uma', 'Tora'],
-    description: 'Catastrophic wall of sea-sized flames capable of triggering and overpowering an Ultimate Jutsu Clash.',
-    effect: { power: 1.8 },
-  },
-
-  // === WIND RELEASE (Futon) ===
-  {
-    id: 'daitoppa',
-    name: 'Futon: Daitoppa',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'damage',
-    element: 'wind',
-    rank: 'C',
-    chakraCost: 10,
-    requires: { disciplineId: 'wind_release', level: 1 },
-    seals: ['Tora', 'Ushi', 'Inu', 'U', 'Mi'],
-    description: 'Compressed gale blast that tears through enemy footing and disrupts their stance for 1 round.',
-    effect: { power: 1.0, debuffRounds: 1 },
+    id: 'raiton_yoroi',
+    name: 'Lightning Chakra Mode',
+    slot: 'body',
+    upkeepCp: 6,
+    powerBonus: 14,
+    speedBonus: 2,
+    guardPct: 18,
+    requires: { clanId: 'yotsuki', hidenId: 'hiden_yotsuki_cloak' },
+    description: 'Synapse-accelerating lightning cloak (+14 Power, +2 Speed, 18% armor).',
   },
   {
-    id: 'kaze_no_yaiba',
-    name: 'Futon: Kaze no Yaiba',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'pierce',
-    element: 'wind',
-    rank: 'B',
-    chakraCost: 16,
-    requires: { disciplineId: 'wind_release', level: 2 },
-    seals: ['Saru', 'Tori', 'Ushi', 'Tora'],
-    description: 'Invisible vacuum sword that slices directly through Guard Walls without warning.',
-    effect: { power: 1.24, pierceWall: true },
+    id: 'suika',
+    name: 'Suika Hydrification',
+    slot: 'body',
+    upkeepCp: 4,
+    powerBonus: 8,
+    dodgeBonus: 0.2,
+    guardPct: 35,
+    requires: { clanId: 'hozuki', hidenId: 'hiden_hozuki_liquid' },
+    description: 'Liquid-body state (+20% Evade, 35% physical mitigation; vulnerable to Lightning).',
   },
   {
-    id: 'rasenshuriken',
-    name: 'Futon: Rasenshuriken',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'clash',
-    element: 'wind',
-    rank: 'S',
-    chakraCost: 45,
-    requires: { disciplineId: 'wind_release', level: 4 },
-    seals: ['Hitsuji'],
-    description: 'Microscopic wind-blade vortex of devastating clash force. Carries recoil risk on a lost exchange.',
-    effect: { power: 1.85, selfRisk: 8 },
-  },
-
-  // === LIGHTNING RELEASE (Raiton) ===
-  {
-    id: 'jibashi',
-    name: 'Raiton: Jibashi',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'control',
-    element: 'lightning',
-    rank: 'C',
-    chakraCost: 10,
-    requires: { disciplineId: 'lightning_release', level: 1 },
-    seals: ['Ushi', 'Tora', 'Mi'],
-    description: 'Electromagnetic shockwave that numbs enemy nerves and disrupts them for 1 round.',
-    effect: { power: 0.98, debuffRounds: 1 },
+    id: 'makyo_hyosho',
+    name: 'Makyo Hyosho Mirrors',
+    slot: 'body',
+    upkeepCp: 5,
+    powerBonus: 12,
+    speedBonus: 2,
+    dodgeBonus: 0.18,
+    requires: { bloodlineId: 'hyoton', minBloodlineStage: 'ctrl1' },
+    description: 'Surrounding refractive ice mirrors (+12 Power, +2 Speed, +18% Evade).',
   },
   {
-    id: 'chidori',
-    name: 'Raiton: Chidori',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'pierce',
-    element: 'lightning',
-    rank: 'A',
-    chakraCost: 25,
-    requires: { disciplineId: 'lightning_release', level: 3 },
-    seals: ['Ushi', 'U', 'Saru'],
-    description: 'High-speed piercing lightning thrust that cleaves Guard Walls. Tunnel-vision risk unless paired with Dojutsu, Sensory, or an enemy debuff.',
-    effect: { power: 1.5, pierceWall: true, selfRisk: 10 },
+    id: 'suna_tate',
+    name: 'Suna no Tate (Sand Shield)',
+    slot: 'body',
+    upkeepCp: 4,
+    powerBonus: 9,
+    guardPct: 32,
+    requires: { clanId: 'sabaku', hidenId: 'hiden_sabaku_armor' },
+    description: 'Autonomous defensive sand aura (+9 Power, 32% automatic mitigation).',
   },
   {
-    id: 'raikiri',
-    name: 'Raiton: Raikiri',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'clash',
-    element: 'lightning',
-    rank: 'S',
-    chakraCost: 38,
-    requires: { disciplineId: 'lightning_release', level: 4 },
-    seals: ['Ushi', 'U', 'Saru'],
-    description: 'Refined S-Rank lightning blade capable of cleaving rival Ultimates in a Jutsu Clash.',
-    effect: { power: 1.78, pierceWall: true },
-  },
-
-  // === EARTH RELEASE (Doton) ===
-  {
-    id: 'doryuheki',
-    name: 'Doton: Doryuheki',
-    category: 'ninjutsu',
-    style: 'support',
-    role: 'defense',
-    element: 'earth',
-    rank: 'C',
-    chakraCost: 14,
-    requires: { disciplineId: 'earth_release', level: 1 },
-    seals: ['Tora', 'Hitsuji', 'I', 'Inu'],
-    description: 'Raises a towering reinforced mud rampart reducing incoming damage by 35% for 2 rounds.',
-    effect: { wardRounds: 2 },
-  },
-  {
-    id: 'doryudan',
-    name: 'Doton: Doryudan',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'damage',
-    element: 'earth',
-    rank: 'B',
-    chakraCost: 16,
-    requires: { disciplineId: 'earth_release', level: 2 },
-    seals: ['Hitsuji', 'Uma', 'Tatsu'],
-    description: 'Earthen dragon head firing pressurized stone projectiles that batter enemy fortifications.',
-    effect: { power: 1.22, fortShave: 4 },
-  },
-  {
-    id: 'yomi_numa',
-    name: 'Doton: Yomi Numa',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'control',
-    element: 'earth',
-    rank: 'B',
-    chakraCost: 18,
-    requires: { disciplineId: 'earth_release', level: 2 },
-    seals: ['I', 'Tora'],
-    description: 'Turns the battleground into a bottomless mire, disrupting enemy mobility for 2 rounds.',
-    effect: { power: 1.08, debuffRounds: 2 },
-  },
-  {
-    id: 'sando_no_jutsu',
-    name: 'Doton: Sando no Jutsu',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'clash',
-    element: 'earth',
-    rank: 'S',
-    chakraCost: 40,
-    requires: { disciplineId: 'earth_release', level: 4 },
-    seals: ['I', 'Inu', 'Tori', 'Saru', 'Hitsuji'],
-    description: 'Raises twin tectonic mountain walls to crush an opponent or clash against S-Rank Ultimates.',
-    effect: { power: 1.76 },
-  },
-
-  // === WATER RELEASE (Suiton) ===
-  {
-    id: 'suijinheki',
-    name: 'Suiton: Suijinheki',
-    category: 'ninjutsu',
-    style: 'support',
-    role: 'defense',
-    element: 'water',
-    rank: 'C',
-    chakraCost: 12,
-    requires: { disciplineId: 'water_release', level: 1 },
-    seals: ['Tora', 'Mi', 'Tora', 'Mi', 'Tora'],
-    description: 'Pressurized circling wall of water that cuts incoming damage by 35% for 2 rounds.',
-    effect: { wardRounds: 2 },
-  },
-  {
-    id: 'suiryudan',
-    name: 'Suiton: Suiryudan no Jutsu',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'damage',
-    element: 'water',
-    rank: 'B',
-    chakraCost: 16,
-    requires: { disciplineId: 'water_release', level: 2 },
-    seals: ['Ushi', 'Saru', 'U', 'Ne', 'I', 'Tori'],
-    description: 'Surging torrent shaped like a roaring water dragon that crushes Fire users.',
-    effect: { power: 1.24 },
-  },
-  {
-    id: 'daibakufu',
-    name: 'Suiton: Daibakufu no Jutsu',
-    category: 'ninjutsu',
-    style: 'ninjutsu',
-    role: 'clash',
-    element: 'water',
-    rank: 'S',
-    chakraCost: 40,
-    requires: { disciplineId: 'water_release', level: 4 },
-    seals: ['Tora', 'Ushi', 'Saru', 'U', 'Hitsuji'],
-    description: 'Monumental vortex deluge capable of overwhelming rival S-Rank Ultimates in a Jutsu Clash.',
-    effect: { power: 1.78 },
-  },
-
-  // === STRONG FIST TAIJUTSU ===
-  {
-    id: 'konoha_senpu',
-    name: 'Konoha Senpu',
-    category: 'taijutsu',
-    style: 'taijutsu',
-    role: 'damage',
-    rank: 'D',
-    chakraCost: 0,
-    requires: { disciplineId: 'strong_fist', level: 1 },
-    seals: [],
-    description: 'High-low spinning leaf kick chain that hits harder than basic blows at zero chakra cost.',
-    effect: { power: 0.96 },
-  },
-  {
-    id: 'omote_renge',
-    name: 'Omote Renge',
-    category: 'taijutsu',
-    style: 'taijutsu',
-    role: 'damage',
-    rank: 'B',
-    chakraCost: 8,
-    requires: { disciplineId: 'strong_fist', level: 2 },
-    seals: [],
-    description: 'Explosive aerial piledriver unlocked by straining the First Gate. High burst with recoil risk on miss.',
-    effect: { power: 1.32, selfRisk: 9 },
-  },
-
-  // === GENTLE FIST (Juken) ===
-  {
-    id: 'hakke_kusho',
-    name: 'Juken: Hakke Kusho',
-    category: 'taijutsu',
-    style: 'taijutsu',
-    role: 'control',
-    rank: 'C',
-    chakraCost: 8,
-    requires: { disciplineId: 'gentle_fist', level: 1 },
-    seals: [],
-    description: 'Vacuum palm burst that strikes chakra tenketsu and drains 10 enemy CP on impact.',
-    effect: { power: 1.0, cpDrain: 10 },
-  },
-  {
-    id: 'hakke_64',
-    name: 'Hakke Rokujuyon Sho',
-    category: 'taijutsu',
-    style: 'taijutsu',
-    role: 'control',
-    rank: 'B',
-    chakraCost: 16,
-    requires: { disciplineId: 'gentle_fist', level: 2 },
-    seals: [],
-    description: 'Sixty-Four Palms barrage sealing chakra pathways (-18 enemy CP) and disrupting the foe for 2 rounds.',
-    effect: { power: 1.2, cpDrain: 18, debuffRounds: 2 },
-  },
-
-  // === KENJUTSU ===
-  {
-    id: 'iai_slash',
-    name: 'Iai Slash',
-    category: 'kenjutsu',
-    style: 'kenjutsu',
-    role: 'pierce',
-    rank: 'D',
-    chakraCost: 4,
-    requires: { disciplineId: 'kenjutsu', level: 1 },
-    seals: [],
-    description: 'Rapid chakra-edged blade draw that pierces Guard Walls and shaves 4 enemy Fortification.',
-    effect: { power: 0.95, pierceWall: true, fortShave: 4 },
-  },
-  {
-    id: 'mikazuki_no_mai',
-    name: 'Konoha-Ryu: Mikazuki no Mai',
-    category: 'kenjutsu',
-    style: 'kenjutsu',
-    role: 'pierce',
-    rank: 'A',
-    chakraCost: 24,
-    requires: { disciplineId: 'kenjutsu', level: 3 },
-    seals: [],
-    description: 'Three-angle shadow crescent blade assault piercing Guard Walls and shredding 6 enemy Fortification.',
-    effect: { power: 1.48, pierceWall: true, fortShave: 6 },
-  },
-
-  // === GENJUTSU ===
-  {
-    id: 'magen_narakumi',
-    name: 'Magen: Narakumi no Jutsu',
-    category: 'genjutsu',
-    style: 'genjutsu',
-    role: 'control',
-    rank: 'C',
-    chakraCost: 6,
-    requires: { disciplineId: 'genjutsu', level: 1 },
-    seals: ['Hitsuji'],
-    description: 'Conjures a harrowing vision that rattles enemy concentration and weakens them for 2 rounds.',
-    effect: { power: 0.95, debuffRounds: 2 },
-  },
-  {
-    id: 'magen_kasegui',
-    name: 'Magen: Kasegui no Jutsu',
-    category: 'genjutsu',
-    style: 'genjutsu',
-    role: 'control',
-    rank: 'B',
-    chakraCost: 14,
-    requires: { disciplineId: 'genjutsu', level: 2 },
-    seals: ['Mi', 'Tora'],
-    description: 'Illusory shackles pin the opponent in place, crippling their combat output for 3 rounds.',
-    effect: { power: 1.15, debuffRounds: 3 },
-  },
-
-  // === SUPPORT & SPECIALIZED ARTS ===
-  {
-    id: 'kage_bunshin',
-    name: 'Kage Bunshin no Jutsu',
-    category: 'ninjutsu',
-    style: 'support',
-    role: 'evasion',
-    rank: 'C',
-    chakraCost: 16,
-    requires: { disciplineId: 'shadow_clone', level: 1 },
-    seals: ['Hitsuji', 'Mi', 'Tora'],
-    description: 'Solid shadow clone decoy granting evasion and +8 tactical attack momentum on the next exchange.',
-    effect: { cloneEvade: true },
-  },
-  {
-    id: 'shosen',
-    name: 'Shosen Jutsu',
-    category: 'medical',
-    style: 'support',
-    role: 'heal',
-    rank: 'C',
-    chakraCost: 18,
-    requires: { disciplineId: 'medical', level: 1 },
-    seals: ['Ushi', 'Hitsuji'],
-    description: 'Mystical Palm medical chakra that restores 15 HP (+8 Partner HP) mid-battle.',
-    effect: { heal: 15 },
-  },
-  {
-    id: 'fuin_ward',
-    name: 'Fuin Ward',
-    category: 'fuinjutsu',
-    style: 'support',
-    role: 'defense',
-    rank: 'C',
-    chakraCost: 16,
-    requires: { disciplineId: 'fuinjutsu', altDisciplineId: 'barrier', level: 1 },
-    seals: ['Tora', 'Mi', 'Inu'],
-    description: 'Sealing ink erupts into a shimmering defensive barrier (-35% incoming damage for 2 rounds).',
-    effect: { wardRounds: 2 },
-  },
-  {
-    id: 'kuchiyose',
-    name: 'Kuchiyose no Jutsu',
-    category: 'summoning',
-    style: 'support',
-    role: 'summon',
-    rank: 'B',
-    chakraCost: 24,
-    requires: { disciplineId: 'summoning', level: 1, requiresContractOrDiscipline: true },
-    seals: ['I', 'Inu', 'Tori', 'Saru', 'Hitsuji'],
-    description: 'Summons your contracted beast ally (or frontier scout summon) for specialized battlefield support.',
-    effect: { power: 1.2 },
+    id: 'shikyaku',
+    name: 'Shikyaku (Four Legs Mode)',
+    slot: 'body',
+    upkeepCp: 3,
+    powerBonus: 10,
+    speedBonus: 1,
+    dodgeBonus: 0.12,
+    requires: { clanId: 'inuzuka', hidenId: 'hiden_inuzuka_gatsuga' },
+    description: 'Feral pack-hunt stance (+10 Power, +1 Speed, +12% Evade).',
   },
 ];
+
+export const MODE_MAP: Record<ModeId, ModeDefinition> = Object.fromEntries(
+  MODE_DB.map((m) => [m.id, m]),
+) as Record<ModeId, ModeDefinition>;
+
+export const JUTSU_DB: readonly JutsuDefinition[] = [...JUTSU_CORE, ...JUTSU_CLANS];
 
 export const JUTSU_MAP: Record<string, JutsuDefinition> = Object.fromEntries(
   JUTSU_DB.map((j) => [j.id, j]),
 );
 
-const ELEMENTAL_CLASH_DISCS = new Set([
-  'fire_release',
-  'wind_release',
-  'lightning_release',
-  'earth_release',
-  'water_release',
-]);
+const BLOODLINE_STAGE_ORDER: Record<BloodlineStage, number> = {
+  latent: 0,
+  awakened: 1,
+  ctrl1: 2,
+  ctrl2: 3,
+  mastered: 4,
+};
 
 export function getJutsuMasteryInfo(uses: number): JutsuMasteryInfo {
   const safeUses = Math.max(0, Math.floor(uses));
@@ -601,9 +344,27 @@ export function getJutsuBasePower(jutsu: JutsuDefinition): number {
 }
 
 export function meetsJutsuRequirements(state: GameState, req: JutsuRequirements): boolean {
+  if (req.clanId && state.clanId !== req.clanId) {
+    return false;
+  }
+  if (req.hidenId) {
+    const unlocked = state.clanHeritage?.unlockedHiden ?? [];
+    if (!unlocked.includes(req.hidenId)) return false;
+  }
+  if (req.mangekyoArtId) {
+    const arts = state.bloodline?.mangekyoArts ?? [];
+    if (!state.bloodline?.mangekyoAwakened || !arts.includes(req.mangekyoArtId)) {
+      return false;
+    }
+  }
   if (req.bloodlineId) {
     if (!state.bloodline || state.bloodline.id !== req.bloodlineId || state.bloodline.stage === 'latent') {
       return false;
+    }
+    if (req.minBloodlineStage) {
+      if (BLOODLINE_STAGE_ORDER[state.bloodline.stage] < BLOODLINE_STAGE_ORDER[req.minBloodlineStage]) {
+        return false;
+      }
     }
   }
   if (req.requiresContractOrDiscipline) {
@@ -620,62 +381,54 @@ export function meetsJutsuRequirements(state: GameState, req: JutsuRequirements)
   return true;
 }
 
+export function getAvailableModes(state: GameState): ModeDefinition[] {
+  return MODE_DB.filter((m) => meetsJutsuRequirements(state, m.requires));
+}
+
 /**
- * Returns every individual jutsu currently known by the player (Discovery stage),
- * plus any non-elemental Lv4 discipline Secret Art or awakened Bloodline Secret Release clash art.
+ * Returns every individual jutsu currently known by the player from JUTSU_DB
+ * plus any Sharingan-copied techniques recorded in `state.discoveredJutsu`.
+ * Generic synthetic `secret_art_*` and `<Bloodline> Secret Release` fallbacks are removed.
  */
 export function getKnownJutsu(state: GameState): JutsuDefinition[] {
-  const list: JutsuDefinition[] = JUTSU_DB.filter((j) => meetsJutsuRequirements(state, j.requires));
+  const seen = new Set<string>();
+  const list: JutsuDefinition[] = [];
 
-  // Add Lv4 Secret Art clash techniques for non-elemental disciplines that define a secretArtName
-  for (const d of state.disciplines) {
-    if (d.level < 4 || ELEMENTAL_CLASH_DISCS.has(d.id)) continue;
-    const def = DISCIPLINE_MAP[d.id];
-    if (!def?.secretArtName) continue;
-    // Skip kenjutsu Lv4 if mikazuki_no_mai is already known as an A-rank pierce jutsu, or add clash variant
-    if (d.id === 'kenjutsu') continue;
-    list.push({
-      id: `secret_art_${d.id}`,
-      name: def.secretArtName,
-      category:
-        def.branch === 'taijutsu'
-          ? 'taijutsu'
-          : def.branch === 'genjutsu'
-            ? 'genjutsu'
-            : d.id === 'medical'
-              ? 'medical'
-              : d.id === 'fuinjutsu'
-                ? 'fuinjutsu'
-                : 'ninjutsu',
-      style: def.branch === 'taijutsu' ? 'taijutsu' : def.branch === 'genjutsu' ? 'genjutsu' : 'ninjutsu',
-      role: 'clash',
-      element: def.element ?? state.element,
-      rank: 'S',
-      chakraCost: 36,
-      requires: { disciplineId: d.id, level: 4 },
-      seals: ['Tora', 'Mi', 'Hitsuji'],
-      description: `S-Rank Secret Art of ${def.name}, capable of triggering and overpowering an Ultimate Jutsu Clash.`,
-      effect: { power: 1.8 },
-    });
+  for (const j of JUTSU_DB) {
+    if (meetsJutsuRequirements(state, j.requires)) {
+      seen.add(j.id);
+      list.push(j);
+    }
   }
 
-  // Add Bloodline Secret Release clash jutsu when Kekkei Genkai is awakened (stage !== 'latent')
-  if (state.bloodline && state.bloodline.stage !== 'latent') {
-    const bDef = BLOODLINE_MAP[state.bloodline.id];
-    list.push({
-      id: `bloodline_secret_${state.bloodline.id}`,
-      name: `${bDef?.name ?? 'Bloodline'} Secret Release`,
-      category: 'ninjutsu',
-      style: 'ninjutsu',
-      role: 'clash',
-      element: state.element,
-      rank: state.bloodline.grade >= 4 ? 'S' : 'A',
-      chakraCost: 30,
-      requires: { bloodlineId: state.bloodline.id },
-      seals: ['Mi', 'Tora'],
-      description: `Awakened ${bDef?.name ?? 'Kekkei Genkai'} trump technique capable of contesting an enemy Ultimate.`,
-      effect: { power: 1.55 + state.bloodline.grade * 0.06 },
-    });
+  // Unlock real jutsu directly from ClanHidenArt.jutsuIds when a Clan Hiden Art is unlocked
+  if (state.clanId && state.clanHeritage?.unlockedHiden.length) {
+    const clan = CLAN_MAP[state.clanId];
+    if (clan) {
+      for (const art of clan.hidenArts) {
+        if (!state.clanHeritage.unlockedHiden.includes(art.id)) continue;
+        for (const jId of art.jutsuIds) {
+          if (seen.has(jId)) continue;
+          const def = JUTSU_MAP[jId];
+          if (def) {
+            seen.add(jId);
+            list.push(def);
+          }
+        }
+      }
+    }
+  }
+
+  // Sharingan Copy pipeline: allow discovered non-hiden, non-bloodline techniques
+  if (state.discoveredJutsu && state.discoveredJutsu.length > 0) {
+    for (const id of state.discoveredJutsu) {
+      if (seen.has(id)) continue;
+      const def = JUTSU_MAP[id];
+      if (!def) continue;
+      if (def.hiden || def.forbidden || def.requires.bloodlineId || def.requires.clanId) continue;
+      seen.add(id);
+      list.push(def);
+    }
   }
 
   return list;
@@ -686,21 +439,17 @@ export interface LockedNextJutsu {
   requirementLabel: string;
 }
 
-/**
- * Returns the immediate next-tier locked jutsu for disciplines the player already owns,
- * so the battle menu shows clear training goals without cluttering with unrelated trees.
- */
 export function getNextTierLockedJutsu(state: GameState): LockedNextJutsu[] {
   const locked: LockedNextJutsu[] = [];
   const ownedMap = new Map(state.disciplines.map((d) => [d.id, d.level]));
 
   for (const j of JUTSU_DB) {
     if (meetsJutsuRequirements(state, j.requires)) continue;
+    if (j.requires.clanId && state.clanId !== j.requires.clanId) continue;
     const discId = j.requires.disciplineId;
     if (!discId || !j.requires.level) continue;
     const ownedLv = ownedMap.get(discId);
     if (!ownedLv) continue;
-    // Show the very next unlockable tier (or Lv3/4 when at Lv2/3)
     const nextTierAllowed = ownedLv + 1;
     if (j.requires.level === nextTierAllowed || (j.requires.level === 4 && ownedLv === 3)) {
       const def = DISCIPLINE_MAP[discId];
@@ -712,6 +461,95 @@ export function getNextTierLockedJutsu(state: GameState): LockedNextJutsu[] {
   }
 
   return locked;
+}
+
+const STATUS_SHORT_LABELS: Record<StatusId, string> = {
+  burn: 'BURN',
+  shock: 'SHOCK',
+  bind: 'BIND',
+  genjutsu: 'GENJUTSU',
+  drain: 'DRAIN',
+  tenketsu_seal: 'SEAL',
+  bleed: 'BLEED',
+  blind: 'BLIND',
+  slow: 'SLOW',
+  fear: 'FEAR',
+  poison: 'POISON',
+};
+
+const SELF_SHORT_LABELS: Record<SelfStateId, string> = {
+  guard: 'GUARD',
+  wall: 'WALL',
+  evade: 'EVADE',
+  reflect: 'REFLECT',
+  intangible: 'PHASE',
+  field: 'FIELD',
+};
+
+export interface JutsuEffectChip {
+  label: string;
+  tone: 'neutral' | 'fast' | 'pierce' | 'aoe' | 'status' | 'def' | 'cost' | 'warn';
+}
+
+/**
+ * Auto-generates compact combat clarity chips for any jutsu button in BattleDialog.
+ */
+export function formatJutsuChips(
+  jutsu: JutsuDefinition,
+  battle?: ActiveBattleState | null,
+): JutsuEffectChip[] {
+  const chips: JutsuEffectChip[] = [];
+  const eff = jutsu.effect;
+
+  if ((eff.speed ?? 0) >= 2) chips.push({ label: 'BLITZ', tone: 'fast' });
+  else if ((eff.speed ?? 0) === 1) chips.push({ label: 'FAST', tone: 'fast' });
+  else if ((eff.speed ?? 0) <= -1) chips.push({ label: 'SLOW', tone: 'warn' });
+
+  if (eff.pierce || eff.pierceWall) chips.push({ label: 'PIERCE', tone: 'pierce' });
+  if (eff.aoe) chips.push({ label: 'AOE', tone: 'aoe' });
+  if (eff.hits && eff.hits > 1) chips.push({ label: `${eff.hits} HITS`, tone: 'neutral' });
+
+  if (eff.onHit) {
+    for (const st of eff.onHit) {
+      chips.push({ label: `${STATUS_SHORT_LABELS[st.status]} ${st.rounds}`, tone: 'status' });
+    }
+  }
+
+  if (eff.self) {
+    for (const s of eff.self) {
+      const valNote = s.state === 'wall' && s.value ? ` ${s.value}` : ` ${s.rounds}`;
+      chips.push({ label: `${SELF_SHORT_LABELS[s.state]}${valNote}`, tone: 'def' });
+    }
+  }
+
+  if (eff.heal) chips.push({ label: `HEAL ${eff.heal}`, tone: 'def' });
+  if (eff.cpDrain) chips.push({ label: `-${eff.cpDrain} ENEMY CP`, tone: 'status' });
+  if (eff.counters && eff.counters.length > 0) {
+    chips.push({ label: `BREAKS ${eff.counters[0].toUpperCase()}`, tone: 'def' });
+  }
+  if (eff.costs?.hp) chips.push({ label: `HP -${eff.costs.hp}`, tone: 'cost' });
+  if (eff.costs?.usesPerBattle) {
+    const used = battle?.usesThisBattle?.[jutsu.id] ?? 0;
+    chips.push({
+      label: `${Math.max(0, eff.costs.usesPerBattle - used)}/${eff.costs.usesPerBattle} USE`,
+      tone: 'warn',
+    });
+  }
+  if (eff.setup?.requires && eff.setup.requires.length > 0) {
+    for (const req of eff.setup.requires) {
+      const met = Boolean(battle?.setupFlags?.[req]);
+      chips.push({
+        label: met ? `${req.replace('_', ' ').toUpperCase()} READY` : `NEEDS ${req.replace('_', ' ').toUpperCase()}`,
+        tone: met ? 'def' : 'warn',
+      });
+    }
+  }
+  if (jutsu.effect.tags?.includes('shadow') && battle?.startedInPhase === 'night' && !battle?.setupFlags?.prev_fire) {
+    chips.push({ label: 'NIGHT -20%', tone: 'warn' });
+  }
+  if (jutsu.forbidden) chips.push({ label: 'FORBIDDEN', tone: 'cost' });
+
+  return chips;
 }
 
 export function formatHandSeals(seals: readonly string[]): string {
