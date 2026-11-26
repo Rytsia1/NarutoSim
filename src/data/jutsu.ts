@@ -2,6 +2,7 @@ import { CLAN_MAP } from './clans';
 import { DISCIPLINE_MAP } from './powers';
 import { JUTSU_CLANS } from './jutsu-clans';
 import { JUTSU_CORE } from './jutsu-core';
+import { JUTSU_FORBIDDEN } from './jutsu-forbidden';
 import type {
   ActiveBattleState,
   BloodlineStage,
@@ -293,7 +294,7 @@ export const MODE_MAP: Record<ModeId, ModeDefinition> = Object.fromEntries(
   MODE_DB.map((m) => [m.id, m]),
 ) as Record<ModeId, ModeDefinition>;
 
-export const JUTSU_DB: readonly JutsuDefinition[] = [...JUTSU_CORE, ...JUTSU_CLANS];
+export const JUTSU_DB: readonly JutsuDefinition[] = [...JUTSU_CORE, ...JUTSU_CLANS, ...JUTSU_FORBIDDEN];
 
 export const JUTSU_MAP: Record<string, JutsuDefinition> = Object.fromEntries(
   JUTSU_DB.map((j) => [j.id, j]),
@@ -352,9 +353,12 @@ export function meetsJutsuRequirements(state: GameState, req: JutsuRequirements)
     if (!unlocked.includes(req.hidenId)) return false;
   }
   if (req.mangekyoArtId) {
-    const arts = state.bloodline?.mangekyoArts ?? [];
-    if (!state.bloodline?.mangekyoAwakened || !arts.includes(req.mangekyoArtId)) {
-      return false;
+    if (!state.bloodline?.mangekyoAwakened) return false;
+    if (req.mangekyoArtId === 'susanoo') {
+      if (state.bloodline.stage !== 'mastered') return false;
+    } else {
+      const arts = state.bloodline.mangekyoArts ?? [];
+      if (!arts.includes(req.mangekyoArtId)) return false;
     }
   }
   if (req.bloodlineId) {
@@ -528,6 +532,9 @@ export function formatJutsuChips(
     chips.push({ label: `BREAKS ${eff.counters[0].toUpperCase()}`, tone: 'def' });
   }
   if (eff.costs?.hp) chips.push({ label: `HP -${eff.costs.hp}`, tone: 'cost' });
+  if (eff.costs?.eyeStrain) chips.push({ label: `EYE +${eff.costs.eyeStrain}`, tone: 'cost' });
+  if (eff.tags?.includes('gate8')) chips.push({ label: 'LETHAL RISK', tone: 'cost' });
+  if (eff.tags?.includes('reaper_death_seal')) chips.push({ label: 'MUTUAL DEATH', tone: 'cost' });
   if (eff.costs?.usesPerBattle) {
     const used = battle?.usesThisBattle?.[jutsu.id] ?? 0;
     chips.push({

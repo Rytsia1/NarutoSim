@@ -285,6 +285,9 @@ export function canToggleBattleMode(
   if (battle.playerStatus?.tenketsu_seal) {
     return { allowed: false, isActive: false, reason: 'Blocked by Tenketsu Seal' };
   }
+  if (def.slot === 'dojutsu' && state.bloodline?.blinded && !state.bloodline?.eternalMangekyo) {
+    return { allowed: false, isActive: false, reason: 'Blinded by Mangekyo Strain' };
+  }
   const cd = battle.modeCooldowns?.[modeId] ?? 0;
   if (cd > 0) {
     return { allowed: false, isActive: false, reason: `Cooldown (${cd}r)` };
@@ -363,6 +366,13 @@ export function isJutsuBlockedByBattleState(
   }
   if (battle.playerStatus?.tenketsu_seal && jutsu.chakraCost > 0 && jutsu.category !== 'taijutsu' && jutsu.category !== 'kenjutsu') {
     return 'Blocked by Tenketsu Seal';
+  }
+  if (
+    jutsu.effect.tags?.includes('mangekyo') &&
+    state.bloodline?.blinded &&
+    !state.bloodline?.eternalMangekyo
+  ) {
+    return 'Blinded by Mangekyo Strain (requires EMS)';
   }
   if (jutsu.effect.costs?.usesPerBattle) {
     const used = battle.usesThisBattle?.[jutsu.id] ?? 0;
@@ -713,6 +723,15 @@ export function computePlayerRoundPower(
     terms.push({ label: 'Low Chakra (-8)', val: 8 });
   }
 
+  if (state.bloodline && !state.bloodline.eternalMangekyo && (state.bloodline.eyeStrain ?? 0) >= 12) {
+    const blurPen = state.bloodline.blinded ? 12 : 6;
+    total -= blurPen;
+    terms.push({
+      label: state.bloodline.blinded ? `Mangekyo Blindness (-${blurPen})` : `Ocular Blur (-${blurPen})`,
+      val: blurPen,
+    });
+  }
+
   if (battle.enemyFieldRounds > 0 || battle.enemySelf?.field) {
     const pen = battle.enemySelf?.field?.value ?? 7;
     total -= pen;
@@ -784,7 +803,12 @@ export function pickAutoJutsu(state: GameState, rng?: SeededRng): string {
   const enemy = war.enemies.find((e) => e.id === battle.enemyId);
   const known = getKnownJutsu(state);
 
-  const usable = known.filter((j) => isJutsuBlockedByBattleState(state, war, battle, j) === null);
+  const usable = known.filter(
+    (j) =>
+      isJutsuBlockedByBattleState(state, war, battle, j) === null &&
+      !j.effect.tags?.includes('reaper_death_seal') &&
+      !j.effect.tags?.includes('gate8'),
+  );
   if (usable.length === 0) return 'jutsu:basic_strike';
 
   // 1. Reactive Counter: break active Genjutsu immediately with Kai
@@ -901,17 +925,23 @@ export function pickAutoJutsu(state: GameState, rng?: SeededRng): string {
 }
 
 function pickBestOffensiveJutsuForResolve(state: GameState, war: WarState): JutsuDefinition {
+  const battle = war.activeBattle!;
   const known = getKnownJutsu(state);
-  const clash = known.find((j) => j.role === 'clash' && war.cp >= getEffectiveJutsuCost(state, j, war));
+  const safeUsable = known.filter(
+    (j) =>
+      isJutsuBlockedByBattleState(state, war, battle, j) === null &&
+      !j.effect.tags?.includes('reaper_death_seal') &&
+      !j.effect.tags?.includes('gate8'),
+  );
+  const clash = safeUsable.find((j) => j.role === 'clash');
   if (clash) return clash;
-  const attacks = known
+  const attacks = safeUsable
     .filter(
       (j) =>
-        (j.role === 'damage' || j.role === 'multi_hit' || j.role === 'pierce' || j.role === 'control') &&
-        war.cp >= getEffectiveJutsuCost(state, j, war),
+        j.role === 'damage' || j.role === 'multi_hit' || j.role === 'pierce' || j.role === 'control',
     )
     .sort((a, b) => getJutsuBasePower(b) - getJutsuBasePower(a));
-  return attacks[0] ?? known[0];
+  return attacks[0] ?? safeUsable[0] ?? known[0];
 }
 
 export function buildBattleRoundDecision(state: GameState): PendingDecision {
@@ -1425,13 +1455,25 @@ export function resolveBattleRound(
   const mastery = getJutsuMasteryInfo(usesBefore);
   state.jutsuMastery[chosenJutsu.id] = usesBefore + 1;
 
-  // Track per-battle use limits and extra costs (HP / strain)
+  // Track per-battle use limits and extra costs (HP / strain / Mangekyo eyeStrain / Gate 8 flag)
   battle.usesThisBattle![chosenJutsu.id] = (battle.usesThisBattle![chosenJutsu.id] ?? 0) + 1;
   if (chosenJutsu.effect.costs?.hp) {
     war.hp = Math.max(1, war.hp - chosenJutsu.effect.costs.hp);
   }
   if (chosenJutsu.effect.costs?.strain) {
     state.bodyStrain += chosenJutsu.effect.costs.strain;
+  }
+  let eyeStrainNote = '';
+  if (chosenJutsu.effect.costs?.eyeStrain && state.bloodline && !state.bloodline.eternalMangekyo) {
+    state.bloodline.eyeStrain = (state.bloodline.eyeStrain ?? 0) + chosenJutsu.effect.costs.eyeStrain;
+    if (state.bloodline.eyeStrain >= 20 && !state.bloodline.blinded) {
+      state.bloodline.blinded = true;
+      battle.playerDojutsuMode = null;
+      eyeStrainNote = ' Darkness closes in: Mangekyo strain has permanently blinded your eyes!';
+    }
+  }
+  if (chosenJutsu.effect.tags?.includes('gate8')) {
+    battle.gate8Used = true;
   }
 
   // Pay unified Chakra cost & record setup flags
@@ -1532,6 +1574,11 @@ export function resolveBattleRound(
       const rounds = chosenJutsu.effect.wardRounds ?? chosenJutsu.effect.self?.[0]?.rounds ?? 2;
       battle.playerWardRounds = Math.max(battle.playerWardRounds, rounds);
       preCounters.ward = false;
+      if (chosenJutsu.effect.heal) {
+        const healAmt = Math.round(chosenJutsu.effect.heal * mastery.powerMult);
+        war.hp = clamp(war.hp + healAmt, 0, 100);
+        cleansedNotes.push(`rewrote wounds (+${healAmt} HP)`);
+      }
       if (chosenJutsu.effect.tags?.includes('intel_reveal')) {
         enemy.intel = 100;
         enemy.skillsRevealed = true;
@@ -1539,7 +1586,7 @@ export function resolveBattleRound(
       }
       enemyChip = Math.round(enemyChip * 0.6);
       whyLine = `Key Factor: ${chosenJutsu.id === 'kai' ? 'Chakra surge disrupted hostile genjutsu & raised guard' : `Defensive wall/ward cuts incoming damage for ${rounds} rounds`} (-${effCost} CP)${cleansedNotes.length > 0 ? ` · ${cleansedNotes.join(', ')}` : ''}`;
-      narrative = `${sealPrefix}${cleansedNotes.length > 0 ? `You ${cleansedNotes.join(' and ')} as a` : 'A'} fortified barrier snaps up, blunting the enemy follow-up.`;
+      narrative = `${sealPrefix}${cleansedNotes.length > 0 ? `You ${cleansedNotes.join(' and ')} as a` : 'A'} fortified barrier snaps up, blunting the enemy follow-up.${eyeStrainNote}`;
     } else if (chosenJutsu.role === 'evasion') {
       battle.playerCloneEvade = true;
       if (chosenJutsu.id === 'kage_bunshin') {
@@ -1622,6 +1669,29 @@ export function resolveBattleRound(
 
   // Apply any self-states on offensive jutsu (e.g., Chidori Nagashi guard, Hiraishin evade)
   applyPlayerSelfStates(chosenJutsu);
+
+  // === REAPER DEATH SEAL (Shiki Fujin mutual-kill kinjutsu) ===
+  if (chosenJutsu.effect.tags?.includes('reaper_death_seal')) {
+    const sealedDmg = enemy.hp;
+    enemy.hp = 0;
+    enemy.alive = false;
+    war.hp = 0;
+    battle.usedDesperation = true;
+    const summary: BattleRoundSummary = {
+      round: battle.round,
+      playerAction: chosenJutsu.name,
+      jutsuName: chosenJutsu.name,
+      seals: [...chosenJutsu.seals],
+      enemyAction: 'Soul dragged into the Shinigami',
+      outcome: 'clash_win',
+      playerDmgTaken: 100,
+      enemyDmgTaken: sealedDmg,
+      whyLine: 'Key Factor: Shiki Fujin sealed the enemy soul at the price of your own life',
+      narrative: `${sealPrefix}The pale Shinigami reaches through your chest and tears ${enemy.name} soul away forever, claiming yours in the same breath.`,
+    };
+    battle.rounds.push(summary);
+    return { status: 'player_dead', summary };
+  }
 
   // Check if enemy is Sealed / Bound / Genjutsu-locked from firing Ultimate
   const enemyBlockedFromUlt = Boolean(
@@ -1884,9 +1954,9 @@ export function resolveBattleRound(
 
   const byakuganBlindSpotBonus =
     battle.round === 1 &&
-    state.bloodline?.id === 'byakugan' &&
-    state.bloodline.stage !== 'mastered' &&
-    skillSum(enemy.skills, 'stealth') >= 4
+      state.bloodline?.id === 'byakugan' &&
+      state.bloodline.stage !== 'mastered' &&
+      skillSum(enemy.skills, 'stealth') >= 4
       ? 4
       : 0;
   const pRoll = pBase + speedInterruptBonus + (enemyBoundThisRound ? 22 : 0) + rng.int(-14, 14);
@@ -2064,7 +2134,7 @@ export function resolveBattleRound(
 
         whyLine = `Key Factor: ${stanceReason} · ${topFactor}`;
         const suffix = effectNotes.length > 0 ? ` (${effectNotes.join(', ')})!` : '!';
-        narrative = `${boostTag}${sealPrefix}Breaks their guard for ${eTaken} damage${suffix}${bindBreakNote}`;
+        narrative = `${boostTag}${sealPrefix}Breaks their guard for ${eTaken} damage${suffix}${bindBreakNote}${eyeStrainNote}`;
       }
     } else {
       // Enemy wins the exchange: apply Player Self-States (Intangible, Evade, Reflect, Wall, Guard, Modes)
@@ -2560,6 +2630,29 @@ function advanceRoundCounter(
     return { status: 'dawn_break', summary };
   }
   return { status: 'continue', summary };
+}
+
+/**
+ * Post-battle consequence for opening the Eighth Gate of Death (Sekizo / Yagai):
+ * 70% fatal death, 30% survival with permanent career-ending disability.
+ */
+export function resolveGate8Aftermath(
+  state: GameState,
+  rng: SeededRng,
+): { died: boolean; note: string } {
+  if (rng.chance(0.7)) {
+    return {
+      died: true,
+      note: 'As the crimson vapor fades, your heart burns to ash from the Eighth Gate of Death.',
+    };
+  }
+  state.permanentDisability = true;
+  state.stats.health = Math.min(state.stats.health, 25);
+  state.bodyStrain += 25;
+  return {
+    died: false,
+    note: 'Against impossible odds you survive the Eighth Gate, but shattered bones leave you permanently disabled and retired from active combat.',
+  };
 }
 
 /**

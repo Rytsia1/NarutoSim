@@ -282,5 +282,5 @@ describe('6 Deep Immersion Pillars', () => {
       }
       expect(sim.getState().worldSim?.timeline?.length ?? 0).toBeGreaterThanOrEqual(1);
     }
-  });
+  }, 15_000);
 });

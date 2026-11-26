@@ -1,15 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { formatJutsuChips, JUTSU_DB, JUTSU_MAP, ZODIAC_SEAL_KANJI } from '../src/data/jutsu';
+import { formatJutsuChips, getKnownJutsu, JUTSU_DB, JUTSU_MAP, ZODIAC_SEAL_KANJI } from '../src/data/jutsu';
+import { initClanHeritage } from '../src/sim/clan-heritage';
 import {
   buildBattleRoundDecision,
+  canToggleBattleMode,
   computeEnemyRoundPower,
   computePlayerRoundPower,
   initBattleV2State,
   isJutsuBlockedByBattleState,
   pickAutoJutsu,
   resolveBattleRound,
+  resolveGate8Aftermath,
 } from '../src/sim/combat';
 import { createNewLife } from '../src/sim/life';
+import { applyEternalMangekyo, awakenMangekyoSharingan, tryRareDojutsuTransplant } from '../src/sim/powers';
 import { SeededRng } from '../src/sim/rng';
 import type { ActiveBattleState, GameState, WarCompetitor } from '../src/sim/types';
 import { initWarState } from '../src/sim/war';
@@ -29,6 +33,7 @@ function makeTestBattleState(opts?: {
   const state = createNewLife(2026);
   state.rank = opts?.rank ?? 'jonin';
   state.clanId = opts?.clanId ?? 'uchiha';
+  state.clanHeritage = initClanHeritage(state, new SeededRng(2026));
   state.stats.chakra = opts?.lowStats ? 25 : 78;
   state.stats.intel = opts?.lowStats ? 25 : 72;
   state.stats.will = opts?.will ?? (opts?.lowStats ? 35 : 50);
@@ -114,8 +119,8 @@ function makeTestBattleState(opts?: {
 }
 
 describe('Effect Model v2 & Wave 1 Jutsu Catalog (Section 1 & 4.2)', () => {
-  it('validates Wave 1 + Wave 2 JUTSU_DB integrity: unique IDs, Narutopedia refs, valid zodiac seals, zero em-dashes', () => {
-    expect(JUTSU_DB.length).toBeGreaterThanOrEqual(145);
+  it('validates Wave 1 + Wave 2 + Wave 3 JUTSU_DB integrity: unique IDs, Narutopedia refs, valid zodiac seals, zero em-dashes', () => {
+    expect(JUTSU_DB.length).toBeGreaterThanOrEqual(165);
     const ids = new Set<string>();
     const validSeals = new Set(Object.keys(ZODIAC_SEAL_KANJI));
 
@@ -379,5 +384,96 @@ describe('Effect Model v2 & Wave 1 Jutsu Catalog (Section 1 & 4.2)', () => {
       }
     }
     expect(sawShockNote).toBe(true);
+  });
+
+  it('enforces Wave 3 mechanics: Kirin prev_fire setup, Mangekyo Eye Strain/Blindness/EMS, Shiki Fujin mutual kill, Gate 8 aftermath, and rare Transplant', () => {
+    // 1. Kirin requires prev_fire setup flag
+    const kirinCase = makeTestBattleState({
+      disciplines: [
+        { id: 'lightning_release', level: 4 },
+        { id: 'fire_release', level: 2 },
+      ],
+      enemyRanks: [2.0, 2.0, 2.0, 2.0, 2.0],
+    });
+    expect(isJutsuBlockedByBattleState(kirinCase.state, kirinCase.state.war!, kirinCase.battle, JUTSU_MAP.kirin)).toContain('prev fire');
+    resolveBattleRound(kirinCase.state, 'jutsu:gokakyu', new SeededRng(7001));
+    expect(kirinCase.battle.setupFlags?.prev_fire).toBeGreaterThanOrEqual(1);
+    expect(isJutsuBlockedByBattleState(kirinCase.state, kirinCase.state.war!, kirinCase.battle, JUTSU_MAP.kirin)).toBeNull();
+
+    // 2. Mangekyo Sharingan awakening rolls 2 arts, Susanoo unlocks at mastered, eyeStrain >= 20 blinds, EMS cures
+    const msCase = makeTestBattleState({
+      clanId: 'uchiha',
+      bloodlineId: 'sharingan',
+      bloodlineStage: 'mastered',
+      enemyRanks: [2.5, 2.5, 2.5, 2.5, 2.5],
+      playerCp: 100,
+    });
+    const rolledArts = awakenMangekyoSharingan(msCase.state, new SeededRng(7002));
+    expect(rolledArts.length).toBe(2);
+    expect(rolledArts[0]).not.toBe(rolledArts[1]);
+    const knownMs = getKnownJutsu(msCase.state);
+    expect(knownMs.some((j) => j.id === rolledArts[0])).toBe(true);
+    expect(knownMs.some((j) => j.id === 'susanoo')).toBe(true);
+
+    // Push Eye Strain to 18, then cast Susanoo (+3 -> 21 >= 20 -> permanent blindness until EMS!)
+    msCase.state.bloodline!.eyeStrain = 18;
+    resolveBattleRound(msCase.state, 'jutsu:susanoo', new SeededRng(7003));
+    expect(msCase.state.bloodline!.blinded).toBe(true);
+    expect(canToggleBattleMode(msCase.state, msCase.state.war!, msCase.battle, 'sharingan').allowed).toBe(false);
+    expect(isJutsuBlockedByBattleState(msCase.state, msCase.state.war!, msCase.battle, JUTSU_MAP.susanoo)).toContain('Blinded');
+
+    // EMS cures blindness & prevents future eyeStrain
+    applyEternalMangekyo(msCase.state);
+    expect(msCase.state.bloodline!.blinded).toBe(false);
+    expect(msCase.state.bloodline!.eyeStrain).toBe(0);
+    msCase.state.war!.cp = 100;
+    msCase.enemy.hp = 100;
+    resolveBattleRound(msCase.state, 'jutsu:susanoo', new SeededRng(7004));
+    expect(msCase.state.bloodline!.eyeStrain).toBe(0);
+
+    // 3. Shiki Fujin mutual-kill kinjutsu
+    const sfCase = makeTestBattleState({
+      disciplines: [{ id: 'fuinjutsu', level: 4 }],
+      enemyRanks: [5.5, 5.5, 5.5, 5.5, 5.5],
+    });
+    const sfRes = resolveBattleRound(sfCase.state, 'jutsu:shiki_fujin', new SeededRng(7005));
+    expect(sfRes.status).toBe('player_dead');
+    expect(sfCase.enemy.hp).toBe(0);
+    expect(sfCase.state.war!.hp).toBe(0);
+
+    // 4. Eighth Gate sets gate8Used and distributes ~70% fatal / ~30% permanent disability
+    const g8Case = makeTestBattleState({
+      disciplines: [{ id: 'strong_fist', level: 4 }],
+      enemyRanks: [3.0, 3.0, 3.0, 3.0, 3.0],
+    });
+    resolveBattleRound(g8Case.state, 'jutsu:hachimon_gate8_sekizo', new SeededRng(7006));
+    expect(g8Case.battle.gate8Used).toBe(true);
+
+    let g8Deaths = 0;
+    let g8Disabled = 0;
+    for (let i = 0; i < 1000; i++) {
+      const st = createNewLife(8000 + i);
+      const out = resolveGate8Aftermath(st, new SeededRng(9000 + i));
+      if (out.died) g8Deaths++;
+      else if (st.permanentDisability) g8Disabled++;
+    }
+    expect(g8Deaths / 1000).toBeGreaterThan(0.63);
+    expect(g8Deaths / 1000).toBeLessThan(0.77);
+    expect(g8Deaths + g8Disabled).toBe(1000);
+
+    // 5. Rare non-clan Dojutsu Transplant (< 1% rate) sets transplanted: true
+    let transplants = 0;
+    for (let i = 0; i < 2000; i++) {
+      const st = createNewLife(12000 + i);
+      st.bloodline = null;
+      const res = tryRareDojutsuTransplant(st, new SeededRng(15000 + i));
+      if (res) {
+        transplants++;
+        const updatedBloodline = st.bloodline as GameState['bloodline'];
+        expect(updatedBloodline?.transplanted).toBe(true);
+      }
+    }
+    expect(transplants).toBeGreaterThan(0);
+    expect(transplants / 2000).toBeLessThan(0.02);
   });
 });

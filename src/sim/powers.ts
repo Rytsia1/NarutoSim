@@ -219,6 +219,54 @@ export function pickStartingDiscipline(
   };
 }
 
+export const MANGEKYO_ART_POOL = ['amaterasu', 'tsukuyomi', 'kamui', 'kotoamatsukami'] as const;
+
+export function awakenMangekyoSharingan(state: GameState, rng: SeededRng): string[] {
+  const b = state.bloodline;
+  if (!b || b.id !== 'sharingan' || b.stage === 'latent') return [];
+  if (b.mangekyoAwakened && b.mangekyoArts && b.mangekyoArts.length >= 2) {
+    return b.mangekyoArts;
+  }
+  const pool = [...MANGEKYO_ART_POOL];
+  const firstIdx = Math.floor(rng.next() * pool.length);
+  const first = pool.splice(firstIdx, 1)[0];
+  const secondIdx = Math.floor(rng.next() * pool.length);
+  const second = pool.splice(secondIdx, 1)[0];
+  b.mangekyoAwakened = true;
+  b.mangekyoArts = [first, second];
+  b.eyeStrain = b.eyeStrain ?? 0;
+  return b.mangekyoArts;
+}
+
+export function applyEternalMangekyo(state: GameState): boolean {
+  const b = state.bloodline;
+  if (!b || b.id !== 'sharingan' || !b.mangekyoAwakened) return false;
+  b.eternalMangekyo = true;
+  b.eyeStrain = 0;
+  b.blinded = false;
+  return true;
+}
+
+/**
+ * Extremely rare (< 1%) non-clan battlefield Dojutsu Transplant opportunity.
+ * Transplanted eyes permanently suffer 2x CP upkeep tax in combat.
+ */
+export function tryRareDojutsuTransplant(state: GameState, rng: SeededRng): 'sharingan' | 'byakugan' | null {
+  if (state.bloodline) return null;
+  if (!rng.chance(0.008)) return null;
+  const chosen: 'sharingan' | 'byakugan' = rng.chance(0.55) ? 'sharingan' : 'byakugan';
+  state.bloodline = {
+    id: chosen,
+    grade: 2,
+    stage: 'awakened',
+    lastEventAge: state.age,
+    declined: false,
+    eyeStrain: 0,
+    transplanted: true,
+  };
+  return chosen;
+}
+
 /**
  * Records a jutsu discovered via Sharingan copying or allied demonstration.
  * Non-bloodline, non-hiden elemental/ninjutsu techniques are eligible.
@@ -335,6 +383,74 @@ export function tryBloodlineEvent(
       };
     }
     return null;
+  }
+
+  // Mangekyo Sharingan Awakening (Uchiha with Sharingan >= ctrl1 facing profound trauma)
+  if (
+    b.id === 'sharingan' &&
+    !b.mangekyoAwakened &&
+    (b.stage === 'ctrl1' || b.stage === 'ctrl2' || b.stage === 'mastered') &&
+    (parentDiedThisYear || (state.clanHeritage?.traumaCatalyst ?? 0) >= 65) &&
+    state.age - b.lastEventAge >= 1
+  ) {
+    if (parentDiedThisYear || r < 0.35) {
+      return {
+        id: `bl_ms_${state.age}`,
+        kind: 'bloodline_event',
+        eventId: 'mangekyo_awaken',
+        title: 'Mangekyo Sharingan Awakening',
+        body: 'Grief and shock tear through your ocular nerves. The three tomoe spin together into a forbidden Mangekyo pattern, unlocking two peerless ocular arts at the cost of progressive blindness.',
+        manual: true,
+        options: [
+          {
+            id: 'embrace_ms',
+            label: 'Accept the Mangekyo Sharingan and claim its forbidden sight',
+            statHints: ['Chakra', 'Will'],
+            autoEligible: true,
+          },
+          {
+            id: 'reject_ms',
+            label: 'Seal the memory away and keep your eyes unstrained',
+            statHints: ['Will'],
+            autoEligible: false,
+          },
+        ],
+      };
+    }
+  }
+
+  // Eternal Mangekyo Sharingan Transplant Event (when Mangekyo Eye Strain >= 14)
+  if (
+    b.id === 'sharingan' &&
+    b.mangekyoAwakened &&
+    !b.eternalMangekyo &&
+    (b.eyeStrain ?? 0) >= 14 &&
+    state.age - b.lastEventAge >= 1
+  ) {
+    if (r < 0.55) {
+      return {
+        id: `bl_ems_${state.age}`,
+        kind: 'bloodline_event',
+        eventId: 'ems_transplant',
+        title: 'Eternal Mangekyo: Ocular Transplant',
+        body: `Your vision dims toward permanent blindness (Eye Strain ${b.eyeStrain ?? 0}/20). Clan archives reveal a fallen Uchiha relative whose eyes match your bloodline resonance.`,
+        manual: true,
+        options: [
+          {
+            id: 'accept_ems',
+            label: 'Undergo the Eternal Mangekyo transplant (cures blindness, removes eye strain forever)',
+            statHints: ['Will'],
+            autoEligible: true,
+          },
+          {
+            id: 'decline_ems',
+            label: 'Refuse to take another clansman eyes and accept the twilight',
+            statHints: ['Bonds'],
+            autoEligible: false,
+          },
+        ],
+      };
+    }
   }
 
   if (b.stage !== 'latent' && b.stage !== 'mastered' && state.age <= 52 && state.age - b.lastEventAge >= 2) {

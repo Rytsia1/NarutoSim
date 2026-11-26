@@ -17,9 +17,11 @@ import {
   buildBattleRoundDecision,
   initBattleV2State,
   resolveBattleRound,
+  resolveGate8Aftermath,
   resolveNpcSkirmish,
   skillSum,
 } from './combat';
+import { tryRareDojutsuTransplant } from './powers';
 import {
   advanceCrisisPhase,
   buildConvictionBeatDecision,
@@ -1826,6 +1828,19 @@ export function concludeWar(
 ): void {
   const war = state.war!;
 
+  // Extremely rare (< 1%) non-clan battlefield Dojutsu Transplant opportunity on victory
+  if (outcome === 'victor' && !state.bloodline) {
+    const transplanted = tryRareDojutsuTransplant(state, rng);
+    if (transplanted) {
+      pushLog(
+        state,
+        'milestone',
+        `A field medic salvages a rare ${transplanted === 'sharingan' ? 'Sharingan' : 'Byakugan'} from the battlefield in an emergency transplant! Non-clan physiology doubles its chakra upkeep permanently.`,
+        { title: 'Rare Ocular Transplant' },
+      );
+    }
+  }
+
   // Trigger hidden Extreme Conviction Route on non-Crisis victory when Leaning >= 8!
   if (!skipConviction && (outcome === 'victor' || outcome === 'shared') && canTriggerConvictionRoute(state, war)) {
     state.pending = startConvictionRoute(state, war, outcome);
@@ -2914,6 +2929,31 @@ export function handleWarDecision(
 
     // Consume one-battle prep bonus once the fight ends (win/retreat/dawn break)
     war.nextBattleBonus = 0;
+
+    // Gate 8 Post-Battle Consequence: 70% fatal death / 30% permanent career-ending disability
+    if (battle.gate8Used) {
+      const g8 = resolveGate8Aftermath(state, rng);
+      pushLog(state, g8.died ? 'danger' : 'crisis', g8.note, { title: 'Aftermath of the Eighth Gate' });
+      if (g8.died) {
+        const chronicle = generateWarChronicle(state, war, 'dead');
+        syncFallenFromWar(state, war);
+        state.warHistory.push({
+          warNumber: war.warNumber,
+          ageAtStart: state.age,
+          rankAtStart: state.rank,
+          isCrisisWar: war.isCrisisWar,
+          crisisId: war.crisisId,
+          outcome: 'dead',
+          title: chronicle.title,
+          fieldPromoted: false,
+          summary: 'Burned to ash after unleashing the Eighth Gate of Death.',
+          narrativeArcs: chronicle.arcs,
+        });
+        state.war = null;
+        killCharacter(state, 'burning out their life force with the Eighth Gate of Death');
+        return;
+      }
+    }
 
     if (battle.rewardTag === 'strategic_ridge') {
       if (status === 'player_won' || status === 'dawn_break') {

@@ -327,6 +327,18 @@ export function BattleDialog({
     playerMods.push(`▲ ${partner.name}: ${tier.label} (HP ${partner.hp})`);
   }
   if (battle.resolveBoostThisRound) playerMods.push('▲▲ Surpass Limits');
+  if (state.bloodline?.mangekyoAwakened || (state.bloodline?.eyeStrain ?? 0) > 0) {
+    if (state.bloodline?.eternalMangekyo) {
+      playerMods.push('▲▲ Eternal Mangekyo (0 Strain)');
+    } else if (state.bloodline?.blinded) {
+      playerMods.push('▼▼ Mangekyo BLINDED (Needs EMS)');
+    } else {
+      playerMods.push(`▼ Eye Strain ${state.bloodline?.eyeStrain ?? 0}/20`);
+    }
+  }
+  if (battle.gate8Used) {
+    playerMods.push('▼▼ Eighth Gate Opened (Fatal Aftermath)');
+  }
 
   const enemyMods: string[] = [`▲▲ ${TACTIC_LABELS[enemy.tactic]}`];
   if (battle.enemySelf && Object.keys(battle.enemySelf).length > 0) {

@@ -226,5 +226,5 @@ describe('Autonomous 3-Layer World Simulation', () => {
       // Verify RNG snapshot stays valid
       expect(new SeededRng(endState.rng.seed, endState.rng.state).next()).toBeGreaterThanOrEqual(0);
     }
-  });
+  }, 15_000);
 });

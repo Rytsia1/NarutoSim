@@ -30,6 +30,8 @@ import {
 } from './life/imperfect-life';
 import { computeAffinityWeights } from './partner';
 import {
+  applyEternalMangekyo,
+  awakenMangekyoSharingan,
   awardYearlyDisciplineXp,
   clamp,
   computeCombatProjection,
@@ -1236,8 +1238,8 @@ export function advanceYear(state: GameState): void {
     nextDecision = clanLegacyPending;
   }
 
-  // Priority 4: Recurring Shinobi War / Endgame Crisis Eruption!
-  if (!nextDecision && worldTick.triggerWar) {
+  // Priority 4: Recurring Shinobi War / Endgame Crisis Eruption (skip frontline draft if permanently disabled)
+  if (!nextDecision && worldTick.triggerWar && !state.permanentDisability) {
     if (worldTick.isCrisisWar) {
       state.world.crisisStage = 2;
     }
@@ -2330,6 +2332,49 @@ export function resolvePendingDecision(
       if (!b) break;
       const def = BLOODLINE_MAP[b.id];
       const nextStage = decision.meta?.nextStage as typeof b.stage;
+
+      if (decision.eventId === 'mangekyo_awaken') {
+        if (optionId === 'embrace_ms') {
+          const arts = awakenMangekyoSharingan(state, rng);
+          b.lastEventAge = state.age;
+          state.stats.chakra += 6;
+          state.stats.will += 4;
+          clampStats(state);
+          pushLog(
+            state,
+            'milestone',
+            `Your Sharingan mutates into the Mangekyo Sharingan, unlocking ${arts.join(' and ')}! Beware cumulative Eye Strain.`,
+            { title: 'Mangekyo Sharingan Awakened', deltas: diffStats(before, state.stats) },
+          );
+        } else {
+          b.lastEventAge = state.age;
+          state.stats.will += 3;
+          clampStats(state);
+          pushLog(state, 'normal', 'You lock the grief away and refuse the crimson mutation for now.');
+        }
+        break;
+      }
+
+      if (decision.eventId === 'ems_transplant') {
+        if (optionId === 'accept_ems') {
+          applyEternalMangekyo(state);
+          b.lastEventAge = state.age;
+          state.stats.will += 5;
+          clampStats(state);
+          pushLog(
+            state,
+            'milestone',
+            'Light returns permanently! Your Eternal Mangekyo Sharingan cures ocular blindness and removes all future Eye Strain.',
+            { title: 'Eternal Mangekyo Sharingan', deltas: diffStats(before, state.stats) },
+          );
+        } else {
+          b.lastEventAge = state.age;
+          state.stats.bonds += 4;
+          clampStats(state);
+          pushLog(state, 'normal', 'You refuse the transplant, choosing honor over eternal sight.');
+        }
+        break;
+      }
 
       if (decision.eventId === 'bloodline_awaken') {
         if (optionId === 'embrace') {
