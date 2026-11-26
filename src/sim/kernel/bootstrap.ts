@@ -1,6 +1,11 @@
 import { resolveAcademyEventDecision } from '../academy';
 import { resolveClanPoliticsDecision } from '../clan-heritage';
 import { clampStats, diffStats, pushLog, snapshotStats } from '../history/chronicle';
+import {
+  ensurePlayerLegacy,
+  resolveImperfectLifeDecision,
+  resolveNpcPleaDecision,
+} from '../life/imperfect-life';
 import { resolveProceduralMissionStage } from '../missions';
 import { resolvePoliticsDecision } from '../politics';
 import { clamp } from '../powers';
@@ -40,6 +45,14 @@ export function ensureKernelBootstrapped(
       if (state.war) {
         ensureWarClockDefaults(state.war);
       }
+    },
+  });
+
+  defaultMigrationRegistry.register({
+    id: 'player_legacy_defaults',
+    order: 30,
+    apply: (state) => {
+      ensurePlayerLegacy(state);
     },
   });
 
@@ -172,6 +185,42 @@ export function ensureKernelBootstrapped(
       title: outcome.title,
       deltas: chips,
       checks: checks.length > 0 ? checks : undefined,
+    });
+  });
+
+  defaultDecisionRouter.register('imperfect_life', ({ state, decision, optionId, rng }) => {
+    const before = snapshotStats(state);
+    const res = resolveImperfectLifeDecision(state, optionId, decision.meta, rng);
+    if (res.tensionDelta) {
+      state.world.tension = clamp(state.world.tension + res.tensionDelta, 5, 100);
+    }
+    clampStats(state);
+    if (res.killed || state.stats.health <= 0) {
+      onKill(state, res.deathCause ?? 'fatal wounds during a defining shinobi crisis');
+      return;
+    }
+    const checks: CheckResultChip[] = [];
+    if (res.checkLabel !== undefined && res.checkPassed !== undefined) {
+      checks.push({ label: res.checkLabel, passed: res.checkPassed });
+    }
+    const chips: StatDeltaChip[] = [...diffStats(before, state.stats)];
+    if (res.tensionDelta) {
+      chips.push({ stat: 'tension', label: 'World Tension', delta: res.tensionDelta });
+    }
+    pushLog(state, res.tone, res.text, {
+      title: res.title,
+      deltas: chips,
+      checks: checks.length > 0 ? checks : undefined,
+    });
+  });
+
+  defaultDecisionRouter.register('npc_plea', ({ state, decision, optionId }) => {
+    const before = snapshotStats(state);
+    const res = resolveNpcPleaDecision(state, optionId, decision.meta);
+    clampStats(state);
+    pushLog(state, res.tone, res.text, {
+      title: res.title,
+      deltas: diffStats(before, state.stats),
     });
   });
 }

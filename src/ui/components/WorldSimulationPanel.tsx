@@ -3,6 +3,12 @@ import { CLAN_MAP } from '../../data/clans';
 import { GOVERNANCE_ACTIONS, type GovernanceActionId } from '../../data/events-politics';
 import { t } from '../../data/i18n';
 import { GREAT_VILLAGES, VILLAGE_MAP } from '../../data/villages';
+import {
+  ensureVillagePopulation,
+  getVillageActiveShinobi,
+  getVillageTotalPopulation,
+  getWorldPopulationSummary,
+} from '../../sim/npc/lod-population';
 import { getPrimaryPersonalityTags, getScheduleLabel } from '../../sim/npc-sim';
 import { canAccessGovernance, canRunGovernanceAction } from '../../sim/politics';
 import { deriveRelArchetype, getRelVector } from '../../sim/relationships';
@@ -18,7 +24,7 @@ interface WorldSimulationPanelProps {
 }
 
 type SubView = 'timeline' | 'village' | 'world' | 'npcs';
-type NpcFilter = 'my_village' | 'leaders' | 'all_living' | 'missing_nin' | 'fallen';
+type NpcFilter = 'my_village' | 'l1_detailed' | 'leaders' | 'all_living' | 'missing_nin' | 'fallen';
 
 function diplomacyClass(status: string): string {
   if (status === 'allied' || status === 'treaty') return 'pos';
@@ -49,6 +55,8 @@ export function WorldSimulationPanel({
   const inspectedVillage = worldSim.villages[selectedVillageId] ?? worldSim.villages[state.villageId];
   const inspectedVillageDef = VILLAGE_MAP[inspectedVillage.villageId];
   const inspectedPolitics = inspectedVillage.politics;
+  const inspectedPop = ensureVillagePopulation(inspectedVillage);
+  const worldPopSummary = getWorldPopulationSummary(worldSim);
   const kageNpc =
     inspectedVillage.kageNpcId && inspectedVillage.kageNpcId !== 'player'
       ? worldSim.npcs.find((n) => n.identity.id === inspectedVillage.kageNpcId) ?? null
@@ -68,6 +76,7 @@ export function WorldSimulationPanel({
       if (npcFilter === 'fallen') return !n.identity.alive;
       if (!n.identity.alive) return false;
       if (npcFilter === 'my_village') return n.identity.villageId === state.villageId;
+      if (npcFilter === 'l1_detailed') return n.cognition?.lodTier === 'L1';
       if (npcFilter === 'leaders')
         return n.identity.specialStatus === 'kage' || n.identity.roleTitle.includes('Head') || n.identity.specialStatus === 'anbu';
       if (npcFilter === 'missing_nin') return n.identity.specialStatus === 'missing_nin';
@@ -94,7 +103,7 @@ export function WorldSimulationPanel({
           Living Shinobi World
         </h2>
         <span className="status-tag tabular">
-          Economy: {worldSim.economy} ({worldSim.economyTrend})
+          Pop: {worldPopSummary.totalWorldPopulation.toLocaleString()} | Econ: {worldSim.economy} ({worldSim.economyTrend})
         </span>
       </div>
 
@@ -325,6 +334,31 @@ export function WorldSimulationPanel({
             )}
           </div>
 
+          <div className="disc-item tabular">
+            <div className="disc-head">
+              <span>L3 Village Demographics</span>
+              <span className="status-tag">Total ~{getVillageTotalPopulation(inspectedPop).toLocaleString()}</span>
+            </div>
+            <div className="chip-row" style={{ marginTop: 6 }}>
+              <span className="chip">Civilians {inspectedPop.civilians.toLocaleString()}</span>
+              <span className="chip pos">Active Shinobi {getVillageActiveShinobi(inspectedPop)}</span>
+              <span className="chip">Cadets {inspectedPop.academyCadets}</span>
+              <span className="chip">Veterans {inspectedPop.veterans}</span>
+              <span className={`chip ${inspectedPop.sicknessRate >= 35 ? 'neg' : ''}`}>
+                Illness {inspectedPop.sicknessRate}%
+              </span>
+              <span className="chip">Orphans {inspectedPop.orphansCount}</span>
+              {inspectedPop.warCasualtiesTotal > 0 && (
+                <span className="chip neg">War Dead {inspectedPop.warCasualtiesTotal}</span>
+              )}
+            </div>
+            <div className="disc-sub" style={{ marginTop: 4 }}>
+              Corps Breakdown: {inspectedPop.geninCorps} Genin | {inspectedPop.chuninCorps} Chunin |{' '}
+              {inspectedPop.joninCorps} Jonin (World LOD: {worldPopSummary.l1NpcCount} L1 Detailed,{' '}
+              {worldPopSummary.l2NpcCount} L2 Periodic)
+            </div>
+          </div>
+
           {/* Interactive Council Governance Actions for Home Village (Jonin / ANBU / Clan Heir / Kage) */}
           {selectedVillageId === state.villageId && hasGovAccess && onGovernanceAction && (
             <div className="disc-item" style={{ borderColor: 'var(--accent-gold)' }}>
@@ -477,6 +511,7 @@ export function WorldSimulationPanel({
             {(
               [
                 ['my_village', 'My Village'],
+                ['l1_detailed', `L1 Detailed (${worldPopSummary.l1NpcCount})`],
                 ['leaders', 'Kage & Leaders'],
                 ['all_living', 'All Living'],
                 ['missing_nin', 'Missing-Nin'],
@@ -532,7 +567,7 @@ export function WorldSimulationPanel({
                       </span>
                     </div>
                     <div className="disc-sub tabular">
-                      Age {identity.age} | {vName}
+                      {npc.cognition ? `[${npc.cognition.lodTier}] ` : ''}Age {identity.age} | {vName}
                       {cName ? ` | ${cName}` : ''} | {tags.join('/')}
                     </div>
                     <div className="disc-sub">
@@ -542,6 +577,11 @@ export function WorldSimulationPanel({
                       <strong>Now:</strong> {getScheduleLabel(schedule)}
                       {knowledge.length > 0 ? ` | Intel: ${knowledge.length}` : ''}
                     </div>
+                    {npc.cognition?.lastDecision && (
+                      <div className="disc-sub">
+                        <strong>Mind:</strong> {npc.cognition.lastDecision.chosenLabel} (U={npc.cognition.lastDecision.topOptions[0]?.total ?? 0})
+                      </div>
+                    )}
                   </button>
                 );
               })}

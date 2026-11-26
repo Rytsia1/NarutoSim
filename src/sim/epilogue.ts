@@ -157,6 +157,25 @@ export function buildPosthumousEpilogue(state: GameState): EpilogueBeat[] {
     });
   }
 
+  // Beat 2.75: Quiet Heroism / The Ordinary Shinobi Legacy
+  const legacy = state.playerLegacy;
+  const isOrdinaryShinobi =
+    state.specialStatus !== 'kage' &&
+    (!state.bloodline || state.bloodline.stage === 'latent');
+  if (legacy && (legacy.comradesBroughtHome >= 3 || legacy.livesSaved >= 3)) {
+    const countLabel =
+      legacy.comradesBroughtHome >= 3
+        ? `${legacy.comradesBroughtHome} comrades brought home alive`
+        : `${legacy.livesSaved} lives pulled back from the brink`;
+    beats.push({
+      title: isOrdinaryShinobi ? 'The Ordinary Shinobi Who Brought Them Home' : 'Quiet Heroism Remembered',
+      tone: 'milestone',
+      body: isOrdinaryShinobi
+        ? `You held no legendary Kekkei Genkai and never wore the ${kageTitle(state)} hat. Yet every autumn, the families of those you carried out of danger (${countLabel}) still gather by your grave in ${village} with warm tea and laughing children who exist only because an ordinary shinobi refused to leave anyone behind.`
+        : `Beyond rank and battlefield titles, ${village} remembers the quieter measure of your life: ${countLabel}. Long after tactical scrolls fade, the households you kept whole speak your name with soft gratitude.`,
+    });
+  }
+
   // Beat 3: World Echo / Posthumous Crisis Echo
   if (state.world.seededCrisis !== 'none' && state.world.crisisStage < 2) {
     const bijuu = getWorldBijuuName(state);
@@ -219,6 +238,12 @@ export function buildLifeRecord(state: GameState): LifeRecord {
             ? `Endured / Fell during ${crisisName}`
             : `Unresolved (${state.world.crisisClues} clues gathered before death)`;
 
+  const legacy = state.playerLegacy;
+  const isOrdinaryHero =
+    Boolean(legacy && (legacy.comradesBroughtHome >= 3 || legacy.livesSaved >= 3)) &&
+    state.specialStatus !== 'kage' &&
+    (!state.bloodline || state.bloodline.stage === 'latent');
+
   return {
     id: `life_${state.rng.seed}_${state.birthYear}_${state.age}`,
     seed: state.rng.seed,
@@ -246,5 +271,8 @@ export function buildLifeRecord(state: GameState): LifeRecord {
     warHistory: [...state.warHistory],
     teamSummary,
     posthumousBeats: [...state.posthumousBeats],
+    livesSaved: legacy?.livesSaved ?? 0,
+    comradesBroughtHome: legacy?.comradesBroughtHome ?? 0,
+    quietHeroTitle: isOrdinaryHero ? 'Ordinary Shinobi Who Brought Comrades Home' : undefined,
   };
 }

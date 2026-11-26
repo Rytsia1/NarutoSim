@@ -2,6 +2,7 @@ export * from '../academy';
 export * from '../ranks';
 export * from '../powers';
 export * from '../custom';
+export * from './imperfect-life';
 export {
   addLeaning,
   advanceYear,

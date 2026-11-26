@@ -10,6 +10,7 @@ import {
   triggerNpcDefection,
   type WorldDispatch,
 } from './npc-sim';
+import { ensureVillagePopulation, rebalanceNpcLodTiers } from './npc/lod-population';
 import { clamp } from './powers';
 import { ensureVillagePolitics, tickVillagePolitics } from './politics';
 import { ensureRel6Defaults } from './relationships';
@@ -101,7 +102,9 @@ export function initWorldSim(state: GameState, rng: SeededRng): WorldSimState {
   seedInitialWorldNpcs(state, worldSim, rng);
   for (const v of Object.values(worldSim.villages)) {
     ensureVillagePolitics(v);
+    ensureVillagePopulation(v);
   }
+  rebalanceNpcLodTiers(state, worldSim);
   seedInitialTimeline(state, worldSim, rng);
 
   recordWorldHistory(worldSim, {
@@ -132,7 +135,9 @@ export function ensureWorldSimDefaults(state: GameState): WorldSimState {
   }
   for (const v of Object.values(state.worldSim.villages)) {
     ensureVillagePolitics(v);
+    ensureVillagePopulation(v);
   }
+  rebalanceNpcLodTiers(state, state.worldSim);
   if (!state.worldSim.timeline || state.worldSim.timeline.length === 0) {
     const tRng = new SeededRng((state.rng.seed ^ 0x9931a) >>> 0);
     seedInitialTimeline(state, state.worldSim, tRng);

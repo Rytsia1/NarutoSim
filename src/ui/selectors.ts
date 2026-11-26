@@ -5,6 +5,7 @@ import { computeCombatProjection, getChakraCap } from '../sim/powers';
 import { canAccessGovernance } from '../sim/politics';
 import { deriveRelArchetype, getRelVector } from '../sim/relationships';
 import { canEnterRetirement } from '../sim/epilogue';
+import { getWorldPopulationSummary, type WorldPopulationSummary } from '../sim/npc/lod-population';
 import { canCallDiplomaticSummit, getTensionLabel } from '../sim/world';
 import type {
   GameState,
@@ -32,6 +33,8 @@ export interface StatusViewModel {
   retireAvailable: boolean;
   summitAvailable: boolean;
   activeFalloutCount: number;
+  livesSaved: number;
+  comradesBroughtHome: number;
 }
 
 export interface WorldJournalViewModel {
@@ -79,7 +82,14 @@ export function selectStatusView(state: GameState): StatusViewModel {
     retireAvailable: canEnterRetirement(state),
     summitAvailable: canCallDiplomaticSummit(state),
     activeFalloutCount: state.missionConsequences?.length ?? 0,
+    livesSaved: state.playerLegacy?.livesSaved ?? 0,
+    comradesBroughtHome: state.playerLegacy?.comradesBroughtHome ?? 0,
   };
+}
+
+export function selectWorldPopulationView(state: GameState): WorldPopulationSummary | null {
+  if (!state.worldSim) return null;
+  return getWorldPopulationSummary(state.worldSim);
 }
 
 export function selectWorldJournalView(state: GameState): WorldJournalViewModel {

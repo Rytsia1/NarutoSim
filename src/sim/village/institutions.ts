@@ -6,6 +6,7 @@ import {
   recordWorldHistory,
   type WorldDispatch,
 } from '../npc-sim';
+import { buildInitialVillagePopulation, tickVillagePopulationL3 } from '../npc/lod-population';
 import { clamp } from '../powers';
 import type { SeededRng } from '../rng';
 import type {
@@ -83,6 +84,7 @@ export function buildInitialVillageSim(vId: VillageId): VillageSimState {
       readiness: inst.hospitalBaseline,
     },
     clans,
+    population: buildInitialVillagePopulation(vId),
     treasury: clamp(inst.daimyoFundingBaseline, 30, 95),
     military: def.tier === 'great' ? 74 : 52,
     morale: vId === 'kiri' ? 58 : vId === 'suna' ? 62 : 72,
@@ -141,7 +143,8 @@ export function tickVillageOrgLayer(
     const vSim = worldSim.villages[vDef.id];
     const isPlayerVillage = vDef.id === state.villageId;
 
-    // 1. Daimyo Funding & Politics
+    // 1. Daimyo Funding & Politics + L3 Statistical Population Simulation
+    tickVillagePopulationL3(vSim, worldSim, state, rng);
     const vol = vDef.institutions.daimyoVolatility;
     let fundDelta = rng.int(-3, 3);
     if (worldSim.economyTrend === 'boom') fundDelta += 3;

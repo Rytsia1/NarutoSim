@@ -22,6 +22,12 @@ import {
 } from '../data/powers';
 import { kageTitle, VILLAGES, VILLAGE_MAP } from '../data/villages';
 import { buildLifeRecord, buildPosthumousEpilogue, buildRetirementEventDecision } from './epilogue';
+import {
+  buildFailedGeninDecision,
+  ensurePlayerLegacy,
+  pickImperfectLifeDecision,
+  pickNpcPleaDecision,
+} from './life/imperfect-life';
 import { computeAffinityWeights } from './partner';
 import {
   awardYearlyDisciplineXp,
@@ -544,9 +550,10 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
     applyCustomBuild(state, customCfg);
   }
 
-  // Initialize 4-Layer Clan Heritage & the 3-Layer Autonomous World Simulation
+  // Initialize 4-Layer Clan Heritage, Human Legacy & the 3-Layer Autonomous World Simulation
   state.clanHeritage = initClanHeritage(state, rng);
   state.missionConsequences = [];
+  ensurePlayerLegacy(state);
   state.worldSim = initWorldSim(state, rng);
 
   // Save RNG snapshot AFTER all birth & world-seeding rolls so Year 1 never replays birth RNG draws
@@ -1333,6 +1340,16 @@ export function advanceYear(state: GameState): void {
     nextDecision = worldTick.whisperDecision;
   }
 
+  // Priority 10.1: Live L1 NPC Utility AI Plea (e.g. trusted friend asking for help with sick sibling)
+  if (!nextDecision) {
+    nextDecision = pickNpcPleaDecision(state);
+  }
+
+  // Priority 10.15: Imperfect Shinobi Life Turning Points (Scenarios A-E)
+  if (!nextDecision) {
+    nextDecision = pickImperfectLifeDecision(state, rng);
+  }
+
   // Priority 10.2: Mature Adult Politics & Village Governance Dilemmas (Jonin / ANBU / Clan Heir / Kage)
   if (!nextDecision) {
     nextDecision = pickPoliticsDecision(state, rng);
@@ -1546,6 +1563,10 @@ export function resolvePendingDecision(
               : 'Your clone flickers and dissolves before the examiners. You stay in the Academy for one more year to sharpen your fundamentals.',
             { deltas: diffStats(before, state.stats), checks },
           );
+          if (!isEarlyExam && state.academyFailedCount === 1) {
+            const failedArc = buildFailedGeninDecision(state);
+            if (failedArc) state.pending = failedArc;
+          }
         }
       }
       break;

@@ -58,7 +58,7 @@ export function NpcDossierModal({ npc, onClose, onSelectNpcId }: NpcDossierModal
 
   if (!npc) return null;
 
-  const { identity, personality, motivation, nindo, relationships, memory, schedule, knowledge, currentGoal } = npc;
+  const { identity, personality, motivation, nindo, relationships, memory, schedule, knowledge, currentGoal, cognition } = npc;
   const village = VILLAGE_MAP[identity.villageId];
   const homeVillage = VILLAGE_MAP[identity.homeVillageId];
   const clan = identity.clanId ? CLAN_MAP[identity.clanId] : null;
@@ -121,6 +121,11 @@ export function NpcDossierModal({ npc, onClose, onSelectNpcId }: NpcDossierModal
           <span className="chip">Power {identity.powerScore}</span>
           <span className="chip">{ELEMENT_NAMES[identity.element]}</span>
           <span className="chip">{DISCIPLINE_MAP[identity.specialty]?.name ?? identity.specialty}</span>
+          {cognition && (
+            <span className={`chip ${cognition.lodTier === 'L1' ? 'pos' : ''}`}>
+              {cognition.lodTier === 'L1' ? 'L1 Detailed AI' : 'L2 Periodic AI'}
+            </span>
+          )}
           {primaryTags.map((tag) => (
             <span key={tag} className="chip">
               {tag}
@@ -181,6 +186,70 @@ export function NpcDossierModal({ npc, onClose, onSelectNpcId }: NpcDossierModal
             </div>
           </section>
         </div>
+
+        {/* COGNITIVE MIND: UTILITY AI + GOAP + LIFE CONDITION */}
+        {cognition && (
+          <section className="disc-item" style={{ marginTop: 10 }}>
+            <div className="disc-head">
+              <span>Cognitive Mind (Utility AI + GOAP)</span>
+              <span className="disc-sub tabular">
+                Stress {cognition.stress}% | Injury {cognition.injury}%
+              </span>
+            </div>
+
+            {cognition.familyCrisis && (
+              <div className="disc-sub" style={{ marginTop: 6, color: 'var(--accent-crimson)' }}>
+                <strong>Active Personal Crisis:</strong> {cognition.familyCrisis.relativeName} (
+                {cognition.familyCrisis.kind.replace('_', ' ')}, Severity {cognition.familyCrisis.severity}%)
+              </div>
+            )}
+
+            {cognition.activePlan && (
+              <div style={{ marginTop: 6 }}>
+                <div className="disc-head">
+                  <span className="disc-sub">
+                    <strong>GOAP Plan [{cognition.activePlan.domain.toUpperCase()}]:</strong>{' '}
+                    {cognition.activePlan.goalLabel}
+                  </span>
+                  <span className="disc-sub tabular">Urgency {cognition.activePlan.urgency}</span>
+                </div>
+                <div className="chip-row" style={{ marginTop: 4 }}>
+                  {cognition.activePlan.steps.map((st, idx) => (
+                    <span
+                      key={`${st.action}_${idx}`}
+                      className={`chip ${st.completed ? 'pos' : idx === cognition.activePlan!.currentStepIndex ? '' : ''}`}
+                    >
+                      {st.completed ? '[Done] ' : idx === cognition.activePlan!.currentStepIndex ? '[Now] ' : ''}
+                      {st.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {cognition.lastDecision && (
+              <div style={{ marginTop: 8 }}>
+                <div className="disc-sub">
+                  <strong>Latest Choice (Yr {cognition.lastDecision.year}):</strong>{' '}
+                  {cognition.lastDecision.reasonSummary}
+                </div>
+                <div className="stat-list tabular" style={{ marginTop: 6 }}>
+                  {cognition.lastDecision.topOptions.map((opt, idx) => (
+                    <div key={`${opt.action}_${idx}`} className="disc-head" style={{ fontSize: '0.8rem' }}>
+                      <span>
+                        {opt.action === cognition.lastDecision!.chosenAction ? '> ' : ''}
+                        {opt.label}
+                      </span>
+                      <span className={`chip ${opt.action === cognition.lastDecision!.chosenAction ? 'pos' : ''}`}>
+                        U={opt.total} (G:{opt.gScore} P:{opt.pScore} R:{opt.rScore} M:{opt.mScore})
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
+        )}
 
         {/* 5. RELATIONSHIP 2.0 (BIDIRECTIONAL 6-AXIS BOND WITH PLAYER) */}
         {npcToPlayerVec && playerToNpcVec && (

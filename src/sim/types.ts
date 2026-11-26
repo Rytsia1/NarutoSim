@@ -308,7 +308,7 @@ export type NindoId =
 
 export interface ShinobiMemory {
   age: number;
-  tag: 'bell_test' | 'graduation' | 'nindo' | 'loss' | 'rival' | 'promotion' | 'war';
+  tag: 'bell_test' | 'graduation' | 'nindo' | 'loss' | 'rival' | 'promotion' | 'war' | 'bond';
   text: string;
 }
 
@@ -624,6 +624,18 @@ export interface VillagePoliticsState {
   activeDirectives: string[];
 }
 
+export interface VillagePopulationSim {
+  civilians: number;
+  academyCadets: number;
+  geninCorps: number;
+  chuninCorps: number;
+  joninCorps: number;
+  veterans: number;
+  sicknessRate: number; // 0..100
+  warCasualtiesTotal: number;
+  orphansCount: number;
+}
+
 export interface VillageSimState {
   villageId: VillageId;
   kageNpcId: string | null; // WorldNpc id or 'player'
@@ -654,6 +666,7 @@ export interface VillageSimState {
   };
   clans: VillageClanState[];
   politics?: VillagePoliticsState;
+  population?: VillagePopulationSim;
   treasury: number; // 0..100
   military: number; // 0..100
   morale: number; // 0..100
@@ -735,6 +748,18 @@ export type NpcMemoryTag =
   | 'secret'
   | 'bond';
 
+export type NpcMemoryCategory =
+  | 'saved_family'
+  | 'abandoned'
+  | 'betrayed'
+  | 'fought_together'
+  | 'mentored'
+  | 'humiliated'
+  | 'spared_life'
+  | 'helped_ally'
+  | 'loss'
+  | 'milestone';
+
 export interface NpcMemory {
   year: number;
   age: number;
@@ -742,6 +767,8 @@ export interface NpcMemory {
   summary: string;
   actorId?: string;
   impact: number; // -10..10
+  category?: NpcMemoryCategory;
+  salience?: number; // 1..10
 }
 
 export type NpcKnowledgeTopic =
@@ -804,6 +831,74 @@ export interface WorldNpcIdentity {
   linkedRosterId?: string;
 }
 
+export type NpcLodTier = 'L1' | 'L2';
+
+export type NpcGoalDomain = 'career' | 'survival' | 'family' | 'ambition' | 'loyalty';
+
+export type NpcActionKind =
+  | 'take_mission'
+  | 'visit_family'
+  | 'ask_ally_help'
+  | 'train'
+  | 'socialize'
+  | 'travel'
+  | 'fight'
+  | 'rest'
+  | 'scheme_or_defect';
+
+export interface NpcFamilyCrisis {
+  kind: 'sick_sibling' | 'elder_illness' | 'household_debt' | 'clan_trial';
+  relativeName: string;
+  severity: number; // 1..100
+  yearsRemaining: number;
+  helpedByPlayer?: boolean;
+}
+
+export interface NpcGoapStep {
+  action: NpcActionKind;
+  label: string;
+  completed: boolean;
+}
+
+export interface NpcGoapPlan {
+  domain: NpcGoalDomain;
+  goalLabel: string;
+  urgency: number; // 0..100
+  steps: NpcGoapStep[];
+  currentStepIndex: number;
+}
+
+export interface NpcUtilityEvaluation {
+  action: NpcActionKind;
+  label: string;
+  total: number; // U(a) = w_g*G + w_p*P + w_r*R + w_m*M (0..100)
+  gScore: number; // 0..100
+  pScore: number; // 0..100
+  rScore: number; // 0..100
+  mScore: number; // 0..100
+  targetId?: string;
+  targetName?: string;
+}
+
+export interface NpcDecisionTrace {
+  year: number;
+  chosenAction: NpcActionKind;
+  chosenLabel: string;
+  reasonSummary: string;
+  topOptions: NpcUtilityEvaluation[];
+}
+
+export interface NpcCognitionState {
+  lodTier: NpcLodTier;
+  stress: number; // 0..100
+  injury: number; // 0..100
+  lastUtilityTickYear: number;
+  familyCrisis: NpcFamilyCrisis | null;
+  activePlan: NpcGoapPlan | null;
+  lastDecision: NpcDecisionTrace | null;
+  pendingPlayerPlea?: boolean;
+}
+
 export interface WorldNpc {
   identity: WorldNpcIdentity;
   personality: NpcPersonality;
@@ -817,6 +912,7 @@ export interface WorldNpc {
   schedule: NpcSchedule;
   knowledge: NpcKnowledge[];
   currentGoal: NpcGoal;
+  cognition?: NpcCognitionState;
 }
 
 export interface WorldHistoryEntry {
@@ -1060,6 +1156,8 @@ export type DecisionKind =
   | 'mission_event'
   | 'world_emergent'
   | 'politics_event'
+  | 'imperfect_life'
+  | 'npc_plea'
   | 'crisis_whisper'
   | 'war_prelude'
   | 'war_day'
@@ -1101,6 +1199,17 @@ export interface EpilogueBeat {
   tone: 'epilogue' | 'bond' | 'crisis' | 'milestone';
 }
 
+export interface PlayerHumanLegacy {
+  livesSaved: number;
+  comradesBroughtHome: number;
+  quietHeroMoments: string[];
+  unhealedScars: string[];
+  usedImperfectScenarios: string[];
+  abandonedSurvivorNpcId?: string | null;
+  unwantedTargetNpcId?: string | null;
+  lastNpcPleaAge?: number;
+}
+
 export interface LifeRecord {
   id: string;
   seed: number;
@@ -1128,6 +1237,9 @@ export interface LifeRecord {
   warHistory: WarSummary[];
   teamSummary: string;
   posthumousBeats: EpilogueBeat[];
+  livesSaved?: number;
+  comradesBroughtHome?: number;
+  quietHeroTitle?: string;
 }
 
 export interface ScenarioConfig {
@@ -1187,6 +1299,7 @@ export interface GameState {
   clanHeritage?: ClanHeritageState | null;
   activeMission?: GeneratedMission | null;
   missionConsequences?: MissionConsequence[];
+  playerLegacy?: PlayerHumanLegacy;
   lastGovernanceAge?: number;
   lastPoliticsAge?: number;
   permanentPartner?: PermanentPartnerRecord | null;

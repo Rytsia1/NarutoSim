@@ -2,6 +2,8 @@ import { CLAN_MAP, getClansForVillage } from '../data/clans';
 import { NINDO_MAP } from '../data/nindo';
 import { DISCIPLINE_MAP } from '../data/powers';
 import { GREAT_VILLAGES, VILLAGE_MAP } from '../data/villages';
+import { tickNpcCognitiveCycle } from './npc/cognition';
+import { rebalanceNpcLodTiers } from './npc/lod-population';
 import { clamp } from './powers';
 import { applyRel6Delta, buildVectorFromLegacy, createRelVector6 } from './relationships';
 import type { SeededRng } from './rng';
@@ -1115,6 +1117,9 @@ export function tickAutonomousNpcs(
   const dispatches: WorldDispatch[] = [];
   const year = state.birthYear + state.age;
 
+  // Dynamic L1 / L2 LOD tier rebalancing before ticking NPCs
+  rebalanceNpcLodTiers(state, worldSim);
+
   for (const npc of worldSim.npcs) {
     if (!npc.identity.alive) continue;
     const id = npc.identity;
@@ -1133,8 +1138,12 @@ export function tickAutonomousNpcs(
       id.powerScore = clamp(id.powerScore - rng.int(0, 1), 25, 99);
     }
 
-    // 2. Refresh daily/yearly schedule
+    // 2. Refresh daily/yearly schedule & execute 6-stage Cognitive AI (Utility AI + GOAP + Memory)
     npc.schedule = computeNpcSchedule(npc, village, worldSim);
+    const cogReport = tickNpcCognitiveCycle(npc, state, worldSim, rng);
+    if (cogReport?.dispatch) {
+      dispatches.push(cogReport.dispatch);
+    }
 
     // 3. Independent Off-Screen Mortality (active disasters, war tension, covert risk, old age; mitigated by Hospital)
     const activeDisaster = worldSim.activeDisasters.find((d) => d.villageId === id.villageId);
