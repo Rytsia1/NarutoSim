@@ -30,11 +30,19 @@ export function clamp(val: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, val));
 }
 
-export function getChakraCap(state: Pick<GameState, 'capacity' | 'bloodline'>): number {
+export function getStatCap(state: Pick<GameState, 'sandbox'>): number {
+  return state.sandbox?.transcendentCap ? 150 : 100;
+}
+
+export function getChakraCap(
+  state: Pick<GameState, 'capacity' | 'bloodline' | 'jinchuriki' | 'sandbox'>,
+): number {
+  if (state.sandbox?.transcendentCap) return 200;
   const base = 40 + 12 * state.capacity;
   const uzumakiBonus =
     state.bloodline?.id === 'uzumaki_chains' && state.bloodline.stage !== 'latent' ? 12 : 0;
-  return base + uzumakiBonus;
+  const jinchurikiBonus = state.jinchuriki ? 35 : 0;
+  return base + uzumakiBonus + jinchurikiBonus;
 }
 
 export function rankValueToLetter(v: number): RankLetter {
@@ -90,19 +98,36 @@ export function computeCombatProjection(state: GameState): CombatProjection {
 
   const legacyBonus = hasClanLegacy ? 0.4 : 0;
   const rankFloor = rank === 'jonin' ? 0.5 : rank === 'chunin' ? 0.25 : 0;
+  const jinchurikiBonus = state.jinchuriki ? 0.55 + state.jinchuriki.harmony / 200 : 0;
+  const multiElemBonus = Math.min(0.6, (state.secondaryElements?.length ?? 0) * 0.15);
+  const maxRank = state.sandbox?.transcendentCap ? 7.5 : 6;
 
-  const tai = clamp(1 + stats.health / 26 + taiBonus + bloodBonus * 0.5 + rankFloor, 1, 6);
-  const spd = clamp(1 + (stats.health + stats.intel) / 52 + (taiBonus + genBonus) * 0.5 + bloodBonus * 0.6 + rankFloor, 1, 6);
-  const sta = clamp(1 + (stats.health * 0.7 + stats.will * 0.3) / 26 + legacyBonus + rankFloor, 1, 6);
-  const chk = clamp(1 + stats.chakra / 25 + capacity * 0.25 + ninBonus + bloodBonus + legacyBonus + rankFloor, 1, 6);
-  const ins = clamp(1 + (stats.intel * 0.55 + stats.will * 0.45) / 26 + genBonus + bloodBonus * 0.7 + rankFloor, 1, 6);
+  const tai = clamp(1 + stats.health / 26 + taiBonus + bloodBonus * 0.5 + jinchurikiBonus * 0.35 + rankFloor, 1, maxRank);
+  const spd = clamp(
+    1 + (stats.health + stats.intel) / 52 + (taiBonus + genBonus) * 0.5 + bloodBonus * 0.6 + jinchurikiBonus * 0.35 + rankFloor,
+    1,
+    maxRank,
+  );
+  const sta = clamp(1 + (stats.health * 0.7 + stats.will * 0.3) / 26 + legacyBonus + jinchurikiBonus * 0.6 + rankFloor, 1, maxRank);
+  const chk = clamp(
+    1 + stats.chakra / 25 + capacity * 0.25 + ninBonus + bloodBonus + legacyBonus + jinchurikiBonus + multiElemBonus + rankFloor,
+    1,
+    maxRank,
+  );
+  const ins = clamp(
+    1 + (stats.intel * 0.55 + stats.will * 0.45) / 26 + genBonus + bloodBonus * 0.7 + multiElemBonus * 0.5 + rankFloor,
+    1,
+    maxRank,
+  );
 
   const avg = (tai + spd + sta + chk + ins) / 5;
   const score = Math.round(avg * 18 + (state.world.warsSurvived * 3));
   const threatTier: CombatProjection['threatTier'] =
     score >= 92 ? 'S' : score >= 76 ? 'A' : score >= 58 ? 'B' : score >= 40 ? 'C' : 'D';
 
-  const battleChakraPool = Math.round(capacity * 12 + stats.chakra * 0.4 + (hasClanLegacy ? 10 : 0));
+  const battleChakraPool = Math.round(
+    capacity * 12 + stats.chakra * 0.4 + (hasClanLegacy ? 10 : 0) + (state.jinchuriki ? 35 : 0),
+  );
 
   return {
     tai: Number(tai.toFixed(1)),
@@ -313,12 +338,13 @@ export function awardYearlyDisciplineXp(state: GameState): void {
   if (state.disciplines.length === 0) return;
   const teacherMult = hasActiveTeacher(state) ? 1.4 : 0.85;
   const legacyBonus = state.hasClanLegacy ? 1 : 0;
+  const growthMult = state.sandbox?.growthMult ?? 1;
 
   if (state.focus === 'training' || state.focus === 'balance') {
     const main = state.disciplines.find((d) => d.isMain) ?? state.disciplines[0];
     const baseGain = state.focus === 'training' ? 3 : 1;
     const cloneBonus = state.disciplines.some((d) => d.id === 'shadow_clone') ? 1 : 0;
-    main.xp += Math.round(baseGain * teacherMult) + legacyBonus + cloneBonus;
+    main.xp += Math.round((Math.round(baseGain * teacherMult) + legacyBonus + cloneBonus) * growthMult);
 
     // Bonus XP if active Sensei shares a discipline you already know
     const sensei = state.team?.active
@@ -327,19 +353,19 @@ export function awardYearlyDisciplineXp(state: GameState): void {
     const senseiSpec = sensei ? getPerson(state, sensei.personId)?.identity.specialty : undefined;
     for (const d of state.disciplines) {
       if (d.id !== main.id && state.focus === 'training') {
-        d.xp += senseiSpec && senseiSpec === d.id ? 2 : 1;
+        d.xp += (senseiSpec && senseiSpec === d.id ? 2 : 1) * growthMult;
       }
     }
   }
 
   if (state.focus === 'body') {
     const tai = state.disciplines.find((d) => DISCIPLINE_MAP[d.id]?.branch === 'taijutsu');
-    if (tai) tai.xp += 2;
+    if (tai) tai.xp += 2 * growthMult;
   }
 
   if (state.focus === 'mind') {
     const gen = state.disciplines.find((d) => DISCIPLINE_MAP[d.id]?.branch === 'genjutsu');
-    if (gen) gen.xp += 2;
+    if (gen) gen.xp += 2 * growthMult;
   }
 }
 

@@ -4,7 +4,7 @@ import { ELEMENT_KANJI, ELEMENT_NAMES, RANK_KANJI } from '../../data/powers';
 import { ARCHETYPE_LABELS } from '../../data/characters';
 import { VILLAGE_MAP } from '../../data/villages';
 import { getRel, SHORT_GOAL_LABELS } from '../../sim/ai';
-import { getHealthConditionLabel, getPlayerRanks } from '../../sim/combat';
+import { getHealthConditionLabel, getPlayerRanks, isRunOnSightLegend } from '../../sim/combat';
 import { getMastermindDivisor } from '../../sim/crises';
 import { detectWarArcs } from '../../sim/narrative';
 import { getPartnerRelStageLabel, getPartnerTrustTier } from '../../sim/partner';
@@ -133,6 +133,14 @@ export function WarScreen({
           <span className="status-tag">
             <span className="kanji-glyph">{RANK_KANJI[state.rank] ?? ''}</span> {t(`rank.${state.rank}`)}
           </span>
+          {state.epithet && (
+            <span className="status-tag rank-chunin">&ldquo;{state.epithet}&rdquo;</span>
+          )}
+          {isRunOnSightLegend(state) && (
+            <span className="status-tag tension-high" title="Bingo Book S-Rank Run-on-Sight Order">
+              RUN-ON-SIGHT
+            </span>
+          )}
           {activeAlly && (
             <span className="status-tag rank-genin">
               Ally: {activeAlly.intel >= 80 ? activeAlly.name : ARCHETYPE_LABELS[activeAlly.archetype]}

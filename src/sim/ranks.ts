@@ -69,6 +69,11 @@ export function buildAcademyChoiceDecision(state: GameState): PendingDecision {
 export function canTakeGraduationExam(state: GameState): boolean {
   if (state.rank !== 'academy') return false;
   if (state.age === 12) return true;
+  if (state.age >= 7 && state.age <= 9) {
+    // Generational Prodigy early graduation (age 7-9 ala Kakashi / Itachi)
+    const prodigyTotal = state.stats.chakra + state.stats.intel + state.stats.will;
+    return prodigyTotal >= 195 || (prodigyTotal >= 165 && state.stats.chakra >= 65);
+  }
   if (state.age >= 10 && state.age < 12) {
     // Early graduation opportunity for prodigious students
     const total = state.stats.chakra + state.stats.intel + state.stats.health;
@@ -190,8 +195,12 @@ export function canTakeChuninExam(state: GameState): boolean {
   if (state.specialStatus === 'missing_nin') return false;
   // D1/D2/D3: Land of Iron (samurai), Waves (civilian), and Uzushio (ruins) never enter Chunin Exams
   if (state.villageId === 'iron' || state.villageId === 'waves' || state.villageId === 'uzushio') return false;
-  // D5: No hard age-13 gate; require at least 1 year as Genin and an active 3-man team (2 living non-rogue teammates)
-  if (state.geninSinceAge !== null && state.age - state.geninSinceAge < 1) return false;
+  // D5: Standard requires 1 year as Genin; generational prodigies (age >= 10 with high combat score) may sit early!
+  const isProdigyChunin =
+    state.age >= 10 &&
+    (computeCombatProjection(state).score >= 60 ||
+      state.stats.chakra + state.stats.intel + state.stats.will >= 200);
+  if (!isProdigyChunin && state.geninSinceAge !== null && state.age - state.geninSinceAge < 1) return false;
   if (!state.team?.active) return false;
   const livingTeammates = state.team.members.filter((m) => {
     if (m.role !== 'teammate') return false;

@@ -28,6 +28,10 @@ import {
   pickImperfectLifeDecision,
   pickNpcPleaDecision,
 } from './life/imperfect-life';
+import {
+  resolveLegendOrDrawbackDecision,
+  tryLegendOrDrawbackDecision,
+} from './life/legend-events';
 import { computeAffinityWeights } from './partner';
 import {
   generateCharacter,
@@ -347,11 +351,18 @@ export function yearlyMortalityChance(state: GameState): number {
   const base = baseMortality(state.age);
   const healthFactor = Math.exp((50 - state.stats.health) / 16);
   const trainingHazard = state.focus === 'training' && state.age > 12 ? 0.001 : 0;
+  const illnessHazard =
+    state.drawbacks?.includes('illness') && state.age >= 20
+      ? state.flags.illness_stabilized
+        ? 0.004
+        : 0.016
+      : 0;
   const hospitalMult = getVillageInstitutionalModifiers(state).hospitalMortalityMult;
-  return Math.min(0.65, (base * healthFactor + trainingHazard) * hospitalMult);
+  return Math.min(0.65, (base * healthFactor + trainingHazard + illnessHazard) * hospitalMult);
 }
 
 function causeOfNaturalDeath(state: GameState, rng: SeededRng): string {
+  if (state.drawbacks?.includes('illness') && state.age >= 13) return 'complications of terminal shinobi illness';
   if (state.age < 6) return 'a harsh childhood fever';
   if (state.legacyScar && rng.chance(0.18)) return 'complications from old war scars';
   if (state.bodyStrain >= 25 && rng.chance(0.25)) return 'chakra pathway exhaustion';
@@ -666,10 +677,19 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
   );
   const actualStartDisc = state.disciplines[0];
   if (actualStartDisc) {
+    const discNames = state.disciplines.map((d) => DISCIPLINE_MAP[d.id]?.name ?? d.id).join(', ');
     pushLog(
       state,
       'normal',
-      `Your household begins instilling early fundamentals in ${DISCIPLINE_MAP[actualStartDisc.id]?.name ?? actualStartDisc.id}.`,
+      `Your household begins instilling early fundamentals in ${discNames}.`,
+    );
+  }
+  if (state.jinchuriki) {
+    pushLog(
+      state,
+      'milestone',
+      `Sealed Vessel: The ancient chakra of ${state.jinchuriki.bijuuName} slumbers behind the spiral seal upon your abdomen.${state.jinchuriki.ostracized ? ' Whispered fear already trails your footsteps through the village.' : ''}`,
+      { title: `Jinchuriki of ${state.jinchuriki.bijuuName}` },
     );
   }
 
@@ -826,16 +846,22 @@ function applySimpleEffect(
 
 function applyYearlyGrowth(state: GameState, rng: SeededRng): void {
   const age = state.age;
+  const growthMult = state.sandbox?.growthMult ?? 1;
   if (age < 6) {
-    state.stats.chakra += rng.int(0, 2);
-    state.stats.intel += rng.int(1, 3);
-    state.stats.will += rng.int(0, 2);
-    state.stats.health += rng.int(0, 2);
+    state.stats.chakra += Math.round(rng.int(0, 2) * growthMult);
+    state.stats.intel += Math.round(rng.int(1, 3) * growthMult);
+    state.stats.will += Math.round(rng.int(0, 2) * growthMult);
+    state.stats.health += Math.round(rng.int(0, 2) * growthMult);
+    if (state.jinchuriki) {
+      state.stats.chakra += 3;
+      state.stats.health += 2;
+      state.jinchuriki.harmony = clamp(state.jinchuriki.harmony + rng.int(1, 3), 0, 100);
+    }
     clampStats(state);
     return;
   }
 
-  const g = rng.int(2, 5);
+  const g = Math.round(rng.int(2, 5) * growthMult);
   const youth = age <= 25 ? 1.2 : age <= 45 ? 1.0 : age <= 65 ? 0.75 : 0.5;
   const selfMult = hasActiveTeacher(state) ? 1.0 : 0.75;
   const isShinobi = state.rank !== 'civilian';
@@ -847,7 +873,7 @@ function applyYearlyGrowth(state: GameState, rng: SeededRng): void {
         state.stats.health -= rng.int(0, 1);
         state.stats.bonds -= rng.int(0, 1);
       } else {
-        state.stats.health += rng.int(1, 3);
+        state.stats.health += Math.round(rng.int(1, 3) * growthMult);
       }
       break;
     case 'study':
@@ -855,10 +881,10 @@ function applyYearlyGrowth(state: GameState, rng: SeededRng): void {
       break;
     case 'social':
       state.stats.bonds += g;
-      state.stats.will += rng.int(0, 1);
+      state.stats.will += Math.round(rng.int(0, 1) * growthMult);
       break;
     case 'body':
-      state.stats.health += rng.int(2, 4);
+      state.stats.health += Math.round(rng.int(2, 4) * growthMult);
       break;
     case 'mind':
       state.stats.will += g;
@@ -871,17 +897,24 @@ function applyYearlyGrowth(state: GameState, rng: SeededRng): void {
       break;
     case 'balance':
     default:
-      if (isShinobi) state.stats.chakra += rng.int(1, 2);
-      state.stats.intel += rng.int(1, 2);
-      state.stats.will += rng.int(1, 2);
-      state.stats.bonds += rng.int(0, 2);
-      state.stats.health += rng.int(0, 2);
-      if (age >= 14 && rng.chance(0.5)) state.stats.ryo += rng.int(1, 2);
+      if (isShinobi) state.stats.chakra += Math.round(rng.int(1, 2) * growthMult);
+      state.stats.intel += Math.round(rng.int(1, 2) * growthMult);
+      state.stats.will += Math.round(rng.int(1, 2) * growthMult);
+      state.stats.bonds += Math.round(rng.int(0, 2) * growthMult);
+      state.stats.health += Math.round(rng.int(0, 2) * growthMult);
+      if (age >= 14 && rng.chance(0.5)) state.stats.ryo += Math.round(rng.int(1, 2) * growthMult);
       break;
   }
 
   if (age < 18) {
-    state.stats.intel += rng.int(0, 2);
+    state.stats.intel += Math.round(rng.int(0, 2) * growthMult);
+  }
+
+  // Jinchuriki passive yearly regeneration & Bijuu harmony progression
+  if (state.jinchuriki) {
+    state.stats.health += 3;
+    state.stats.chakra += 4;
+    state.jinchuriki.harmony = clamp(state.jinchuriki.harmony + rng.int(2, 4), 0, 100);
   }
 
   // Village & Clan institutional perks
@@ -1465,6 +1498,11 @@ export function advanceYear(state: GameState): void {
         nextDecision = buildKageSuccessionDecision(state, 1, offerReason);
       }
     }
+  }
+
+  // Priority 7.8: Prodigy ANBU Captain, Jinchuriki Childhood Drama, Drawbacks & S-Rank Living Legend World Events
+  if (!nextDecision) {
+    nextDecision = tryLegendOrDrawbackDecision(state, rng);
   }
 
   // Priority 8: Bloodline (Kekkei Genkai) Awakening / Refinement (skip for civilians who left the shinobi path)
@@ -3033,6 +3071,12 @@ export function resolvePendingDecision(
           deltas: diffStats(before, state.stats),
         });
       }
+      break;
+    }
+
+    case 'legend_event':
+    case 'drawback_event': {
+      resolveLegendOrDrawbackDecision(state, decision, optionId, rng, killCharacter);
       break;
     }
 

@@ -125,6 +125,7 @@ export interface JutsuRequirements {
   requiresTeacherOrFlag?: string;
   requiresJutsuId?: string;
   requiresContractOrDiscipline?: boolean;
+  requiresJinchuriki?: boolean;
 }
 
 export interface JutsuDefinition {
@@ -294,6 +295,18 @@ export const MODE_DB: readonly ModeDefinition[] = [
     requires: { clanId: 'inuzuka', hidenId: 'hiden_inuzuka_gatsuga' },
     description: 'Feral pack-hunt stance (+10 Power, +1 Speed, +12% Evade).',
   },
+  {
+    id: 'bijuu_cloak',
+    name: 'Bijuu Chakra Cloak',
+    slot: 'body',
+    upkeepCp: 0,
+    powerBonus: 20,
+    speedBonus: 2,
+    guardPct: 28,
+    counters: ['genjutsu', 'fear'],
+    requires: { requiresJinchuriki: true },
+    description: 'Tailed Beast crimson shroud (+20 Power, +2 Speed, 28% mitigation, restores +5 HP & +6 CP per round, breaks Genjutsu & Fear).',
+  },
 ];
 
 export const MODE_MAP: Record<ModeId, ModeDefinition> = Object.fromEntries(
@@ -364,6 +377,9 @@ function hasTeacherForJutsu(state: GameState, flagKey: string): boolean {
 }
 
 export function meetsJutsuRequirements(state: GameState, req: JutsuRequirements): boolean {
+  if (req.requiresJinchuriki && !state.jinchuriki) {
+    return false;
+  }
   if (req.clanId && state.clanId !== req.clanId) {
     return false;
   }
@@ -457,6 +473,17 @@ export function getKnownJutsu(state: GameState): JutsuDefinition[] {
           }
         }
       }
+    }
+  }
+
+  // Custom Free Mode signature jutsu overrides (bypasses discipline/clan gates intentionally)
+  if (state.signatureJutsu && state.signatureJutsu.length > 0) {
+    for (const id of state.signatureJutsu) {
+      if (seen.has(id)) continue;
+      const def = JUTSU_MAP[id];
+      if (!def) continue;
+      seen.add(id);
+      list.push(def);
     }
   }
 

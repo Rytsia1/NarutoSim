@@ -199,10 +199,18 @@ export function ensureBattleV2State(battle: ActiveBattleState): void {
   }
 }
 
+export function isRunOnSightLegend(state: GameState): boolean {
+  const proj = computeCombatProjection(state);
+  if (proj.threatTier === 'S') return true;
+  const pCR = getCombatRating(getPlayerRanks(state, false));
+  return pCR >= 4.8;
+}
+
 /**
  * Runs Round-1 battle initialization for Effect Model v2:
  * - Byakugan 360-degree vision reveals full enemy intel immediately.
  * - Killing Intent (Fear) applies automatically when Combat Rating gap >= 2 unless resisted by Willpower.
+ * - Dramatic Killing Intent narration fires at CR gap >= 2.5, and custom epithet callouts inject into enemy dialogue.
  */
 export function initBattleV2State(
   state: GameState,
@@ -225,6 +233,13 @@ export function initBattleV2State(
     const enemyGap = eCR - pCR;
     const playerGap = pCR - eCR;
 
+    if (state.epithet && (isRunOnSightLegend(state) || playerGap >= 1.2)) {
+      battle.enemyQuip =
+        playerGap >= 2.2
+          ? `"That pressure... you are '${state.epithet}'! Stay back, everyone!"`
+          : `"So '${state.epithet}' really took this front. Show me why the Bingo Book fears your name!"`;
+    }
+
     if (enemyGap >= 2) {
       const resistThreshold = enemyGap >= 3 ? 85 : 65;
       if (state.stats.will < resistThreshold) {
@@ -237,14 +252,25 @@ export function initBattleV2State(
         };
         battle.sceneLine += ` Overwhelming Killing Intent washes over you, imposing Fear (${rounds}r)!`;
       }
+    } else if (playerGap >= 2.5) {
+      const rounds = playerGap >= 3.2 ? 3 : 2;
+      battle.enemyStatus!.fear = {
+        rounds,
+        value: 12,
+        sourcePower: pCR,
+        sourceName: 'Killing Intent',
+      };
+      const foeLabel = enemy.intel >= 80 ? enemy.name : `the opposing ${enemy.archetype}`;
+      battle.sceneLine += ` Merely unleashing your chakra brings ${foeLabel} to one knee before they can finish a single hand seal (Killing Intent Fear ${rounds}r)!`;
     } else if (playerGap >= 2) {
-      const rounds = playerGap >= 3 ? 2 : 1;
+      const rounds = 1;
       battle.enemyStatus!.fear = {
         rounds,
         value: 8,
         sourcePower: pCR,
         sourceName: 'Killing Intent',
       };
+      battle.sceneLine += ` Your suffocating Killing Intent rattles the enemy's stance (Fear 1r).`;
     }
   }
 }
@@ -1673,6 +1699,12 @@ export function resolveBattleRound(
   // Apply any self-states on offensive jutsu (e.g., Chidori Nagashi guard, Hiraishin evade)
   applyPlayerSelfStates(chosenJutsu);
 
+  // Point-Buy Drawback: Volatile Chakra Pathways (S-Rank output inflicts 3 recoil HP & +1 bodyStrain)
+  if (state.drawbacks?.includes('chakra_burnout') && chosenJutsu.rank === 'S') {
+    war.hp = Math.max(1, war.hp - 3);
+    state.bodyStrain += 1;
+  }
+
   // === REAPER DEATH SEAL (Shiki Fujin mutual-kill kinjutsu) ===
   if (chosenJutsu.effect.tags?.includes('reaper_death_seal')) {
     const sealedDmg = enemy.hp;
@@ -2604,10 +2636,16 @@ function advanceRoundCounter(
     }
   }
 
-  // 3. Mode Upkeep (CP & optional HP); auto-deactivates at CP 0 with 1-round cooldown
+  // 3. Mode Upkeep (CP & optional HP); Bijuu Cloak regenerates HP/CP; auto-deactivates at CP 0 with 1-round cooldown
   for (const mId of getActivePlayerModes(battle)) {
     const def = MODE_MAP[mId];
     if (!def) continue;
+    if (mId === 'bijuu_cloak' && state.jinchuriki) {
+      war.hp = clamp(war.hp + 5, 0, 100);
+      war.cp = clamp(war.cp + 6, 0, 100);
+      tickNotes.push('Bijuu Cloak +5 HP / +6 CP');
+      continue;
+    }
     const cpCost = getModeUpkeepCp(state, mId);
     war.cp = Math.max(0, war.cp - cpCost);
     if (def.upkeepHp) {

@@ -83,6 +83,21 @@ export interface ConvictionState {
   endingKey: string | null;
 }
 
+export type DrawbackId = 'illness' | 'hunted_by_village' | 'caged_bird' | 'chakra_burnout';
+
+export interface SandboxConfig {
+  transcendentCap: boolean;
+  growthMult: 1 | 2 | 5;
+}
+
+export interface JinchurikiState {
+  bijuuName: string;
+  ostracized: boolean;
+  harmony: number; // 0..100
+}
+
+export type MangekyoArtId = 'amaterasu' | 'tsukuyomi' | 'kamui' | 'kotoamatsukami';
+
 export interface CustomBuildConfig {
   mode: 'points' | 'free';
   originId: OriginId;
@@ -90,14 +105,27 @@ export interface CustomBuildConfig {
   clanId?: string;
   sex: 'M' | 'F';
   name: string;
+  epithet?: string;
   capacity: 1 | 2 | 3 | 4 | 5;
   element: ChakraElement;
+  secondaryElements?: ChakraElement[];
   statOffsets: Partial<Record<StatKey, number>>;
   directStats?: Partial<Record<StatKey, number>>;
   startDisciplineId?: string;
   startDisciplineLevel?: 1 | 2 | 3 | 4;
+  startDisciplines?: { id: string; level: 1 | 2 | 3 | 4 }[];
   latentBloodlineId?: string;
   startBloodlineStage?: BloodlineStage;
+  mangekyoAwakened?: boolean;
+  mangekyoArts?: MangekyoArtId[];
+  eternalMangekyo?: boolean;
+  summonClanId?: SummonClanId;
+  jinchurikiBijuu?: string;
+  jinchurikiOstracized?: boolean;
+  signatureJutsuIds?: string[];
+  transcendentCap?: boolean;
+  growthMult?: 1 | 2 | 5;
+  drawbacks?: DrawbackId[];
 }
 
 export type SummonClanId = 'toad' | 'snake' | 'slug' | 'hound' | 'hawk' | 'ape';
@@ -420,7 +448,8 @@ export type ModeId =
   | 'sennin'
   | 'ketsuryugan'
   | 'suna_tate'
-  | 'shikyaku';
+  | 'shikyaku'
+  | 'bijuu_cloak';
 
 export type ModeSlot = 'dojutsu' | 'body';
 
@@ -456,7 +485,8 @@ export interface ActiveBattleState {
   isAmbush: boolean;
   isDefense: boolean;
   startedInPhase?: 'day' | 'night';
-  rewardTag?: 'strategic_ridge';
+  rewardTag?: 'strategic_ridge' | 'solo_vanguard_gauntlet' | 'solo_vanguard_barrage';
+  vanguardQueueEnemyId?: string;
   sceneLine: string;
   enemyQuip: string;
   playerWardRounds: number;
@@ -1323,9 +1353,12 @@ export type DecisionKind =
   | 'politics_event'
   | 'imperfect_life'
   | 'npc_plea'
+  | 'legend_event'
+  | 'drawback_event'
   | 'crisis_whisper'
   | 'war_prelude'
   | 'war_day'
+  | 'war_vanguard_choice'
   | 'war_night'
   | 'war_target'
   | 'war_battle_round'
@@ -1379,6 +1412,7 @@ export interface LifeRecord {
   id: string;
   seed: number;
   name: string;
+  epithet?: string;
   sex: 'M' | 'F';
   villageId: VillageId;
   villageName: string;
@@ -1392,7 +1426,9 @@ export interface LifeRecord {
   specialStatus: SpecialStatus;
   threatTier: 'D' | 'C' | 'B' | 'A' | 'S';
   element: ChakraElement;
+  secondaryElements?: ChakraElement[];
   bloodlineName: string | null;
+  bijuuName?: string | null;
   topDisciplines: string[];
   warsSurvived: number;
   warsFought: number;
@@ -1429,12 +1465,14 @@ export interface GameState {
   autoPlay: boolean;
 
   name: string;
+  epithet?: string;
   sex: 'M' | 'F';
   originId: OriginId;
   villageId: VillageId;
   clanId?: string | null;
   capacity: 1 | 2 | 3 | 4 | 5;
   element: ChakraElement;
+  secondaryElements?: ChakraElement[];
 
   rank: ShinobiRank;
   peakRank: ShinobiRank;
@@ -1452,6 +1490,10 @@ export interface GameState {
   disciplines: DisciplineProgress[];
   jutsuMastery?: Record<string, number>;
   discoveredJutsu?: string[];
+  signatureJutsu?: string[];
+  jinchuriki?: JinchurikiState | null;
+  drawbacks?: DrawbackId[];
+  sandbox?: SandboxConfig;
   permanentDisability?: boolean;
   bloodline: BloodlineState | null;
   hasClanLegacy: boolean;

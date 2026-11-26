@@ -1,6 +1,6 @@
 import { rewriteOrphanText } from '../../data/i18n';
 import { ORIGIN_MAP } from '../../data/origins';
-import { clamp, getChakraCap } from '../powers';
+import { clamp, getChakraCap, getStatCap } from '../powers';
 import type {
   CheckResultChip,
   GameState,
@@ -72,13 +72,14 @@ export function snapshotStats(state: GameState): Stats {
 }
 
 export function clampStats(state: GameState): void {
-  const cap = getChakraCap(state);
-  state.stats.chakra = clamp(Math.round(state.stats.chakra), 0, cap);
-  state.stats.intel = clamp(Math.round(state.stats.intel), 0, 100);
-  state.stats.will = clamp(Math.round(state.stats.will), 0, 100);
-  state.stats.bonds = clamp(Math.round(state.stats.bonds), 0, 100);
-  state.stats.health = clamp(Math.round(state.stats.health), 0, 100);
-  state.stats.ryo = clamp(Math.round(state.stats.ryo), 0, 100);
+  const chakraCap = getChakraCap(state);
+  const statCap = getStatCap(state);
+  state.stats.chakra = clamp(Math.round(state.stats.chakra), 0, chakraCap);
+  state.stats.intel = clamp(Math.round(state.stats.intel), 0, statCap);
+  state.stats.will = clamp(Math.round(state.stats.will), 0, statCap);
+  state.stats.bonds = clamp(Math.round(state.stats.bonds), 0, statCap);
+  state.stats.health = clamp(Math.round(state.stats.health), 0, statCap);
+  state.stats.ryo = clamp(Math.round(state.stats.ryo), 0, statCap);
 }
 
 export function diffStats(before: Stats, after: Stats): StatDeltaChip[] {

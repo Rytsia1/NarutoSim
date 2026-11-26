@@ -12,11 +12,15 @@ export function formatShareText(rec: LifeRecord): string {
         ? `Missing-Nin (${t(`rank.${rec.peakRank}`)})`
         : t(`rank.${rec.peakRank}`);
 
+  const elemStr =
+    rec.secondaryElements && rec.secondaryElements.length > 0
+      ? `${ELEMENT_NAMES[rec.element]} + ${rec.secondaryElements.map((e) => ELEMENT_NAMES[e]).join(', ')}`
+      : ELEMENT_NAMES[rec.element];
   const parts = [
-    `[NarutoSim Shinobi Record] ${rec.name}`,
+    `[NarutoSim Shinobi Record] ${rec.name}${rec.epithet ? ` "${rec.epithet}"` : ''}`,
     `${rec.villageName} | ${rec.originName} | Lived ${formatEraRange(rec.birthYear, rec.deathYear)} (Age ${rec.deathAge})`,
-    `Peak Rank: ${rankLabel} | Bingo Tier: ${rec.threatTier}-Rank | Element: ${ELEMENT_NAMES[rec.element]}`,
-    `Kekkei Genkai: ${rec.bloodlineName ?? 'None'} | Wars Survived: ${rec.warsSurvived}/${rec.warsFought}`,
+    `Peak Rank: ${rankLabel} | Bingo Tier: ${rec.threatTier}-Rank | Element: ${elemStr}`,
+    `Kekkei Genkai: ${rec.bloodlineName ?? 'None'}${rec.bijuuName ? ` | Jinchuriki: ${rec.bijuuName}` : ''} | Wars Survived: ${rec.warsSurvived}/${rec.warsFought}`,
     `World Fate: ${rec.crisisStatus} | Cause: ${rec.causeOfDeath}`,
   ];
   if (rec.lastWords) {
@@ -134,8 +138,14 @@ export function renderShinobiCardCanvas(rec: LifeRecord): HTMLCanvasElement {
   ctx.fillText('NARUTOSIM : SHINOBI LIFE CHRONICLE', 86, 114);
 
   ctx.fillStyle = '#ede6d6';
-  ctx.font = 'bold 64px Georgia, serif';
-  ctx.fillText(rec.name, 86, 194, W - 320);
+  ctx.font = 'bold 60px Georgia, serif';
+  ctx.fillText(rec.name, 86, 184, W - 320);
+
+  if (rec.epithet) {
+    ctx.fillStyle = '#d6a34a';
+    ctx.font = 'italic 600 28px Georgia, serif';
+    ctx.fillText(`"${rec.epithet}"`, 86, 222, W - 320);
+  }
 
   const rankLabel =
     rec.specialStatus === 'kage'
@@ -145,11 +155,11 @@ export function renderShinobiCardCanvas(rec: LifeRecord): HTMLCanvasElement {
         : t(`rank.${rec.peakRank}`).toUpperCase();
 
   ctx.fillStyle = '#b9af9c';
-  ctx.font = '600 28px system-ui, sans-serif';
+  ctx.font = '600 26px system-ui, sans-serif';
   ctx.fillText(
     `${rec.villageName}  |  ${formatEraRange(rec.birthYear, rec.deathYear)} (Age ${rec.deathAge})  |  ${rankLabel}`,
     86,
-    246,
+    rec.epithet ? 258 : 246,
     W - 172,
   );
 
@@ -162,10 +172,14 @@ export function renderShinobiCardCanvas(rec: LifeRecord): HTMLCanvasElement {
   ctx.stroke();
 
   // Key Stat Cards (2x3 grid)
+  const natureLabel =
+    rec.secondaryElements && rec.secondaryElements.length > 0
+      ? `${ELEMENT_NAMES[rec.element]} + ${rec.secondaryElements.length} Natures`
+      : `${ELEMENT_NAMES[rec.element]} Release`;
   const cells: [string, string][] = [
     ['ORIGIN', rec.originName],
-    ['CHAKRA NATURE', `${ELEMENT_NAMES[rec.element]} Release`],
-    ['KEKKEI GENKAI', rec.bloodlineName ?? 'None Awakened'],
+    ['CHAKRA NATURE', natureLabel],
+    ['KEKKEI GENKAI / VESSEL', rec.bijuuName ? `${rec.bloodlineName ? `${rec.bloodlineName} / ` : ''}${rec.bijuuName}` : rec.bloodlineName ?? 'None Awakened'],
     ['WARS SURVIVED / FOUGHT', `${rec.warsSurvived} / ${rec.warsFought}`],
     ['WORLD FATE', rec.crisisStatus],
     ['CAUSE OF DEATH', rec.causeOfDeath],

@@ -24,13 +24,16 @@ import {
 } from './people';
 import {
   buildBattleRoundDecision,
+  getCombatRating,
+  getPlayerRanks,
   initBattleV2State,
+  isRunOnSightLegend,
   resolveBattleRound,
   resolveGate8Aftermath,
   resolveNpcSkirmish,
   skillSum,
 } from './combat';
-import { tryRareDojutsuTransplant } from './powers';
+import { getStatCap, tryRareDojutsuTransplant } from './powers';
 import {
   advanceCrisisPhase,
   buildConvictionBeatDecision,
@@ -630,7 +633,10 @@ export function openDayPhase(state: GameState, rng: SeededRng): void {
   // Priority 4: Sector Bounty Hunt (Day 4-8, once per war)
   if (war.day >= 4 && war.day <= 8 && !war.huntDone && nonAllies.length >= 1 && rng.chance(0.32)) {
     war.huntDone = true;
-    const playerIsHunted = state.leanings.ruthless >= 5 || state.specialStatus === 'missing_nin';
+    const playerIsHunted =
+      state.leanings.ruthless >= 5 ||
+      state.specialStatus === 'missing_nin' ||
+      Boolean(state.drawbacks?.includes('hunted_by_village'));
     const target = rng.pick(nonAllies);
     state.pending = {
       id: `war_hunt_${war.day}`,
@@ -865,6 +871,19 @@ export function buildWarDayDecision(state: GameState): PendingDecision {
   if (war.fronts && war.fronts.length > 0) {
     const activeFront = war.fronts.find((f) => f.id === war.activeFrontId) ?? war.fronts[0];
     const role = war.playerRole ?? determineWarPlayerRole(state);
+    const isLegendCarrier =
+      computeCombatProjection(state).threatTier === 'S' || state.specialStatus === 'kage';
+    if (isLegendCarrier && living > 0) {
+      options.unshift({
+        id: 'day_solo_vanguard',
+        label: `[Legend Action] Solo Vanguard Charge on ${activeFront.name}`,
+        sublabel: 'Break the enemy line alone: choose a 1-vs-2 Ace Gauntlet (+22 Front Control) or a Solo Shockwave Blitz (+15 Control). Requires 45 HP, 20 CP.',
+        statHints: ['Combat', 'Legend'],
+        disabled: war.hp < 45 || war.cp < 20,
+        disabledReason: war.hp < 45 ? 'Requires 45 HP' : 'Requires 20 CP',
+        autoEligible: false,
+      });
+    }
     if (role === 'kage_hq') {
       options.unshift({
         id: 'day_kage_allocate',
@@ -1166,12 +1185,114 @@ export function startWarBattle(
     isAmbush: boolean;
     isDefense: boolean;
     startedInPhase?: 'day' | 'night';
-    rewardTag?: 'strategic_ridge';
+    rewardTag?: 'strategic_ridge' | 'solo_vanguard_gauntlet' | 'solo_vanguard_barrage';
+    vanguardQueueEnemyId?: string;
+    allowFleeOnSight?: boolean;
   },
 ): void {
   const war = state.war!;
   const enemy = war.enemies.find((e) => e.id === enemyId)!;
   const startedInPhase = opts.startedInPhase ?? (war.subPhase === 'day' ? 'day' : 'night');
+
+  // Flee-on-Sight / Bingo Book Infamy: Tier S / CR >= 4.8 legends rout sub-Jonin enemies before Round 1!
+  const pCR = getCombatRating(getPlayerRanks(state, false));
+  const eCR = getCombatRating(enemy.ranks);
+  const isSubJonin = enemy.officialRank === 'genin' || enemy.officialRank === 'chunin';
+  if (
+    opts.allowFleeOnSight &&
+    !opts.isFinal &&
+    !war.crisis &&
+    isRunOnSightLegend(state) &&
+    isSubJonin &&
+    pCR - eCR >= 1.8
+  ) {
+    enemy.alive = false;
+    enemy.hp = 0;
+    enemy.intel = 100;
+    enemy.skillsRevealed = true;
+    enemy.allyId = null;
+    war.kills += 1;
+    war.daysWithoutFight = 0;
+    if (war.allyId === enemy.id) war.allyId = null;
+    for (const o of war.enemies) {
+      if (o.allyId === enemy.id) o.allyId = null;
+    }
+    const swungFront = applyPlayerFrontImpact(war, 8, -5, 0, enemy.frontId);
+    state.stats.will += 2;
+    state.stats.bonds += 1;
+    clampStats(state);
+    const legendName = state.epithet ? `"${state.epithet}"` : state.name;
+    pushLog(
+      state,
+      'milestone',
+      `Run-on-Sight Order! Recognizing ${legendName} from the S-Rank Bingo Book, ${enemy.name} (${enemy.officialRank.replace('_', ' ')}) throws smoke bombs and abandons the field before Round 1 can begin!${swungFront ? ` ${swungFront.name} surges to ${swungFront.control}% control.` : ''}`,
+      { title: 'Bingo Book Infamy: Enemy Routed' },
+    );
+
+    if (opts.vanguardQueueEnemyId) {
+      const nextAce = war.enemies.find((e) => e.id === opts.vanguardQueueEnemyId && e.alive);
+      if (nextAce) {
+        startWarBattle(state, nextAce.id, {
+          isFinal: false,
+          isAmbush: true,
+          isDefense: false,
+          startedInPhase: 'day',
+          rewardTag: opts.rewardTag,
+          allowFleeOnSight: true,
+        });
+        return;
+      }
+    }
+
+    if (opts.rewardTag === 'solo_vanguard_gauntlet') {
+      const vf = applyPlayerFrontImpact(war, 22, -14, 6);
+      war.resolves += 1;
+      pushLog(
+        state,
+        'milestone',
+        `Solo Vanguard Gauntlet Complete! The enemy division collapses before ${legendName}${vf ? ` (${vf.name} surges to ${vf.control}% control, +1 Resolve)` : ''}.`,
+        { title: 'Living Legend Breakthrough' },
+      );
+    } else if (opts.rewardTag === 'solo_vanguard_barrage') {
+      const vf = applyPlayerFrontImpact(war, 15, -8, 4);
+      pushLog(
+        state,
+        'milestone',
+        `Solo Shockwave Blitz Complete! Reserve lines break across ${vf?.name ?? 'the front'} (Control ${vf?.control ?? 50}%).`,
+        { title: 'Frontline Shattered' },
+      );
+    }
+
+    war.activeBattle = null;
+    if (getLivingEnemies(war).length === 0) {
+      war.beatQueue = [];
+      war.beatClock = 0;
+      enqueueWarBeat(war, {
+        kind: 'dawn_tick',
+        delay: 0.4,
+        label: 'Securing the routed sector...',
+        timeOfDay: 'dawn',
+      });
+    } else if (startedInPhase === 'day') {
+      war.subPhase = 'day';
+      queueNightDecision(war);
+    } else if (opts.isDefense) {
+      war.subPhase = 'night';
+      war.beatQueue = [];
+      war.beatClock = 0;
+      enqueueWarBeat(war, {
+        kind: 'dawn_tick',
+        delay: Number((baseWarGap(war) * 0.6).toFixed(2)),
+        label: 'The perimeter holds effortlessly until dawn...',
+        timeOfDay: 'dawn',
+      });
+    } else {
+      war.subPhase = 'night';
+      queueNightSequence(war);
+    }
+    return;
+  }
+
   war.subPhase = 'battle';
   war.daysWithoutFight = 0;
   if (!opts.isDefense) war.strikes += 1;
@@ -1226,6 +1347,7 @@ export function startWarBattle(
     isDefense: opts.isDefense,
     startedInPhase,
     rewardTag: opts.rewardTag,
+    vanguardQueueEnemyId: opts.vanguardQueueEnemyId,
     sceneLine,
     enemyQuip,
     playerWardRounds: 0,
@@ -1507,7 +1629,7 @@ function runNightThreatCheck(state: GameState, rng: SeededRng): boolean {
       return false;
     }
 
-    startWarBattle(state, attacker.id, { isFinal: false, isAmbush: false, isDefense: true });
+    startWarBattle(state, attacker.id, { isFinal: false, isAmbush: false, isDefense: true, allowFleeOnSight: true });
     return true;
   }
 
@@ -1522,12 +1644,14 @@ export function runDawnTick(state: GameState, rng: SeededRng): void {
 
   const hasMedical = state.disciplines.some((d) => d.id === 'medical');
   const hasUzumaki = state.bloodline?.id === 'uzumaki_chains' && state.bloodline.stage !== 'latent';
+  const jinchHpBonus = state.jinchuriki ? 6 : 0;
+  const jinchCpBonus = state.jinchuriki ? 10 : 0;
   const strategicBonus = war.strategicClaimedBy === 'player' ? 4 : 0;
 
   const prevHp = war.hp;
   const prevCp = war.cp;
   war.hp = clamp(
-    war.hp + 4 + Math.round(state.stats.chakra * 0.05) + (hasMedical ? 4 : 0) + (war.workshop >= 100 ? 3 : 0),
+    war.hp + 4 + Math.round(state.stats.chakra * 0.05) + (hasMedical ? 4 : 0) + (war.workshop >= 100 ? 3 : 0) + jinchHpBonus,
     0,
     100,
   );
@@ -1537,6 +1661,7 @@ export function runDawnTick(state: GameState, rng: SeededRng): void {
     Math.round(state.stats.chakra * 0.08) +
     (hasUzumaki ? 5 : 0) +
     (war.workshop >= 100 ? 3 : 0) +
+    jinchCpBonus +
     strategicBonus,
     0,
     100,
@@ -1947,7 +2072,7 @@ export function concludeWar(
   syncPartnerBackToState(state, war.partner);
 
   const wear = Math.max(0, Math.round((100 - war.hp) * 0.28));
-  state.stats.health = clamp(state.stats.health - wear, 8, 100);
+  state.stats.health = clamp(state.stats.health - wear, 8, getStatCap(state));
   state.stats.will += outcome === 'victor' || outcome === 'shared' ? 6 : 3;
   state.stats.intel += 3;
   // C30/F7: War payout reflects outcome; Defeat armistice incurs war reparations & keeps tension elevated
@@ -2548,11 +2673,112 @@ export function handleWarDecision(
     }
   }
 
+  // === SOLO VANGUARD CHARGE SUB-CHOICE ===
+  if (decision.kind === 'war_vanguard_choice') {
+    if (optionId === 'vanguard_cancel') {
+      state.pending = buildWarDayDecision(state);
+      return;
+    }
+    const living = getLivingEnemies(war);
+    const activeFront = war.fronts?.find((f) => f.id === war.activeFrontId) ?? war.fronts?.[0];
+    const frontPool = living.filter((e) => e.frontId === activeFront?.id);
+    const ordered = [...frontPool, ...living.filter((e) => e.frontId !== activeFront?.id)];
+    const first = ordered[0];
+    const second = ordered[1];
+    if (!first) {
+      queueNightDecision(war);
+      return;
+    }
+
+    war.cp = Math.max(0, war.cp - 20);
+    war.exposure = clamp(war.exposure + 14, 0, 100);
+    const legendName = state.epithet ? `"${state.epithet}"` : state.name;
+
+    if (optionId === 'vanguard_gauntlet') {
+      pushLog(
+        state,
+        'crisis',
+        `Solo Vanguard Gauntlet! ${legendName} leaps alone across no-man's-land to shatter ${second ? 'two enemy Aces back-to-back' : 'the enemy frontline Ace'} on ${activeFront?.name ?? 'the front'}!`,
+        { title: 'One-vs-Many Vanguard Charge' },
+      );
+      startWarBattle(state, first.id, {
+        isFinal: false,
+        isAmbush: false,
+        isDefense: false,
+        startedInPhase: 'day',
+        rewardTag: 'solo_vanguard_gauntlet',
+        vanguardQueueEnemyId: second?.id,
+        allowFleeOnSight: true,
+      });
+      return;
+    }
+
+    // vanguard_barrage: Solo Shockwave Blitz (1 Ace with Ambush Initiative + +15 Front Control)
+    war.nextBattleBonus += 10;
+    pushLog(
+      state,
+      'milestone',
+      `Solo Shockwave Blitz! ${legendName} tears straight through the enemy formation on ${activeFront?.name ?? 'the front'} with overwhelming opening momentum!`,
+      { title: 'Frontline Shockwave Blitz' },
+    );
+    startWarBattle(state, first.id, {
+      isFinal: false,
+      isAmbush: true,
+      isDefense: false,
+      startedInPhase: 'day',
+      rewardTag: 'solo_vanguard_barrage',
+      allowFleeOnSight: true,
+    });
+    return;
+  }
+
   // === DAY ACTION ===
   if (decision.kind === 'war_day') {
     const living = getLivingEnemies(war);
     const hasMedical = state.disciplines.some((d) => d.id === 'medical');
     const hasFortBonus = state.disciplines.some((d) => d.id === 'barrier' || d.id === 'trap_craft' || d.id === 'earth_release');
+
+    if (optionId === 'day_solo_vanguard' && living.length > 0) {
+      const activeFront = war.fronts?.find((f) => f.id === war.activeFrontId) ?? war.fronts?.[0];
+      const hasTwo = living.length >= 2;
+      state.pending = {
+        id: `war_vanguard_${war.warNumber}_${war.day}`,
+        kind: 'war_vanguard_choice',
+        eventId: 'war_vanguard_choice',
+        title: `Solo Vanguard Charge: ${activeFront?.name ?? 'Contested Front'}`,
+        body: `Allied divisions part behind you as you step onto open ground. Choose how you will break the enemy line alone (costs 20 CP, +14 Exposure):`,
+        manual: true,
+        cancelOptionId: 'vanguard_cancel',
+        cancelLabel: 'Cancel & Return to Daylight Orders',
+        options: [
+          {
+            id: 'vanguard_gauntlet',
+            label: hasTwo
+              ? '1-vs-2 Ace Gauntlet (Back-to-Back Breakthrough)'
+              : 'All-Out Vanguard Breakthrough (Final Sector Ace)',
+            sublabel: hasTwo
+              ? 'Engage 2 enemy Aces back-to-back without rest! Victory flips +22 Front Control, -14 Enemy Strength & +1 Resolve.'
+              : 'Crush the remaining Ace alone for +22 Front Control, -14 Enemy Strength & +1 Resolve.',
+            statHints: ['High Risk', '+22 Control'],
+            autoEligible: false,
+          },
+          {
+            id: 'vanguard_barrage',
+            label: 'Frontline Shockwave Blitz (1 Ace + Division Shatter)',
+            sublabel: 'Open with Ambush Initiative (+10 Bonus) against 1 Ace and shatter reserve lines for +15 Front Control & -8 Enemy Strength.',
+            statHints: ['Ambush', '+15 Control'],
+            autoEligible: false,
+          },
+          {
+            id: 'vanguard_cancel',
+            label: 'Hold Position & Return to Daylight Orders',
+            sublabel: 'Go back without spending your Daylight turn or CP.',
+            autoEligible: false,
+          },
+        ],
+      };
+      return;
+    }
 
     if (optionId === 'day_kage_allocate' && war.fronts && war.fronts.length > 0) {
       const weakest = [...war.fronts].sort((a, b) => a.control - b.control)[0];
@@ -2568,7 +2794,7 @@ export function handleWarDecision(
       const front = applyPlayerFrontImpact(war, isMerc ? 5 : 6, isMerc ? -2 : -3, 0);
       war.exposure = clamp(war.exposure + 6, 0, 100);
       war.cp = Math.max(0, war.cp - (isMerc ? 4 : 6));
-      if (isMerc) state.stats.ryo = clamp(state.stats.ryo + 8, 0, 100);
+      if (isMerc) state.stats.ryo = clamp(state.stats.ryo + 8, 0, getStatCap(state));
       pushLog(
         state,
         'war',
@@ -2586,6 +2812,7 @@ export function handleWarDecision(
           isAmbush: false,
           isDefense: false,
           startedInPhase: 'day',
+          allowFleeOnSight: true,
         });
         return;
       }
@@ -2609,7 +2836,7 @@ export function handleWarDecision(
       );
     } else if (optionId === 'day_cover') {
       war.exposure = clamp(war.exposure - 7, 0, 100);
-      state.stats.will = clamp(state.stats.will + 1, 0, 100);
+      state.stats.will = clamp(state.stats.will + 1, 0, getStatCap(state));
       pushLog(state, 'war', 'You blend into supply columns and scrub chakra traces along your approach (Exposure -7).');
     } else if (optionId === 'day_recon' && living.length > 0) {
       const target = [...living].sort((a, b) => a.intel - b.intel)[0];
@@ -2817,7 +3044,7 @@ export function handleWarDecision(
     }
 
     if (mode === 'raid') {
-      startWarBattle(state, target.id, { isFinal: false, isAmbush: true, isDefense: false });
+      startWarBattle(state, target.id, { isFinal: false, isAmbush: true, isDefense: false, allowFleeOnSight: true });
       return;
     }
 
@@ -2831,7 +3058,7 @@ export function handleWarDecision(
         `Night recon reveals +${gain} Intel on ${target.intel >= 80 ? target.name : `rival ${target.archetype}`} (now ${target.intel}%).`,
       );
       if (target.id !== war.allyId && rng.chance(0.14)) {
-        startWarBattle(state, target.id, { isFinal: false, isAmbush: false, isDefense: false });
+        startWarBattle(state, target.id, { isFinal: false, isAmbush: false, isDefense: false, allowFleeOnSight: true });
         return;
       }
     } else if (mode === 'sabotage') {
@@ -3161,6 +3388,48 @@ export function handleWarDecision(
     }
 
     if (status === 'player_won') {
+      // Solo Vanguard 1-vs-2 Ace Gauntlet chain!
+      if (battle.vanguardQueueEnemyId) {
+        const nextAce = war.enemies.find((e) => e.id === battle.vanguardQueueEnemyId && e.alive);
+        if (nextAce) {
+          pushLog(
+            state,
+            'crisis',
+            `Vanguard Gauntlet Continues! Without pausing to catch your breath, you surge straight into ${nextAce.intel >= 80 ? nextAce.name : `the second enemy ${nextAce.archetype}`}!`,
+            { title: 'Gauntlet Wave 2 of 2' },
+          );
+          startWarBattle(state, nextAce.id, {
+            isFinal: false,
+            isAmbush: false,
+            isDefense: false,
+            startedInPhase: 'day',
+            rewardTag: battle.rewardTag,
+            allowFleeOnSight: true,
+          });
+          return;
+        }
+      }
+
+      if (battle.rewardTag === 'solo_vanguard_gauntlet') {
+        const vf = applyPlayerFrontImpact(war, 22, -14, 6);
+        war.resolves += 1;
+        const legendName = state.epithet ? `"${state.epithet}"` : state.name;
+        pushLog(
+          state,
+          'milestone',
+          `Solo Vanguard Gauntlet Triumph! ${legendName} single-handedly shatters the enemy front${vf ? ` (${vf.name} surges to ${vf.control}% control, -14 Enemy Strength, +1 Resolve)` : ''}!`,
+          { title: 'Living Legend Breakthrough' },
+        );
+      } else if (battle.rewardTag === 'solo_vanguard_barrage') {
+        const vf = applyPlayerFrontImpact(war, 15, -8, 4);
+        pushLog(
+          state,
+          'milestone',
+          `Solo Shockwave Blitz Triumph! Enemy reserve divisions fracture across ${vf?.name ?? 'the front'} (Control ${vf?.control ?? 50}%, -8 Enemy Strength).`,
+          { title: 'Frontline Shattered' },
+        );
+      }
+
       // F3/F5: Defeating an enemy Ace swings front control and weakens enemy division strength on that front
       const swungFront = applyPlayerFrontImpact(war, battle.isFinal ? 4 : 8, -5, 0, enemy.frontId);
       if (swungFront) {

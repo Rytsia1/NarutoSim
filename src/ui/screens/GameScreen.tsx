@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CLAN_MAP } from '../../data/clans';
+import { DRAWBACK_MAP } from '../../data/drawbacks';
 import type { GovernanceActionId } from '../../data/events-politics';
 import { t } from '../../data/i18n';
 import { NINDO_MAP } from '../../data/nindo';
@@ -20,7 +21,7 @@ import { getBranchLabel } from '../../sim/clan-heritage';
 import { canEnterRetirement } from '../../sim/epilogue';
 import { formatEraYear, formatRyo, formatRyoDelta } from '../../sim/history/chronicle';
 import { resolveFamilyMemberView, resolveSquadMemberView } from '../../sim/people';
-import { computeCombatProjection, getChakraCap, XP_NEED_FOR_NEXT } from '../../sim/powers';
+import { computeCombatProjection, getChakraCap, getStatCap, XP_NEED_FOR_NEXT } from '../../sim/powers';
 import { deriveRelArchetype } from '../../sim/relationships';
 import { getRelStageLabel, getTrustTier } from '../../sim/team';
 import type { FocusId, GameState } from '../../sim/types';
@@ -73,6 +74,7 @@ export function GameScreen({
 
   const proj = computeCombatProjection(state);
   const chakraCap = getChakraCap(state);
+  const statCap = getStatCap(state);
   const village = VILLAGE_MAP[state.villageId];
   const origin = ORIGIN_MAP[state.originId];
   const retireAvailable = canEnterRetirement(state);
@@ -128,7 +130,10 @@ export function GameScreen({
     <div className="app-shell">
       <header className="game-topbar">
         <div className="identity-block">
-          <h1 className="char-name">{state.name}</h1>
+          <h1 className="char-name">
+            {state.name}
+            {state.epithet ? <span className="history-sub" style={{ marginLeft: 8 }}>&ldquo;{state.epithet}&rdquo;</span> : null}
+          </h1>
           <span className={`status-tag ${rankClass}`}>
             <span className="kanji-glyph">{RANK_KANJI[state.rank] ?? ''}</span> {t(`rank.${state.rank}`)}
           </span>
@@ -298,11 +303,29 @@ export function GameScreen({
                 <div className="history-sub" style={{ marginBottom: 10 }}>
                   {origin.name}
                   {state.clanId && CLAN_MAP[state.clanId] ? ` | ${CLAN_MAP[state.clanId].name}` : ''} | Element:{' '}
-                  <span className="kanji-glyph">{ELEMENT_KANJI[state.element]}</span> {ELEMENT_NAMES[state.element]} |
-                  Capacity Tier {state.capacity}/5
+                  <span className="kanji-glyph">{ELEMENT_KANJI[state.element]}</span> {ELEMENT_NAMES[state.element]}
+                  {state.secondaryElements && state.secondaryElements.length > 0
+                    ? ` + ${state.secondaryElements.map((e) => ELEMENT_NAMES[e]).join(', ')}`
+                    : ''}{' '}
+                  | Capacity Tier {state.capacity}/5
                   {state.hasClanLegacy ? ' | Clan Hiden Inherited' : ''}
+                  {state.sandbox?.transcendentCap ? ' | Transcendent Cap' : ''}
+                  {state.sandbox?.growthMult && state.sandbox.growthMult > 1 ? ` | ${state.sandbox.growthMult}x Growth` : ''}
                   <br />
                   Village Trait ({village.name}): {village.perk.label}
+                  {state.jinchuriki && (
+                    <>
+                      <br />
+                      Jinchuriki Vessel: <strong>{state.jinchuriki.bijuuName}</strong> (Harmony {state.jinchuriki.harmony}%)
+                    </>
+                  )}
+                  {state.drawbacks && state.drawbacks.length > 0 && (
+                    <>
+                      <br />
+                      Active Drawbacks:{' '}
+                      {state.drawbacks.map((id) => DRAWBACK_MAP[id]?.name ?? id).join(', ')}
+                    </>
+                  )}
                   {state.clanId && CLAN_MAP[state.clanId] && (
                     <>
                       <br />
@@ -326,35 +349,35 @@ export function GameScreen({
                   <div className="stat-row">
                     <span>Health</span>
                     <div className="bar-track">
-                      <div className="bar-fill health" style={{ width: `${state.stats.health}%` }} />
+                      <div className="bar-fill health" style={{ width: `${Math.min(100, (state.stats.health / statCap) * 100)}%` }} />
                     </div>
-                    <span>{state.stats.health}</span>
+                    <span>{state.stats.health}{statCap > 100 ? `/${statCap}` : ''}</span>
                   </div>
                   <div className="stat-row">
                     <span>Intel</span>
                     <div className="bar-track">
-                      <div className="bar-fill" style={{ width: `${state.stats.intel}%` }} />
+                      <div className="bar-fill" style={{ width: `${Math.min(100, (state.stats.intel / statCap) * 100)}%` }} />
                     </div>
-                    <span>{state.stats.intel}</span>
+                    <span>{state.stats.intel}{statCap > 100 ? `/${statCap}` : ''}</span>
                   </div>
                   <div className="stat-row">
                     <span>Will</span>
                     <div className="bar-track">
-                      <div className="bar-fill" style={{ width: `${state.stats.will}%` }} />
+                      <div className="bar-fill" style={{ width: `${Math.min(100, (state.stats.will / statCap) * 100)}%` }} />
                     </div>
-                    <span>{state.stats.will}</span>
+                    <span>{state.stats.will}{statCap > 100 ? `/${statCap}` : ''}</span>
                   </div>
                   <div className="stat-row">
                     <span>Bonds</span>
                     <div className="bar-track">
-                      <div className="bar-fill health" style={{ width: `${state.stats.bonds}%` }} />
+                      <div className="bar-fill health" style={{ width: `${Math.min(100, (state.stats.bonds / statCap) * 100)}%` }} />
                     </div>
-                    <span>{state.stats.bonds}</span>
+                    <span>{state.stats.bonds}{statCap > 100 ? `/${statCap}` : ''}</span>
                   </div>
                   <div className="stat-row">
                     <span>Ryo</span>
                     <div className="bar-track">
-                      <div className="bar-fill" style={{ width: `${state.stats.ryo}%` }} />
+                      <div className="bar-fill" style={{ width: `${Math.min(100, (state.stats.ryo / statCap) * 100)}%` }} />
                     </div>
                     <span>{formatRyo(state.stats.ryo)}</span>
                   </div>

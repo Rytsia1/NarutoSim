@@ -43,7 +43,7 @@ describe('Clan & Bloodline Gating (Section 2 & 4.1)', () => {
 
     // Wave 2 Hiden Art 1:1 integrity: every ClanHidenArt across all 30 clans maps to valid JUTSU_MAP IDs
     expect(CLANS.length).toBe(30);
-    expect(MODE_DB.length).toBe(10);
+    expect(MODE_DB.length).toBe(11);
     let totalHidenArts = 0;
     for (const clan of CLANS) {
       expect(clan.hidenArts.length, `Clan ${clan.id} missing hidenArts`).toBeGreaterThanOrEqual(1);
