@@ -291,14 +291,17 @@ export function runDailyStrategicPlanner(state: GameState, war: WarState, _rng: 
     const selfThreat = evalThreatScore(state, war, npc.id, npc.id);
 
     for (const candId of allActorIds) {
+      // F1: Enemy Aces NEVER target comrades of the same village
+      const candEnemy = candId === 'player' ? null : war.enemies.find((e) => e.id === candId);
+      if (candEnemy && candEnemy.id !== npc.id && candEnemy.villageId === npc.villageId) continue;
       const th = evalThreatScore(state, war, npc.id, candId);
       if (th > apexThreat) {
         apexThreat = th;
         apexId = candId;
       }
       if (candId === npc.id) continue;
-      const candHp = candId === 'player' ? war.hp : (war.enemies.find((e) => e.id === candId)?.hp ?? 100);
-      const candCp = candId === 'player' ? war.cp : (war.enemies.find((e) => e.id === candId)?.cp ?? 100);
+      const candHp = candId === 'player' ? war.hp : (candEnemy?.hp ?? 100);
+      const candCp = candId === 'player' ? war.cp : (candEnemy?.cp ?? 100);
       const vuln = (100 - candHp) + (candCp < 30 ? 20 : 0) - th * 0.15;
       if (vuln > highestVuln) {
         highestVuln = vuln;

@@ -16,6 +16,7 @@ export function initClanHeritage(state: GameState, rng: SeededRng): ClanHeritage
 
   let lineageBranch: LineageBranch = 'main_cadets';
   if (state.originId === 'clan_heir') lineageBranch = 'main_heir';
+  else if (clan.hasBranchHierarchy) lineageBranch = 'branch_house'; // C3: non-heir Hyuga belong to Branch House with Caged Bird
   else if (state.originId === 'clan_branch') lineageBranch = 'branch_house';
   else if (state.originId === 'fallen_clan') lineageBranch = 'distant_blood';
   else if (state.originId === 'anbu_line') lineageBranch = 'main_cadets';
@@ -98,7 +99,7 @@ export function pickClanPoliticsDecision(
   rng: SeededRng,
 ): PendingDecision | null {
   const ch = state.clanHeritage;
-  if (!ch || state.age < 10 || state.specialStatus === 'missing_nin') return null;
+  if (!ch || state.age < 10 || state.rank === 'civilian' || state.specialStatus === 'missing_nin') return null;
   if (state.age - ch.lastClanEventAge < 4) return null;
   const clan = CLAN_MAP[ch.clanId];
   if (!clan) return null;

@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { getKageTitle } from '../../data/villages';
+import { getKageTitle, VILLAGE_MAP } from '../../data/villages';
 import { t } from '../../data/i18n';
-import { VILLAGE_MAP } from '../../data/villages';
+import { formatEraRange, formatEraYear } from '../../sim/history/chronicle';
 import type { GameState } from '../../sim/types';
 import { downloadOrShareShinobiCard, formatShareText } from '../fx/recordCardCanvas';
 
@@ -43,7 +43,7 @@ export function EndingScreen({
             {state.name}, Age {state.age}
           </h1>
           <p className="lobby-tagline">
-            Fallen in {VILLAGE_MAP[state.villageId]?.name ?? state.villageId} territory ({state.birthYear + state.age}) from{' '}
+            Fallen in {VILLAGE_MAP[state.villageId]?.name ?? state.villageId} territory ({formatEraYear(state.birthYear + state.age)}) from{' '}
             {state.causeOfDeath ?? 'natural causes'}.
           </p>
         </header>
@@ -90,7 +90,7 @@ export function EndingScreen({
         <span className="lobby-kicker">Posthumous Legacy Epilogue</span>
         <h1 className="lobby-title">{rec.name}</h1>
         <p className="lobby-tagline tabular">
-          {rec.birthYear} to {rec.deathYear} (Age {rec.deathAge}) | {rec.villageName} | Peak Rank:{' '}
+          {formatEraRange(rec.birthYear, rec.deathYear)} (Age {rec.deathAge}) | {rec.villageName} | Peak Rank:{' '}
           {peakRankText}
         </p>
       </header>

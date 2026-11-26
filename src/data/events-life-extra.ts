@@ -558,6 +558,7 @@ export const EXTRA_LIFE_EVENTS: readonly LifeEventDef[] = [
     minAge: 15,
     maxAge: 46,
     weight: 9,
+    statusTags: ['not_civilian'],
     options: [
       {
         id: 'copy_maps',
@@ -927,7 +928,7 @@ export const EXTRA_GROWTH_EVENTS: readonly GrowthEventDef[] = [
   {
     id: 'gr_classroom_nap',
     title: 'History of the Five Great Nations',
-    body: 'Afternoon sun warms the wooden academy desks as the instructor drones through old First War border treaties.',
+    body: 'Afternoon sun warms the wooden academy desks as the instructor drones through old Third War border treaties.',
     minAge: 7,
     maxAge: 13,
     options: [
@@ -1030,7 +1031,7 @@ export const EXTRA_FLAVOR_LINES: readonly FlavorLineDef[] = [
   { id: 'fl_33', text: 'At the mission desk, clerks hand you wax-sealed folders without bothering to read the warnings aloud.', ranks: ['chunin', 'jonin'] },
   { id: 'fl_34', text: 'A traveling puppet tinker repairs clockwork toys in the square while sensory scouts quietly watch him.' },
   { id: 'fl_35', text: 'Autumn wind scatters crimson maple leaves across the training posts like embers.' },
-  { id: 'fl_36', text: 'You spend a quiet Sunday stitching torn pouches and sorting fresh flash tags by weight.', ranks: ['genin', 'chunin', 'jonin'] },
+  { id: 'fl_36', text: 'You spend a quiet off-duty morning stitching torn pouches and sorting fresh flash tags by weight.', ranks: ['genin', 'chunin', 'jonin'] },
   { id: 'fl_37', text: 'Steam curls from the bathhouse chimney as tired patrol teams trade stiff shoulders for hot water.', minAge: 14 },
   { id: 'fl_38', text: 'In the dusk market, old veterans debate which border pass will flare up next.', minAge: 16 },
   { id: 'fl_39', text: 'Frost rims the water barrel outside your door, making morning chakra focus sting clean and awake.' },

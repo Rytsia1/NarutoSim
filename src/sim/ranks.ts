@@ -122,11 +122,83 @@ export function buildGraduationExamDecision(state: GameState): PendingDecision {
   };
 }
 
+interface ChuninHostArena {
+  hostLabel: string;
+  stage1Hall: string;
+  survivalName: string;
+  survivalDesc: string;
+  stage3Obstacle: string;
+  prelimVenue: string;
+  finalsArena: string;
+}
+
+const CHUNIN_HOST_ARENAS: Record<string, ChuninHostArena> = {
+  konoha: {
+    hostLabel: 'Konohagakure',
+    stage1Hall: 'Konoha Examination Hall',
+    survivalName: 'Forest of Death',
+    survivalDesc: 'Five days inside a walled jungle holding Heaven and Earth scrolls. You enter the gate with a Heaven scroll and must seize an Earth scroll from rival Genin hunting through the canopy.',
+    stage3Obstacle: 'heavy rain floods the ravine before the Central Tower. A desperate rival team blocks the stone bridge while giant forest predators stir in the roots below.',
+    prelimVenue: 'the Central Tower',
+    finalsArena: 'Konoha Stadium',
+  },
+  suna: {
+    hostLabel: 'Sunagakure',
+    stage1Hall: 'Sunagakure Sandstone Hall',
+    survivalName: 'Demon Desert',
+    survivalDesc: 'Five days across shifting crimson dunes holding Heaven and Earth scrolls. Sandstorms strip away tracks as rival Genin prowl between sunken oasis ruins.',
+    stage3Obstacle: 'a blinding haboob sweeps the canyon leading to the Sandstone Vault. A rival team guards the narrow rock arch while sand-wyrms churn beneath the ridge.',
+    prelimVenue: 'the Sandstone Vault',
+    finalsArena: 'Sunagakure Colosseum',
+  },
+  kiri: {
+    hostLabel: 'Kirigakure',
+    stage1Hall: 'Kirigakure Cliffside Hall',
+    survivalName: 'Mist Archipelago',
+    survivalDesc: 'Five days navigating fog-bound sea stacks holding Heaven and Earth scrolls. Shifting tides isolate every island as rival Genin strike from the salt mist.',
+    stage3Obstacle: 'rising storm swells flood the causeway before the Harbor Citadel. A rival squad holds the slick basalt bridge in zero visibility.',
+    prelimVenue: 'the Harbor Citadel',
+    finalsArena: 'Mist Harbor Ring',
+  },
+  kumo: {
+    hostLabel: 'Kumogakure',
+    stage1Hall: 'Cloud Peak Examination Hall',
+    survivalName: 'Lightning Gorge',
+    survivalDesc: 'Five days crossing storm-lashed mountain ravines holding Heaven and Earth scrolls. Thunderheads rumble overhead as rival Genin ambush every suspension bridge.',
+    stage3Obstacle: 'crackling lightning storms pound the narrow ridge before the Storm Hall. A rival team locks down the summit pass.',
+    prelimVenue: 'the Storm Hall',
+    finalsArena: 'Cloud Amphitheater',
+  },
+  iwa: {
+    hostLabel: 'Iwagakure',
+    stage1Hall: 'Basalt Council Hall',
+    survivalName: 'Stone Labyrinth',
+    survivalDesc: 'Five days inside a towering canyon maze holding Heaven and Earth scrolls. Rockslides reshape every corridor as rival Genin set traps along the ledges.',
+    stage3Obstacle: 'aftershocks rattle the narrow gorge before the Granite Sanctum. A fortified rival cell barricades the final tunnel mouth.',
+    prelimVenue: 'the Granite Sanctum',
+    finalsArena: 'Stone Crag Arena',
+  },
+};
+
+function getChuninHostArena(state: GameState): ChuninHostArena {
+  const hostId = state.chuninTournament?.hostVillageId ?? (CHUNIN_HOST_ARENAS[state.villageId] ? state.villageId : 'konoha');
+  return CHUNIN_HOST_ARENAS[hostId] ?? CHUNIN_HOST_ARENAS.konoha;
+}
+
 export function canTakeChuninExam(state: GameState): boolean {
   if (state.rank !== 'genin') return false;
   if (state.specialStatus === 'missing_nin') return false;
-  if (state.age < 13) return false;
+  // D1/D2/D3: Land of Iron (samurai), Waves (civilian), and Uzushio (ruins) never enter Chunin Exams
+  if (state.villageId === 'iron' || state.villageId === 'waves' || state.villageId === 'uzushio') return false;
+  // D5: No hard age-13 gate; require at least 1 year as Genin and an active 3-man team (2 living non-rogue teammates)
   if (state.geninSinceAge !== null && state.age - state.geninSinceAge < 1) return false;
+  if (!state.team?.active) return false;
+  const livingTeammates = state.team.members.filter((m) => {
+    if (m.role !== 'teammate') return false;
+    const p = getPerson(state, m.personId);
+    return Boolean(p && p.identity.alive && p.identity.specialStatus !== 'missing_nin');
+  }).length;
+  if (livingTeammates < 2) return false;
   return true;
 }
 
@@ -142,6 +214,7 @@ export function buildChuninExamStage(
   opts: ChuninStageOptions = {},
 ): PendingDecision {
   const hasActiveTeam = Boolean(state.team?.active);
+  const arena = getChuninHostArena(state);
   const hasKenjutsu = state.disciplines.some((d) => d.id === 'kenjutsu');
   const hasSensoryOrEye =
     state.disciplines.some((d) => d.id === 'sensory') ||
@@ -149,16 +222,14 @@ export function buildChuninExamStage(
       state.bloodline.stage !== 'latent' &&
       (state.bloodline.id === 'sharingan' || state.bloodline.id === 'byakugan'));
 
-  // Stage 1: Written Cipher (Ibiki's Hall)
+  // Stage 1: Written Cipher (host-specific examination hall)
   if (stage === 1) {
     return {
       id: `chunin_s1_${state.age}`,
       kind: 'chunin_exam_stage',
       eventId: 'chunin_stage_1',
-      title: 'Chunin Exam (Stage 1 of 6): The Written Cipher',
-      body: hasActiveTeam
-        ? `Your Sensei has endorsed Team ${state.team!.number} for the Chunin Exams. In a silent hall packed with rival villages, the proctor lays down nine impossible questions and warns that quitting preserves your squad's future eligibility.`
-        : 'Entering the Chunin Exams as an independent Genin, you face a silent hall of rival candidates and a proctor testing nerve as much as knowledge.',
+      title: `Chunin Exam (Stage 1 of 6 · ${arena.hostLabel}): The Written Cipher`,
+      body: `Your Sensei has endorsed Team ${state.team?.number ?? 7} for the joint Chunin Exams hosted by ${arena.hostLabel}. Inside the silent ${arena.stage1Hall}, the proctor lays down nine impossible questions and warns that quitting preserves your squad's future eligibility.`,
       manual: true,
       meta: { stage: 1 },
       options: [
@@ -194,14 +265,14 @@ export function buildChuninExamStage(
     };
   }
 
-  // Stage 2: Forest of Death - Day 1 Scroll Hunt
+  // Stage 2: Survival Trial - Day 1 Scroll Hunt
   if (stage === 2) {
     return {
       id: `chunin_s2_${state.age}`,
       kind: 'chunin_exam_stage',
       eventId: 'chunin_stage_2',
-      title: 'Chunin Exam (Stage 2 of 6): Forest of Death (Scroll Hunt)',
-      body: 'Five days inside a walled jungle holding Heaven and Earth scrolls. You enter the gate with a Heaven scroll and must seize an Earth scroll from rival Genin hunting through the canopy.',
+      title: `Chunin Exam (Stage 2 of 6): ${arena.survivalName} (Scroll Hunt)`,
+      body: arena.survivalDesc,
       manual: true,
       meta: { stage: 2 },
       options: [
@@ -238,14 +309,14 @@ export function buildChuninExamStage(
     };
   }
 
-  // Stage 3: Forest of Death - Day 3-5 Mid-Forest Hazard & Tower Gate Sprint
+  // Stage 3: Survival Trial - Day 3-5 Mid-Trial Hazard & Goal Sprint
   if (stage === 3) {
     return {
       id: `chunin_s3_${state.age}`,
       kind: 'chunin_exam_stage',
       eventId: 'chunin_stage_3',
-      title: 'Chunin Exam (Stage 3 of 6): Forest of Death (Tower Sprint)',
-      body: 'With both scrolls secured on Day 4, heavy rain floods the ravine before the Central Tower. A desperate rival team blocks the stone bridge while giant forest predators stir in the roots below.',
+      title: `Chunin Exam (Stage 3 of 6): ${arena.survivalName} (Final Sprint)`,
+      body: `With both scrolls secured on Day 4, ${arena.stage3Obstacle}`,
       manual: true,
       meta: { stage: 3 },
       options: [
@@ -258,7 +329,7 @@ export function buildChuninExamStage(
         },
         {
           id: 'smoke_diversion',
-          label: 'Detonate flash tags into the canopy and slip through the lower roots',
+          label: 'Detonate flash tags into the flank and slip past the blockade',
           statHints: ['Intel', 'Will'],
           autoEligible: true,
         },
@@ -266,7 +337,7 @@ export function buildChuninExamStage(
           ? [
               {
                 id: 'protect_teammate',
-                label: 'Cover your exhausted squadmates’ retreat into the tower gate',
+                label: `Cover your exhausted squadmates’ retreat into ${arena.prelimVenue}`,
                 sublabel: 'Tests Bonds & Will; deepens Team Kizuna.',
                 statHints: ['Bonds', 'Will'],
                 autoEligible: true,
@@ -277,7 +348,7 @@ export function buildChuninExamStage(
     };
   }
 
-  // Stage 4: Tower Preliminaries (1v1 Elimination)
+  // Stage 4: Preliminaries (1v1 Elimination)
   if (stage === 4) {
     const prelimOpp = state.chuninTournament?.participants.find(
       (p) => p.personId === state.chuninTournament?.prelimOpponentId,
@@ -287,15 +358,15 @@ export function buildChuninExamStage(
     const prelimVillage = prelimPerson ? VILLAGE_MAP[prelimPerson.identity.villageId].name : VILLAGE_MAP[state.villageId].name;
     const oppDesc = prelimOpp
       ? `The match board flashes your name opposite ${prelimName} of ${prelimVillage} (Power ${prelimOpp.powerScore}).`
-      : 'The proctor announces sudden 1v1 elimination bouts to narrow the field for the Stadium Finals.';
+      : `The proctor announces sudden 1v1 elimination bouts to narrow the field for ${arena.finalsArena}.`;
     return {
       id: `chunin_s4_${state.age}`,
       kind: 'chunin_exam_stage',
       eventId: 'chunin_stage_4',
       title: prelimOpp
         ? `Chunin Exam (Stage 4 of 6): Preliminaries vs ${prelimName}`
-        : 'Chunin Exam (Stage 4 of 6): Tower Preliminary Bouts',
-      body: `Too many candidates survived the Forest of Death. Beneath a towering carved hand-seal statue inside the Central Tower, ${oppDesc}`,
+        : `Chunin Exam (Stage 4 of 6): Preliminary Bouts`,
+      body: `Too many candidates survived the ${arena.survivalName}. Inside ${arena.prelimVenue}, ${oppDesc}`,
       manual: true,
       meta: { stage: 4 },
       options: [
@@ -381,13 +452,21 @@ export function buildChuninExamStage(
   const finalsRound = opts.finalsRound ?? 1;
   const prepBonus = opts.prepBonus ?? 0;
   const finalsScore = opts.finalsScore ?? 0;
-  const rivalPerson = state.rivalId ? getPerson(state, state.rivalId) : null;
+  const tourneyParticipants = state.chuninTournament?.participants ?? [];
+  const rivalAllowed =
+    !state.chuninTournament ||
+    tourneyParticipants.some(
+      (p) => p.personId === state.rivalId && (p.status === 'finalist' || p.status === 'active'),
+    );
+  const rivalPerson = state.rivalId && rivalAllowed ? getPerson(state, state.rivalId) : null;
   const rival =
     rivalPerson && rivalPerson.identity.alive && rivalPerson.identity.specialStatus !== 'missing_nin'
       ? rivalPerson
       : undefined;
-  const tourneyFinalist = state.chuninTournament?.participants.find(
-    (p) => p.personId === state.chuninTournament?.finalsOpponentId,
+  const tourneyFinalist = tourneyParticipants.find(
+    (p) =>
+      p.personId === state.chuninTournament?.finalsOpponentId &&
+      (p.status === 'finalist' || p.status === 'active'),
   );
   const finalistPerson = tourneyFinalist ? getPerson(state, tourneyFinalist.personId) : null;
   const finalsOppName = rival?.identity.name ?? finalistPerson?.identity.name ?? '';
@@ -561,7 +640,7 @@ export function initChuninTournament(state: GameState, rng: SeededRng): ChuninTo
         {
           villageId: vDef.id,
           clanId: clan?.id ?? null,
-          occupation: vDef.id === 'iron' ? 'samurai' : 'shinobi',
+          occupation: 'shinobi',
           age: rng.int(12, 16),
           rank: 'genin',
           specialStatus: 'none',
@@ -583,7 +662,9 @@ export function initChuninTournament(state: GameState, rng: SeededRng): ChuninTo
     }
   }
 
-  const hostVillageId = rng.chance(0.65) ? state.villageId : rng.pick(GREAT_VILLAGES).id;
+  // D4: Chunin Exams are strictly hosted by one of the Five Great Villages
+  const playerInGreat = GREAT_VILLAGES.some((g) => g.id === state.villageId);
+  const hostVillageId = playerInGreat && rng.chance(0.65) ? state.villageId : rng.pick(GREAT_VILLAGES).id;
   const tourney: ChuninTournamentState = {
     examYear: year,
     hostVillageId,
@@ -691,23 +772,41 @@ export function finalizeChuninTournament(
   state: GameState,
   playerPassed: boolean,
   rng: SeededRng,
-): { promotedNpcs: string[]; failedRivals: string[]; summary: string } {
+  failedStage?: ChuninExamStage,
+): { promotedNpcs: string[]; promotedTeammates: string[]; failedRivals: string[]; summary: string } {
   const tourney = state.chuninTournament;
   const worldSim = state.worldSim;
   if (!tourney || tourney.completed) {
-    return { promotedNpcs: [], failedRivals: [], summary: '' };
+    return { promotedNpcs: [], promotedTeammates: [], failedRivals: [], summary: '' };
   }
   tourney.completed = true;
   const year = state.birthYear + state.age;
   const promotedNpcs: string[] = [];
+  const promotedTeammates: string[] = [];
   const failedRivals: string[] = [];
 
   const playerP = tourney.participants.find((p) => p.personId === 'player');
   if (playerP) {
-    playerP.status = playerPassed ? 'promoted' : 'eliminated_s4';
+    playerP.status = playerPassed
+      ? 'promoted'
+      : failedStage === 1
+        ? 'eliminated_s1'
+        : failedStage === 2 || failedStage === 3
+          ? 'eliminated_s2'
+          : 'eliminated_s4';
   }
 
-  // Independent NPC winners & failures (friends can win even if player failed!)
+  // A3: Stages 1-3 are 3-man cell stages; if the player's squad is eliminated there, teammates fail together
+  if (!playerPassed && (failedStage === 1 || failedStage === 2 || failedStage === 3)) {
+    for (const p of tourney.participants) {
+      if (p.isTeammate && p.status === 'active') {
+        p.status = failedStage === 1 ? 'eliminated_s1' : 'eliminated_s2';
+        p.eliminationNote = 'eliminated with squad in team stages';
+      }
+    }
+  }
+
+  // Independent NPC winners & failures (only still-active / finalist contenders can be promoted!)
   const contenders = tourney.participants.filter(
     (p) => p.personId !== 'player' && (p.status === 'active' || p.status === 'finalist'),
   );
@@ -720,6 +819,9 @@ export function finalizeChuninTournament(
       c.status = 'promoted';
       promotedNpcs.push(cName);
       tourney.promotedNames.push(cName);
+      if (c.isTeammate) {
+        promotedTeammates.push(cName);
+      }
       if (npc && npc.identity.alive && npc.identity.rank === 'genin') {
         npc.identity.rank = 'chunin';
         npc.identity.roleTitle = npc.identity.occupation === 'samurai' ? 'Sworn Samurai' : 'Village Chunin';
@@ -772,33 +874,7 @@ export function finalizeChuninTournament(
     });
   }
 
-  return { promotedNpcs, failedRivals, summary };
-}
-
-/**
- * Evaluates whether active Genin teammates pass the Chunin Exam alongside or ahead of the player.
- */
-export function evaluateTeammatesChuninPass(state: GameState, rng: SeededRng): string[] {
-  const team = state.team;
-  if (!team || !team.active) return [];
-  const promoted: string[] = [];
-
-  for (const mate of team.members) {
-    if (mate.role !== 'teammate') continue;
-    const person = getPerson(state, mate.personId);
-    if (!person || !person.identity.alive || person.identity.rank !== 'genin') continue;
-    const passChance = Math.min(0.65, Math.max(0.15, (person.identity.powerScore - 36) / 55));
-    if (rng.chance(passChance)) {
-      person.identity.rank = 'chunin';
-      person.identity.roleTitle = person.identity.occupation === 'samurai' ? 'Sworn Samurai' : 'Village Chunin';
-      person.identity.powerScore = computePowerScoreFromRanks(computeRanksFromIdentity(person.identity));
-      learnNewNpcJutsu(person, rng);
-      assignEpithetIfEligible(person, rng);
-      mate.fateNote = `Promoted to Chunin at age ${person.identity.age} in the exams.`;
-      promoted.push(person.identity.name);
-    }
-  }
-  return promoted;
+  return { promotedNpcs, promotedTeammates, failedRivals, summary };
 }
 
 export function canTakeJoninEvaluation(state: GameState): boolean {
@@ -814,12 +890,13 @@ export function canTakeJoninEvaluation(state: GameState): boolean {
 
 export function buildJoninEvaluationDecision(state: GameState): PendingDecision {
   const proj = computeCombatProjection(state);
+  const leader = VILLAGE_MAP[state.villageId].kageTitle;
   return {
     id: `jonin_eval_${state.age}`,
     kind: 'jonin_eval',
     eventId: 'jonin_eval',
-    title: 'Jonin Promotion Board',
-    body: `The council has reviewed your mission dossier (Projected Threat Tier: ${proj.threatTier}-Rank). To earn Jonin authority, you must pass a live tactical command and combat evaluation before senior examiners.`,
+    title: `${leader}'s Jonin Recommendation`,
+    body: `The ${leader} and senior Jonin commanders have reviewed your mission dossier (Projected Threat Tier: ${proj.threatTier}-Rank) and summoned you for a final field recommendation trial before conferring Jonin rank.`,
     manual: true,
     options: [
       {

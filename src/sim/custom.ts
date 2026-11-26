@@ -95,6 +95,11 @@ export function evaluateCustomBuild(cfg: CustomBuildConfig): CustomBuildValidati
   const origin = ORIGIN_MAP[cfg.originId];
   let points = 0;
 
+  // C4: In Point-Buy mode, civilian/war_orphan origins cannot pick a shinobi clan
+  if (cfg.mode !== 'free' && (cfg.originId === 'civilian' || cfg.originId === 'war_orphan') && cfg.clanId) {
+    errors.push(`${origin.name} origin cannot select a noble shinobi clan in Point-Buy mode.`);
+  }
+
   // Capacity above origin max costs 3 pts per tier; lowering is free (0 pts)
   const maxOriginCap = origin.capacityRange[1];
   if (cfg.capacity > maxOriginCap) {

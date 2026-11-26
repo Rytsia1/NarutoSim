@@ -11,7 +11,6 @@ export interface OriginDef {
   isHeir: boolean;
   alwaysSibling: boolean;
   isOrphan: boolean;
-  bloodlineMult: number;
   startLeaning?: { key: LeaningKey; amount: number };
   familyDisciplines: string[];
 }
@@ -28,7 +27,6 @@ export const ORIGINS: readonly OriginDef[] = [
     isHeir: true,
     alwaysSibling: false,
     isOrphan: false,
-    bloodlineMult: 2.0,
     familyDisciplines: ['fire_release', 'lightning_release', 'genjutsu', 'fuinjutsu', 'kenjutsu'],
   },
   {
@@ -42,7 +40,6 @@ export const ORIGINS: readonly OriginDef[] = [
     isHeir: false,
     alwaysSibling: true,
     isOrphan: false,
-    bloodlineMult: 1.8,
     familyDisciplines: ['wind_release', 'earth_release', 'kenjutsu', 'sensory'],
   },
   {
@@ -56,7 +53,6 @@ export const ORIGINS: readonly OriginDef[] = [
     isHeir: true,
     alwaysSibling: false,
     isOrphan: false,
-    bloodlineMult: 1.5,
     familyDisciplines: ['fuinjutsu', 'puppetry', 'silent_killing', 'trap_craft', 'water_release'],
   },
   {
@@ -70,7 +66,6 @@ export const ORIGINS: readonly OriginDef[] = [
     isHeir: false,
     alwaysSibling: false,
     isOrphan: false,
-    bloodlineMult: 1.2,
     startLeaning: { key: 'will_of_fire', amount: 1 },
     familyDisciplines: ['silent_killing', 'sensory', 'interrogation', 'kenjutsu'],
   },
@@ -85,7 +80,6 @@ export const ORIGINS: readonly OriginDef[] = [
     isHeir: false,
     alwaysSibling: false,
     isOrphan: false,
-    bloodlineMult: 4.0,
     familyDisciplines: ['fuinjutsu', 'barrier', 'medical', 'water_release'],
   },
   {
@@ -99,7 +93,6 @@ export const ORIGINS: readonly OriginDef[] = [
     isHeir: false,
     alwaysSibling: false,
     isOrphan: false,
-    bloodlineMult: 1.0,
     familyDisciplines: [],
   },
   {
@@ -113,7 +106,6 @@ export const ORIGINS: readonly OriginDef[] = [
     isHeir: false,
     alwaysSibling: false,
     isOrphan: true,
-    bloodlineMult: 2.0,
     startLeaning: { key: 'vengeance', amount: 1 },
     familyDisciplines: [],
   },

@@ -5,6 +5,8 @@ import {
   getJutsuMasteryInfo,
   getKnownJutsu,
   getNextTierLockedJutsu,
+  JUTSU_DB,
+  JUTSU_MAP,
   MODE_MAP,
   type JutsuDefinition,
 } from '../data/jutsu';
@@ -15,7 +17,7 @@ import { modRel } from './ai';
 import { recordWarFact } from './narrative';
 import { applyResolvePartnerReaction, syncPartnerBackToState } from './partner';
 import { getCompetitorLines, getPerson, personName } from './people';
-import { clamp, computeCombatProjection } from './powers';
+import { clamp, computeCombatProjection, recordDiscoveredJutsu } from './powers';
 import type { SeededRng } from './rng';
 import type {
   ActiveBattleState,
@@ -1186,19 +1188,8 @@ function resolveSummonSupportJutsu(
     };
   }
 
-  // Generic summoning support if player learned Summoning discipline without a blood contract yet
-  const rawDmg = Math.round(rng.int(5, 9) * masteryPowerMult);
-  const dmg = Math.min(Math.max(0, enemy.hp - 1), rawDmg);
-  enemy.hp = Math.max(1, enemy.hp - dmg);
-  battle.playerBuffRounds = Math.max(battle.playerBuffRounds, 1);
-  preCounters.buff = false;
-  return {
-    playerAction: jutsu.name,
-    whyLine: `Key Factor: Summoning beast disrupted enemy (${dmg} dmg, +8 next attack)`,
-    narrative: `${formatHandSeals(jutsu.seals)}: ${jutsu.name}! A summoned scout beast lunges through smoke for ${dmg} damage, creating an opening.`,
-    bonusEnemyDmg: dmg,
-    enemyChip: rng.int(3, 7),
-  };
+  // C14: Kuchiyose requires a signed blood contract; never conjure a generic beast without one
+  throw new Error('Kuchiyose no Jutsu requires a signed Summoning Blood Contract.');
 }
 
 export function resolveBattleRound(
@@ -1465,7 +1456,18 @@ export function resolveBattleRound(
     state.bodyStrain += chosenJutsu.effect.costs.strain;
   }
   let eyeStrainNote = '';
-  if (chosenJutsu.effect.costs?.eyeStrain && state.bloodline && !state.bloodline.eternalMangekyo) {
+  // C27: Izanagi permanently sacrifices one eye's light (even for Eternal Mangekyo); second use blinds both eyes
+  if (chosenJutsu.effect.costs?.blindsOneEye && state.bloodline) {
+    const prevStrain = state.bloodline.eyeStrain ?? 0;
+    state.bloodline.eyeStrain = Math.max(prevStrain + 10, 10);
+    if (state.bloodline.eyeStrain >= 20 && !state.bloodline.blinded) {
+      state.bloodline.blinded = true;
+      battle.playerDojutsuMode = null;
+      eyeStrainNote = ' Your second eye closes into permanent darkness: Izanagi has claimed the last of your sight!';
+    } else {
+      eyeStrainNote = ' One Sharingan eye dims permanently into darkness to seal the Izanagi rewrite.';
+    }
+  } else if (chosenJutsu.effect.costs?.eyeStrain && state.bloodline && !state.bloodline.eternalMangekyo) {
     state.bloodline.eyeStrain = (state.bloodline.eyeStrain ?? 0) + chosenJutsu.effect.costs.eyeStrain;
     if (state.bloodline.eyeStrain >= 20 && !state.bloodline.blinded) {
       state.bloodline.blinded = true;
@@ -2478,6 +2480,48 @@ function finalizeCombatOutcomes(
     battle.usedDesperation = true;
     war.hp = 10;
     summary.narrative += ' Sheer shinobi willpower keeps you standing at 10 HP!';
+  }
+
+  // C28: Active Sharingan copies observed non-hiden, non-bloodline enemy techniques into discoveredJutsu
+  const sharinganActive =
+    state.bloodline?.id === 'sharingan' &&
+    state.bloodline.stage !== 'latent' &&
+    !state.bloodline.blinded &&
+    (battle.playerDojutsuMode === 'sharingan' || battle.bloodlineActiveRounds > 0);
+  if (sharinganActive && rng.chance(0.35)) {
+    const enemyNpc = enemy.personId ? getPerson(state, enemy.personId) : undefined;
+    const candidateIds: string[] = [];
+    if (enemyNpc?.identity.jutsuIds && enemyNpc.identity.jutsuIds.length > 0) {
+      candidateIds.push(...enemyNpc.identity.jutsuIds);
+    } else {
+      for (const j of JUTSU_DB) {
+        if (j.element === enemy.element && (j.rank === 'C' || j.rank === 'B')) {
+          candidateIds.push(j.id);
+        }
+      }
+    }
+    const knownSet = new Set(getKnownJutsu(state).map((j) => j.id));
+    const copyable = candidateIds
+      .map((id) => JUTSU_MAP[id])
+      .filter(
+        (j): j is JutsuDefinition =>
+          Boolean(j) &&
+          !knownSet.has(j.id) &&
+          !j.hiden &&
+          !j.forbidden &&
+          !j.requires.bloodlineId &&
+          !j.requires.clanId &&
+          !j.requires.requiresContract &&
+          !j.requires.requiresTeacherOrFlag &&
+          j.rank !== 'S' &&
+          j.seals.length > 0,
+      );
+    if (copyable.length > 0) {
+      const copied = rng.pick(copyable);
+      if (recordDiscoveredJutsu(state, copied.id)) {
+        summary.narrative += ` Your Sharingan reads ${enemy.name}'s hand seals and copies ${copied.name}!`;
+      }
+    }
   }
 
   if (war.hp <= 0) {

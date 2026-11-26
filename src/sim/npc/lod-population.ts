@@ -86,6 +86,42 @@ export function buildInitialVillagePopulation(vId: VillageId): VillagePopulation
         warCasualtiesTotal: 0,
         orphansCount: 40,
       };
+    case 'iron':
+      return {
+        civilians: 2100,
+        academyCadets: 55,
+        geninCorps: 0,
+        chuninCorps: 0,
+        joninCorps: 0,
+        veterans: 120,
+        sicknessRate: 14,
+        warCasualtiesTotal: 0,
+        orphansCount: 16,
+      };
+    case 'waves':
+      return {
+        civilians: 2450,
+        academyCadets: 0,
+        geninCorps: 0,
+        chuninCorps: 0,
+        joninCorps: 0,
+        veterans: 0,
+        sicknessRate: 20,
+        warCasualtiesTotal: 0,
+        orphansCount: 22,
+      };
+    case 'uzushio':
+      return {
+        civilians: 320,
+        academyCadets: 0,
+        geninCorps: 0,
+        chuninCorps: 0,
+        joninCorps: 0,
+        veterans: 18,
+        sicknessRate: 18,
+        warCasualtiesTotal: 0,
+        orphansCount: 14,
+      };
     default:
       return {
         civilians: 1680,
@@ -162,7 +198,15 @@ export function tickVillagePopulationL3(
   const disasterLoss = activeDisaster ? rng.int(12, 35) * activeDisaster.severity : 0;
   pop.civilians = Math.max(450, Math.round(pop.civilians * (1 + growthRate)) - sickLoss - disasterLoss);
 
-  // 3. Academy pipeline -> Genin -> Chunin -> Jonin -> Veterans
+  // 3. Academy pipeline -> Genin -> Chunin -> Jonin -> Veterans (skip for non-shinobi domains: Waves, Uzushio ruins, Iron)
+  if (vSim.villageId === 'waves' || vSim.villageId === 'uzushio' || vSim.villageId === 'iron') {
+    pop.academyCadets = vSim.villageId === 'iron' ? clamp(pop.academyCadets + rng.int(-2, 3), 35, 90) : 0;
+    pop.geninCorps = 0;
+    pop.chuninCorps = 0;
+    pop.joninCorps = 0;
+    return;
+  }
+
   const intake = Math.max(8, Math.round((pop.civilians * 0.008) * (0.7 + vSim.academy.quality / 140)));
   const graduated = Math.min(pop.academyCadets, Math.round(pop.academyCadets * (vSim.academy.bloodyMistActive ? 0.16 : 0.24)));
   pop.academyCadets = clamp(pop.academyCadets + intake - graduated, 30, 800);

@@ -130,6 +130,7 @@ describe('Phase 4-6 Individual Jutsu Database, Mastery & Resolver Acceptance', (
     promoteRank(stC, 'jonin');
     stC.stats = { chakra: 95, intel: 85, will: 85, bonds: 60, health: 92, ryo: 50 };
     stC.element = 'lightning';
+    stC.flags.learned_chidori = true;
     stC.disciplines = [
       { id: 'lightning_release', level: 3, xp: 20, lastLevelAge: 22, quality: 1, isMain: true, declinedUntilAge: 0 },
     ];

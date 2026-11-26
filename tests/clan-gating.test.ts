@@ -33,7 +33,7 @@ describe('Clan & Bloodline Gating (Section 2 & 4.1)', () => {
     expect(CLAN_MAP.sabaku?.bloodlineId).toBe('jiton');
     expect(CLAN_MAP.yuki?.bloodlineId).toBe('hyoton');
     expect(CLAN_MAP.terumi?.bloodlineId).toBe('yoton');
-    expect(CLAN_MAP.iwagane?.bloodlineId).toBe('yoton');
+    expect(CLAN_MAP.iwagane?.bloodlineId).toBe('bakuton');
     expect(CLAN_MAP.chinoike?.bloodlineId).toBe('ketsuryugan');
     expect(CLAN_MAP.yamanaka?.villageId).toBe('konoha');
     expect(CLAN_MAP.senju?.villageId).toBe('konoha');
@@ -56,7 +56,7 @@ describe('Clan & Bloodline Gating (Section 2 & 4.1)', () => {
         }
       }
     }
-    expect(totalHidenArts).toBe(54);
+    expect(totalHidenArts).toBe(55);
   });
 
   it('guarantees zero dojutsu leaks outside lineage clans across 5,000 seeded births', () => {

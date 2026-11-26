@@ -20,6 +20,27 @@ export const STAT_LABELS: Record<StatKey, string> = {
   ryo: 'Ryo',
 };
 
+// C29: Display Ryo scaled x1,000 while keeping internal 0..100 stat math intact
+export function formatRyo(ryo: number): string {
+  return `${(Math.round(ryo) * 1000).toLocaleString()} Ryo`;
+}
+
+export function formatRyoDelta(delta: number): string {
+  const scaled = Math.round(delta) * 1000;
+  return `${scaled > 0 ? '+' : ''}${scaled.toLocaleString()} Ryo`;
+}
+
+// D10: Era calendar relative to the Third Shinobi War (falls back cleanly for legacy 1968+ saves)
+export function formatEraYear(year: number, compact = true): string {
+  if (year >= 1900) return `Year ${year}`;
+  return compact ? `Year ${year} Post-3rd War` : `Year ${year} After the Third Shinobi War`;
+}
+
+export function formatEraRange(birthYear: number, deathYear: number): string {
+  if (birthYear >= 1900) return `${birthYear} to ${deathYear}`;
+  return `Year ${birthYear} to Year ${deathYear} Post-3rd War`;
+}
+
 let chronicleLogCounter = 0;
 
 export function pushLog(

@@ -6,6 +6,7 @@ const WARS_PER_RANK = 500;
 
 for (const rank of ['genin', 'chunin', 'jonin'] as const) {
   let wins = 0;
+  let draws = 0;
   let deaths = 0;
   let totalDays = 0;
   let totalKills = 0;
@@ -67,6 +68,9 @@ for (const rank of ['genin', 'chunin', 'jonin'] as const) {
       deaths += 1;
     } else {
       wins += 1;
+      if (lastWar?.outcome === 'shared') {
+        draws += 1;
+      }
     }
 
     const clashCount = end.logs.filter((l) => l.text.includes('JUTSU CLASH!')).length;
@@ -81,6 +85,6 @@ for (const rank of ['genin', 'chunin', 'jonin'] as const) {
   }
 
   console.log(
-    `[Balance ${rank.toUpperCase().padEnd(6)}] Wars: ${WARS_PER_RANK} | Survive/Win: ${((wins / WARS_PER_RANK) * 100).toFixed(1)}% | Death: ${((deaths / WARS_PER_RANK) * 100).toFixed(1)}% | Avg Days: ${(totalDays / WARS_PER_RANK).toFixed(1)} | Avg Kills: ${(totalKills / WARS_PER_RANK).toFixed(2)} | Jutsu Clashes: ${clashes}`,
+    `[Balance ${rank.toUpperCase().padEnd(6)}] Wars: ${WARS_PER_RANK} | Survive/Win: ${((wins / WARS_PER_RANK) * 100).toFixed(1)}% | Draw: ${((draws / WARS_PER_RANK) * 100).toFixed(1)}% | Death: ${((deaths / WARS_PER_RANK) * 100).toFixed(1)}% | Avg Days: ${(totalDays / WARS_PER_RANK).toFixed(1)} | Avg Kills: ${(totalKills / WARS_PER_RANK).toFixed(2)} | Jutsu Clashes: ${clashes}`,
   );
 }

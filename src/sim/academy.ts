@@ -75,10 +75,12 @@ export function initAcademyState(state: GameState, rng: SeededRng): AcademyState
       'mentor',
     );
 
-    // Seed 5 real Academy Classmates (reusing existing same-age combatant youth NPCs if any, then creating the rest)
+    // Seed 5 real Academy Classmates (reusing existing same-age combatant youth NPCs if any, excluding player family!)
+    const familyIds = new Set(state.family.map((f) => f.personId));
     const existingYouths = worldSim.npcs.filter(
       (n) =>
         n.identity.alive &&
+        !familyIds.has(n.identity.id) &&
         n.identity.villageId === state.villageId &&
         (n.identity.occupation === 'shinobi' || n.identity.occupation === 'samurai') &&
         n.identity.age >= state.age - 1 &&

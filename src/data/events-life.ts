@@ -1,4 +1,4 @@
-import type { FocusId, LeaningKey, ShinobiRank, StatKey, VillageId } from '../sim/types';
+import type { FocusId, LeaningKey, ShinobiRank, StatKey, StatusGateTag, VillageId } from '../sim/types';
 import { EXTRA_FLAVOR_LINES, EXTRA_GROWTH_EVENTS, EXTRA_LIFE_EVENTS } from './events-life-extra';
 
 export interface SimpleEffect {
@@ -41,6 +41,7 @@ export interface LifeEventDef {
   weight: number;
   repeatable?: boolean;
   ranks?: ShinobiRank[];
+  statusTags?: readonly StatusGateTag[];
   villageOnly?: VillageId[];
   excludeOrphan?: boolean;
   onlyOrphan?: boolean;
@@ -344,7 +345,7 @@ export const LIFE_EVENTS: readonly LifeEventDef[] = [
   },
   {
     id: 'le_marriage',
-    title: 'A Home Beyond the Barracks',
+    title: 'A Home of Your Own',
     body: 'After years of returning to an empty room, someone who knows the weight of your life asks whether you want to build a home together.',
     minAge: 22,
     maxAge: 42,
@@ -355,14 +356,14 @@ export const LIFE_EVENTS: readonly LifeEventDef[] = [
         label: 'Exchange vows in a modest village ceremony',
         statHints: ['Bonds', 'Ryo'],
         autoEligible: true,
-        onPassText: 'A second pair of sandals waits by the doorway now. Returning alive suddenly means far more.',
+        onPassText: 'A second pair of sandals waits by the doorway now. Returning home each evening suddenly means far more.',
         onPass: { stats: { bonds: 10, will: 4, ryo: -5 }, setFlags: ['trigger_marry'] },
       },
       {
         id: 'marry_no',
-        label: 'Decline: a shinobi life is too perilous for a spouse',
+        label: 'Decline: an uncertain life is too heavy a burden to ask of a spouse',
         autoEligible: true,
-        onPassText: 'They nod with quiet sorrow. You return alone to your scrolls and whetstone.',
+        onPassText: 'They nod with quiet sorrow. You return alone to your quiet room.',
         onPass: { stats: { will: 3, bonds: -3 } },
       },
     ],
@@ -480,6 +481,7 @@ export const LIFE_EVENTS: readonly LifeEventDef[] = [
     maxAge: 46,
     weight: 9,
     ranks: ['chunin', 'jonin'],
+    statusTags: ['active_shinobi', 'not_kage'],
     leaningBias: 'ambition',
     options: [
       {
@@ -865,7 +867,7 @@ export const LIFE_EVENTS: readonly LifeEventDef[] = [
   {
     id: 'le_archive_night',
     title: 'Lantern Light in the Forbidden Archive',
-    body: 'Pulling late guard duty outside the village scroll vault, you notice a senior archivist left an old Second War battlefield journal open on the desk.',
+    body: 'Pulling late guard duty outside the village scroll vault, you notice a senior archivist left an old Third Shinobi War battlefield journal open on the desk.',
     minAge: 15,
     maxAge: 42,
     weight: 10,
@@ -1141,6 +1143,7 @@ export interface FlavorLineDef {
   minAge?: number;
   maxAge?: number;
   ranks?: ShinobiRank[];
+  statusTags?: readonly StatusGateTag[];
 }
 
 export const FLAVOR_LINES: readonly FlavorLineDef[] = [

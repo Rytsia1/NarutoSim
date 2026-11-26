@@ -144,8 +144,9 @@ describe('6 Deep Immersion Pillars', () => {
     expect(CLAN_MAP.aburame.hidenArts.length).toBeGreaterThanOrEqual(2);
     expect(CLAN_MAP.inuzuka.hidenArts.length).toBeGreaterThanOrEqual(2);
 
-    // Unlock Hiden art via training + high compatibility trial
+    // Unlock Hiden art via training + high compatibility trial (active Genin shinobi)
     hyugaBranch.age = 14;
+    hyugaBranch.rank = 'genin';
     hyugaBranch.stats.chakra = 80;
     hyugaBranch.stats.intel = 80;
     ch.compatibility = 85;

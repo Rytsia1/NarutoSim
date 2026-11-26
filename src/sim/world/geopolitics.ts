@@ -80,7 +80,7 @@ export function buildInitialTerritories(): WorldTerritory[] {
     {
       id: 'terr_kannabi_bridge',
       name: 'Kannabi Bridge (Land of Grass)',
-      controller: 'konoha',
+      controller: 'kusa',
       contestedBy: 'iwa',
       wealth: 7,
       strategicValue: 10,
@@ -88,9 +88,9 @@ export function buildInitialTerritories(): WorldTerritory[] {
     },
     {
       id: 'terr_valley_clouds',
-      name: 'Frost & Thunder Pass',
+      name: 'Frost & Thunder Border Pass',
       controller: 'kumo',
-      contestedBy: 'konoha',
+      contestedBy: 'iwa',
       wealth: 7,
       strategicValue: 8,
       flashpoint: 34,

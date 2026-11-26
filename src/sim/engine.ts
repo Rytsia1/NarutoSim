@@ -4,6 +4,7 @@ import { NINDO_MAP } from '../data/nindo';
 import { pickAutoJutsu } from './combat';
 import { canEnterRetirement } from './epilogue';
 import { advanceYear, createNewLife, finalizeLifeRecord, pushLog, resolvePendingDecision } from './life';
+import { vacateSeats } from './people';
 import { canRunGovernanceAction, runGovernanceAction } from './politics';
 import { SeededRng } from './rng';
 import { investigateTimelineEvent } from './timeline';
@@ -97,12 +98,19 @@ export class ShinobiSim {
 
   retireFromFrontline(): boolean {
     if (!canEnterRetirement(this.state)) return false;
+    const wasKage = this.state.specialStatus === 'kage';
+    if (wasKage) {
+      this.state.flags.retired_kage = true;
+      vacateSeats(this.state, 'player');
+    }
     this.state.phase = 'retirement';
     this.state.world.omenActive = false;
     pushLog(
       this.state,
       'epilogue',
-      `At age ${this.state.age}, you fold your frontline gear away and enter quiet retirement. Mobilization orders will no longer call your name.`,
+      wasKage
+        ? `At age ${this.state.age}, you lay down the ${kageTitle(this.state)} hat and step into quiet retirement so a new generation can lead ${VILLAGE_MAP[this.state.villageId].name}.`
+        : `At age ${this.state.age}, you fold your frontline gear away and enter quiet retirement. Mobilization orders will no longer call your name.`,
       { title: 'Twilight Years Begin' },
     );
     this.notify(true);

@@ -15,6 +15,8 @@ export function canEnterRetirement(state: GameState): boolean {
 }
 
 export function buildRetirementEventDecision(state: GameState, rng: SeededRng): PendingDecision | null {
+  // B2: Missing-Nin in exile does not receive village-porch / village-office retirement scenes
+  if (state.specialStatus === 'missing_nin') return null;
   const hasSpouse = state.family.some((f) => f.relation === 'spouse' && isPersonAlive(state, f.personId));
   const hasLivingPartner = Boolean(state.permanentPartner && isPersonAlive(state, state.permanentPartner.personId));
   const candidates = RETIREMENT_EVENTS.filter((ev) => {
@@ -47,12 +49,17 @@ export function buildRetirementEventDecision(state: GameState, rng: SeededRng): 
       .replace(/\{partner\}/g, partnerName)
       .replace(/\{partnerRelLine\}/g, partnerRelLine);
 
+  const rawBody =
+    chosen.id === 'ret_mentor_new_genin' && state.flags.retired_kage
+      ? 'Your successor at the {kage} office asks if you are willing to oversee a newly minted three-man Genin squad during peacetime drills.'
+      : chosen.body;
+
   return {
     id: `ret_${chosen.id}_${state.age}`,
     kind: 'retirement_event',
     eventId: chosen.id,
     title: fmt(chosen.title),
-    body: fmt(chosen.body),
+    body: fmt(rawBody),
     manual: false,
     meta: { retEventId: chosen.id },
     options: chosen.options.map((opt) => ({
@@ -71,24 +78,40 @@ export function buildPosthumousEpilogue(state: GameState): EpilogueBeat[] {
   const village = VILLAGE_MAP[state.villageId].name;
   const beats: EpilogueBeat[] = [];
 
-  // Beat 1: The Memorial Stone / Burial
+  // Beat 1: The Memorial Stone / Burial (E2: Memorial Stone is strictly for KIA / fallen in duty, not old age)
+  const causeLower = (state.causeOfDeath ?? '').toLowerCase();
+  const isNaturalOrOldAge =
+    causeLower.includes('old age') ||
+    causeLower.includes('peaceful') ||
+    causeLower.includes('illness') ||
+    causeLower.includes('natural') ||
+    causeLower.includes('exhaustion') ||
+    causeLower.includes('retirement') ||
+    state.phase === 'retirement';
+
   if (state.specialStatus === 'missing_nin') {
     beats.push({
       title: 'An Unmarked Cairn Beyond the Border',
       tone: 'epilogue',
       body: `No bells ring in ${village} when word of your death arrives at age ${state.age} (${state.causeOfDeath ?? 'fallen in the wilds'}). A clerk draws a single black line across your Bingo Book entry, and rain washes over the stones where you fell.`,
     });
-  } else if (state.specialStatus === 'kage' || state.rank === 'jonin') {
+  } else if (!isNaturalOrOldAge && (state.specialStatus === 'kage' || state.rank === 'jonin' || state.rank === 'chunin' || state.rank === 'genin')) {
     beats.push({
       title: 'Carved Into the Memorial Stone',
       tone: 'milestone',
-      body: `Black umbrellas crowd the hillside above ${village} as your name is chiseled beside the village's greatest defenders. Passing at age ${state.age} (${state.causeOfDeath ?? 'at the end of your road'}), you leave behind the weight of a true ${state.specialStatus === 'kage' ? kageTitle(state) : 'Jonin'}.`,
+      body: `Black umbrellas crowd the hillside above ${village} as your name is chiseled into the Memorial Stone beside those who fell in the line of duty. Lost at age ${state.age} (${state.causeOfDeath ?? 'in action'}), you leave behind the honor of a true ${state.specialStatus === 'kage' ? kageTitle(state) : state.rank.charAt(0).toUpperCase() + state.rank.slice(1)}.`,
+    });
+  } else if (state.specialStatus === 'kage' || state.rank === 'jonin') {
+    beats.push({
+      title: 'Laid to Rest in the Village Cemetery',
+      tone: 'milestone',
+      body: `Generations of villagers and shinobi gather beneath the cedar rows of ${village} Cemetery as you are laid to rest at age ${state.age} (${state.causeOfDeath ?? 'at the end of a long road'}). Having outlived the battlefield, you depart with the quiet reverence owed to a ${state.specialStatus === 'kage' ? kageTitle(state) : 'Jonin'}.`,
     });
   } else if (state.rank === 'genin' || state.rank === 'chunin') {
     beats.push({
-      title: 'White Flowers in the Rain',
+      title: 'White Flowers Beside the Family Grave',
       tone: 'epilogue',
-      body: `A quiet row of white chrysanthemums rests beneath the stone monument of ${village}. Gone at age ${state.age} (${state.causeOfDeath ?? 'on duty'}), your forehead protector is folded neatly atop your service file.`,
+      body: `A quiet row of white chrysanthemums rests on your gravestone in ${village}. Departing at age ${state.age} (${state.causeOfDeath ?? 'natural causes'}), your service emblem is folded neatly beside your belongings.`,
     });
   } else {
     beats.push({

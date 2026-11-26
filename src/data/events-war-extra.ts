@@ -456,7 +456,7 @@ export const EXTRA_WAR_CROSSROADS: readonly WarCrossroadDef[] = [
   {
     id: 'wc_old_comrade_grave',
     title: 'Crossroads: Forgotten Border Cairn',
-    body: 'A stack of smooth river stones marks a battle from the previous Great Shinobi War. Someone recently tied fresh twine around a cracked staff.',
+    body: 'A stack of smooth river stones marks a battle from the Third Shinobi War. Someone recently tied fresh twine around a cracked staff.',
     options: [
       {
         id: 'add_stone',

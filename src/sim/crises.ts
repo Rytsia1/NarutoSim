@@ -43,12 +43,15 @@ export function initWarCrisisState(state: GameState, war: WarState, rng: SeededR
   const bossMaxHp = id === 'calamity' ? Math.max(95, 145 - clueDiscount) : Math.max(90, 130 - clueDiscount);
 
   const bijuu = getWorldBijuuName(state);
+  const bijuuFormatted = bijuu.includes('(')
+    ? bijuu.replace(/\)$/, ', Unbound Bijuu)')
+    : `${bijuu} (Unbound Bijuu)`;
   return {
     id,
     phase: 1,
     bossName:
       id === 'calamity'
-        ? `${bijuu} (Unbound Bijuu)`
+        ? bijuuFormatted
         : 'Masked Akatsuki Leader',
     bossHp: bossMaxHp,
     bossMaxHp,
@@ -260,32 +263,45 @@ export function buildCrisisAftermathDecision(state: GameState): PendingDecision 
   const war = state.war!;
   const c = war.crisis!;
   const sealScore = Math.round((state.stats.chakra + state.stats.intel) / 2);
+  const isBijuu = c.id === 'calamity';
 
   return {
     id: `crisis_end_${war.warNumber}`,
     kind: 'war_crisis_end',
     eventId: 'war_crisis_end',
-    title: `Aftermath: ${c.bossName} Shattered`,
-    body: `The storm collapses around the crater, leaving the exposed core of ${c.id === 'calamity' ? `${getWorldBijuuName(state)}'s chakra` : 'the Akatsuki Relic Matrix'} trembling before you. How will you end this era?`,
+    title: isBijuu ? `Aftermath: ${c.bossName} Subdued` : `Aftermath: ${c.bossName} Shattered`,
+    body: isBijuu
+      ? `The storm collapses around the crater as ${getWorldBijuuName(state)} weakens beneath Allied Shinobi sealing chains. A Tailed Beast of pure chakra can never be permanently destroyed; how will the Allied Forces contain it?`
+      : `The storm collapses around the crater, leaving the Akatsuki Relic Matrix trembling before you. How will you end this era?`,
     manual: true,
     options: [
       {
         id: 'crisis_seal',
-        label: `Bind the Core with a Grand Seal (Chakra+Intel avg ${sealScore}, needs 50+)`,
-        sublabel: 'Seals the core cleanly on success for True Peace; weaker seal strains Chakra (-12 HP).',
+        label: isBijuu
+          ? `Seal ${getWorldBijuuName(state)} into a Jinchuriki Vessel (Chakra+Intel avg ${sealScore}, needs 50+)`
+          : `Bind the Core with a Grand Seal (Chakra+Intel avg ${sealScore}, needs 50+)`,
+        sublabel: isBijuu
+          ? 'Contains the Bijuu cleanly within a host vessel for True Peace; weaker seal strains Chakra (-12 HP).'
+          : 'Seals the core cleanly on success for True Peace; weaker seal strains Chakra (-12 HP).',
         autoEligible: true,
       },
       {
         id: 'crisis_shatter',
-        label: 'Shatter the Core Completely (Costs 1 Resolve or 25 CP)',
-        sublabel: 'Guaranteed destruction of the threat -> Era of True Peace.',
+        label: isBijuu
+          ? 'Disperse the Bijuu’s Chakra Across the Leylines (Costs 1 Resolve or 25 CP)'
+          : 'Shatter the Relic Matrix Completely (Costs 1 Resolve or 25 CP)',
+        sublabel: isBijuu
+          ? 'Scatters the beast’s chakra so it cannot reform for decades -> Era of True Peace.'
+          : 'Guaranteed destruction of the threat -> Era of True Peace.',
         disabled: war.resolves === 0 && war.cp < 25,
         disabledReason: 'Requires 1 Resolve or 25 CP',
         autoEligible: war.resolves > 0 || war.cp >= 25,
       },
       {
         id: 'crisis_claim',
-        label: 'Absorb the Forbidden Power for Yourself (+15 Chakra, Ruthless +3, Heavy Scar)',
+        label: isBijuu
+          ? 'Bind the Bijuu’s Power Into Yourself as a Rogue Host (+15 Chakra, Ruthless +3, Heavy Scar)'
+          : 'Absorb the Forbidden Power for Yourself (+15 Chakra, Ruthless +3, Heavy Scar)',
         sublabel: 'Grants terrifying personal power, but denies the world True Peace.',
         autoEligible: false,
       },
@@ -415,6 +431,27 @@ export function canTriggerConvictionRoute(state: GameState, war: WarState): bool
   return livingSquad.length > 0;
 }
 
+function getConvictionLandmark(villageId: GameState['villageId']): string {
+  switch (villageId) {
+    case 'konoha':
+      return 'Valley of the End';
+    case 'suna':
+      return 'Crimson Canyon Gorge';
+    case 'kiri':
+      return 'Blood-Tide Sea Cliffs';
+    case 'kumo':
+      return 'Valley of Clouds and Lightning';
+    case 'iwa':
+      return 'Twin Basalt Spires';
+    case 'ame':
+      return 'Iron Spire Overlook';
+    case 'iron':
+      return 'Three Wolves Summit';
+    default:
+      return 'Border Falls Overlook';
+  }
+}
+
 export function startConvictionRoute(
   state: GameState,
   war: WarState,
@@ -454,11 +491,12 @@ export function startConvictionRoute(
     endingKey: null,
   };
 
+  const landmark = getConvictionLandmark(state.villageId);
   pushLog(
     state,
     'crisis',
-    `EXTREME CONVICTION ROUTE: As the dust of War #${war.warNumber} settles, your overwhelming conviction ("${CONVICTION_WISHES[leaning]}") reaches its tipping point. Waiting beside the waterfall at the Valley of the End stands ${oppName}.`,
-    { title: 'The Valley of the End' },
+    `EXTREME CONVICTION ROUTE: As the dust of War #${war.warNumber} settles, your overwhelming conviction ("${CONVICTION_WISHES[leaning]}") reaches its tipping point. Waiting at the ${landmark} stands ${oppName}.`,
+    { title: `The ${landmark}` },
   );
 
   return buildConvictionBeatDecision(state);
@@ -467,20 +505,21 @@ export function startConvictionRoute(
 export function buildConvictionBeatDecision(state: GameState): PendingDecision {
   const conv = state.war!.conviction!;
   const oppName = personName(state, conv.opponentPersonId);
+  const landmark = getConvictionLandmark(state.villageId);
   const mem = state.memories && state.memories.length > 0 ? state.memories[0] : null;
   const memQuote = mem ? ` A memory flashes back from Age ${mem.age}: "${mem.text}"` : '';
   const prompts: Record<1 | 2 | 3, { title: string; body: string }> = {
     1: {
-      title: `Valley of the End (1/3): ${oppName} Blocks Your Path`,
-      body: `"I saw what this war turned you into," ${oppName} says quietly over the roar of the falls. "If you pursue '${conv.wishTitle}', I cannot stand aside." (Their Resolve: ${conv.resolveR}/100)`,
+      title: `${landmark} (1/3): ${oppName} Blocks Your Path`,
+      body: `"I saw what this war turned you into," ${oppName} says quietly over the rushing wind. "If you pursue '${conv.wishTitle}', I cannot stand aside." (Their Resolve: ${conv.resolveR}/100)`,
     },
     2: {
-      title: 'Valley of the End (2/3): Echo of Team Memories',
-      body: `Rain begins falling over the carved stone statues. ${oppName} tightens their grip on a familiar kunai, asking whether the Genin days you shared meant nothing at all.${memQuote} (Their Resolve: ${conv.resolveR}/100)`,
+      title: `${landmark} (2/3): Echo of Team Memories`,
+      body: `Storm clouds gather above the ${landmark}. ${oppName} tightens their grip on a familiar kunai, asking whether the early squad days you shared meant nothing at all.${memQuote} (Their Resolve: ${conv.resolveR}/100)`,
     },
     3: {
-      title: 'Valley of the End (3/3): The Final Step',
-      body: `Lightning flashes across the gorge. One step forward seals your radical path forever; one step back lets you walk home together. (Their Resolve: ${conv.resolveR}/100)`,
+      title: `${landmark} (3/3): The Final Step`,
+      body: `Lightning flashes across the ${landmark}. One step forward seals your radical path forever; one step back lets you walk home together. (Their Resolve: ${conv.resolveR}/100)`,
     },
   };
   const p = prompts[conv.beat];

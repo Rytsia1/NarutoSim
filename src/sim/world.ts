@@ -1,4 +1,5 @@
 import { CRISIS_WHISPERS } from '../data/events-team';
+import { VILLAGE_MAP } from '../data/villages';
 import { clamp } from './powers';
 import type { SeededRng } from './rng';
 import type { CrisisId, GameState, PendingDecision, ScenarioConfig } from './types';
@@ -110,9 +111,18 @@ export function tickWorldTension(state: GameState, rng: SeededRng): TensionTickR
     return { triggerWar: false, isCrisisWar: false, whisperDecision: null, omenLogged: false };
   }
 
-  const warCooldownOk =
-    (w.lastWarAge === null || state.age - w.lastWarAge >= 6) &&
-    (!w.peaceAccordUntilAge || state.age >= w.peaceAccordUntilAge);
+  // D11: Great Shinobi Wars have a 12-year cooldown; Border Wars can flare after 6+ years at tension >= 88; Endgame Crisis can erupt after 6+ years
+  const yearsSinceWar = w.lastWarAge === null ? 99 : state.age - w.lastWarAge;
+  const accordExpired = !w.peaceAccordUntilAge || state.age >= w.peaceAccordUntilAge;
+  const greatWarCooldownOk = yearsSinceWar >= 12 && accordExpired;
+  const borderWarCooldownOk = yearsSinceWar >= 6 && accordExpired && w.tension >= 88;
+  const crisisCooldownOk =
+    yearsSinceWar >= 6 &&
+    accordExpired &&
+    w.seededCrisis !== 'none' &&
+    w.crisisStage < 2 &&
+    isEndgameReady(state);
+  const warCooldownOk = greatWarCooldownOk || borderWarCooldownOk || crisisCooldownOk;
 
   let detenteLogged = false;
   let detenteDelta = 0;
@@ -201,7 +211,6 @@ export function tickWorldTension(state: GameState, rng: SeededRng): TensionTickR
     w.tension >= 80 &&
     warCooldownOk &&
     state.age >= 12 &&
-    state.rank !== 'academy' &&
     !w.truePeace;
 
   if (canTriggerWar) {
@@ -234,7 +243,10 @@ export function buildWarPreludeDecision(
   isCrisisWar: boolean,
   geninDeployed = true,
 ): PendingDecision {
-  const warNum = state.world.eraNumber;
+  const warNum = Math.max(4, state.world.eraNumber);
+  const yearsSinceWar = state.world.lastWarAge === null ? 99 : state.age - state.world.lastWarAge;
+  const isBorderWar = !isCrisisWar && state.world.lastWarAge !== null && yearsSinceWar < 12;
+  const warLabel = isBorderWar ? 'Border War' : `Great Shinobi War #${warNum}`;
   const rankLabel = state.rank.toUpperCase();
   const bijuu = getWorldBijuuName(state);
   const crisisTitle =
@@ -242,13 +254,16 @@ export function buildWarPreludeDecision(
       ? `Endgame Crisis: ${bijuu} Rampage`
       : 'Endgame Crisis: The Akatsuki Conspiracy';
 
-  if (state.rank === 'civilian') {
+  if (state.rank === 'civilian' || state.rank === 'academy') {
+    const isAcad = state.rank === 'academy';
     return {
       id: `war_pre_${warNum}_${state.age}`,
       kind: 'war_prelude',
-      eventId: 'war_prelude_civilian',
-      title: `Great Shinobi War #${warNum} Reaches the Border`,
-      body: 'Smoke rises along the outer trade road as rival shinobi skirmishers clash outside the village gates. As a civilian, every choice is about survival.',
+      eventId: isAcad ? 'war_prelude_academy' : 'war_prelude_civilian',
+      title: `${warLabel} Reaches the Border`,
+      body: isAcad
+        ? 'War drums echo across the village as shinobi divisions deploy to the frontier. Academy students are held back inside the village walls for emergency shelter and supply duty.'
+        : 'Smoke rises along the outer trade road as rival shinobi skirmishers clash outside the village gates. As a civilian, every choice is about survival.',
       manual: true,
       meta: { isCrisisWar: false, warNum, geninDeployed: false },
       options: [
@@ -268,12 +283,90 @@ export function buildWarPreludeDecision(
     };
   }
 
+  // B1: Kage commands from HQ rather than receiving a solo draft or desertion option
+  if (state.specialStatus === 'kage') {
+    const leader = VILLAGE_MAP[state.villageId].kageTitle;
+    return {
+      id: `war_pre_${warNum}_${state.age}`,
+      kind: 'war_prelude',
+      eventId: 'war_prelude_kage_hq',
+      title: isCrisisWar
+        ? `${leader} War Council: ${crisisTitle}`
+        : `${leader} HQ Command: ${warLabel}`,
+      body: isCrisisWar
+        ? `As ${leader} of ${VILLAGE_MAP[state.villageId].name}, you convene the emergency war council as ${crisisTitle} erupts across the continent. Divisions await your direct strategic command.`
+        : `As ${leader} of ${VILLAGE_MAP[state.villageId].name}, mobilization scrolls cross your desk before dawn. You set the village's battle posture from War HQ and decide how closely to lead the front.`,
+      manual: true,
+      meta: { isCrisisWar, warNum, isBorderWar, geninDeployed: false },
+      options: [
+        {
+          id: 'deploy_front',
+          label: `Lead the vanguard command personally from the decisive front`,
+          sublabel: 'Maximum battlefield morale and impact, with direct frontline risk.',
+          statHints: ['Chakra', 'Will', 'Bonds'],
+          autoEligible: true,
+        },
+        {
+          id: 'recon_flank',
+          label: `Direct divisions from War HQ and strike key strategic flanks`,
+          sublabel: 'Balanced command posture using Intel, logistics, and reserve forces.',
+          statHints: ['Intel', 'Will'],
+          autoEligible: true,
+        },
+      ],
+    };
+  }
+
+  // B2: Missing-Nin is never drafted by the village; operates as rogue/mercenary or avoids the war
+  if (state.specialStatus === 'missing_nin') {
+    return {
+      id: `war_pre_${warNum}_${state.age}`,
+      kind: 'war_prelude',
+      eventId: 'war_prelude_rogue',
+      title: isCrisisWar
+        ? `Continental Crisis: ${crisisTitle}`
+        : `Borderlands in Flames: ${warLabel} (Missing-Nin)`,
+      body: isCrisisWar
+        ? `Even exiles cannot outrun ${crisisTitle}. Hidden villages scramble into an uneasy coalition while rogue operatives pick their side.`
+        : `The Great Nations have marched to war once more. Free from any village draft, you can sell your blade along the contested front, raid distracted supply columns, or slip past the conflict altogether.`,
+      manual: true,
+      meta: { isCrisisWar, warNum, isBorderWar, geninDeployed: false },
+      options: [
+        {
+          id: 'deploy_front',
+          label: 'Take a high-paying mercenary contract on the contested front',
+          sublabel: 'Enter the 14-day warfront independently for glory and spoils.',
+          statHints: ['Chakra', 'Will'],
+          autoEligible: true,
+        },
+        {
+          id: 'recon_flank',
+          label: 'Prowl the war flank and ambush distracted patrols',
+          sublabel: 'Lower exposure opportunistic campaign along the contested sector.',
+          statHints: ['Intel', 'Will'],
+          autoEligible: true,
+        },
+        ...(!isCrisisWar
+          ? [
+              {
+                id: 'evacuate',
+                label: 'Stay clear of the Great Nations’ war and vanish into neutral borderlands',
+                sublabel: 'Skip the warfront safely with no village mobilization penalty.',
+                statHints: ['Intel'],
+                autoEligible: false,
+              },
+            ]
+          : []),
+      ],
+    };
+  }
+
   if (state.rank === 'genin' && !isCrisisWar && !geninDeployed) {
     return {
       id: `war_pre_${warNum}_${state.age}`,
       kind: 'war_prelude',
       eventId: 'war_prelude_genin_home',
-      title: `Great Shinobi War #${warNum}: Home Front Orders (Genin)`,
+      title: `${warLabel}: Home Front Orders (Genin)`,
       body: 'War drums roll through the village as Chunin and Jonin divisions march to the contested frontier. Command holds Genin squads back inside the village perimeter to keep supply lines, triage tents, and outer watchtowers standing.',
       manual: true,
       meta: { isCrisisWar: false, warNum, geninDeployed: false },
@@ -343,17 +436,13 @@ export function buildWarPreludeDecision(
         statHints: ['Intel', 'Will'],
         autoEligible: true,
       },
-      ...(state.specialStatus !== 'missing_nin'
-        ? [
-            {
-              id: 'desert_war',
-              label: 'Refuse the meat grinder and flee across the border (Become Missing-Nin)',
-              sublabel: 'Avoid the war immediately, but village Hunter-Nin will hunt you.',
-              statHints: ['Will'],
-              autoEligible: false,
-            },
-          ]
-        : []),
+      {
+        id: 'desert_war',
+        label: 'Refuse the meat grinder and flee across the border (Become Missing-Nin)',
+        sublabel: 'Avoid the war immediately, but village Hunter-Nin will hunt you.',
+        statHints: ['Will'],
+        autoEligible: false,
+      },
     ],
   };
 }

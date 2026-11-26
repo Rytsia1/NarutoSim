@@ -129,9 +129,38 @@ function officialRankForPerson(person: WorldNpc): NpcOfficialRank {
 }
 
 /**
+ * Vacates any institutional leadership seats (Kage or Clan Head) held by `personId`
+ * (which may be an NPC id or `'player'`). Ensures no dead or defected person continues
+ * to hold village leadership.
+ */
+export function vacateSeats(state: GameState, personId: string): void {
+  if (!state.worldSim) return;
+  for (const vSim of Object.values(state.worldSim.villages)) {
+    if (vSim.kageNpcId === personId) {
+      vSim.kageNpcId = null;
+    }
+    for (const cState of vSim.clans) {
+      if (cState.headNpcId === personId) {
+        cState.headNpcId = null;
+      }
+    }
+  }
+  if (personId === 'player') {
+    if (state.specialStatus === 'kage') {
+      state.specialStatus = 'none';
+    }
+  } else {
+    const npc = getPerson(state, personId);
+    if (npc && npc.identity.specialStatus === 'kage') {
+      npc.identity.specialStatus = 'none';
+    }
+  }
+}
+
+/**
  * Single canonical death pathway for any person in the simulation.
- * Updates alive/deathAge/deathCause, records memories on the deceased & close bonds,
- * and logs notable deaths into worldSim.history.
+ * Updates alive/deathAge/deathCause, vacates Kage/Clan Head seats, records memories
+ * on the deceased & close bonds, and logs notable deaths into worldSim.history.
  */
 export function killPerson(
   state: GameState,
@@ -143,9 +172,11 @@ export function killPerson(
   if (!npc || !npc.identity.alive) return false;
 
   const year = state.birthYear + state.age;
+  const wasKage = npc.identity.specialStatus === 'kage';
   npc.identity.alive = false;
   npc.identity.deathAge = age;
   npc.identity.deathCause = cause;
+  vacateSeats(state, personId);
   npc.memory.push({
     year,
     age,
@@ -174,7 +205,7 @@ export function killPerson(
     const isNotable =
       Boolean(npc.identity.observed) ||
       npc.identity.rank === 'jonin' ||
-      npc.identity.specialStatus === 'kage' ||
+      wasKage ||
       Boolean(npc.relationships.player);
     if (isNotable) {
       state.worldSim.history.push({

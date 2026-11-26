@@ -31,11 +31,18 @@ export function generateMissionContract(
   const obj = candidates.length > 0 ? rng.pick(candidates) : MISSION_OBJECTIVES[0];
   const location = rng.pick(MISSION_LOCATIONS);
 
-  // Pull a real living Missing-Nin from the autonomous world for A/S or rogue threats!
-  const livingRogue =
-    rankValue(rank) >= 3
-      ? state.worldSim?.npcs.find((n) => n.identity.alive && n.identity.specialStatus === 'missing_nin')
-      : undefined;
+  // C32: Pick a random living Missing-Nin whose power matches the mission rank tier
+  const livingRogues =
+    rankValue(rank) >= 3 && state.worldSim
+      ? state.worldSim.npcs.filter((n) => n.identity.alive && n.identity.specialStatus === 'missing_nin')
+      : [];
+  const [minPow, maxPow] =
+    rank === 'S' ? [60, 200] : rank === 'A' ? [42, 90] : [20, 68];
+  const matchedRogues = livingRogues.filter(
+    (n) => n.identity.powerScore >= minPow && n.identity.powerScore <= maxPow,
+  );
+  const roguePool = matchedRogues.length > 0 ? matchedRogues : livingRogues;
+  const livingRogue = roguePool.length > 0 ? rng.pick(roguePool) : undefined;
   const threat = livingRogue
     ? `Missing-Nin ${livingRogue.identity.name} (Power ${livingRogue.identity.powerScore})`
     : rng.pick(MISSION_THREATS);
@@ -67,6 +74,16 @@ export function generateMissionContract(
     ? 0.8
     : 1.0;
 
+  // C30: Pay scales cleanly with contract rank (D/C/B/A/S) instead of flat template pay
+  const rankBaseRyo: Record<'D' | 'C' | 'B' | 'A' | 'S', number> = {
+    D: 4,
+    C: 9,
+    B: 15,
+    A: 22,
+    S: 32,
+  };
+  const baseRyo = rankBaseRyo[rank];
+
   return {
     id: `mis_${rank}_${state.age}_${rng.int(100, 999)}`,
     rank,
@@ -83,7 +100,7 @@ export function generateMissionContract(
     hiddenComplicationDetail: comp.detail,
     complicationRevealed: false,
     difficulty: obj.baseDifficulty + (rank === 'S' ? 8 : rank === 'A' ? 4 : 0),
-    ryoReward: Math.max(4, Math.round(obj.ryo * repPenalty)),
+    ryoReward: Math.max(3, Math.round(baseRyo * repPenalty)),
     xpReward: obj.xp,
     stage: 1,
     approachScore: 0,
@@ -197,7 +214,7 @@ export function buildProceduralMissionStageDecision(
       {
         id: 'save_comrades',
         label: 'Abandon the objective to shield your squad and innocent bystanders',
-        sublabel: 'Fails the contract (Partial/Failure), yet earns immense Squad Trust & Affection and honors Will of Fire!',
+        sublabel: 'Fails the contract (Partial/Failure), yet earns immense Squad Trust & Affection and honors your village creed!',
         statHints: ['Bonds', 'Will'],
         autoEligible: false,
       },

@@ -50,6 +50,16 @@ import { addLeaning, clampStats, killCharacter, pushLog, recordMemory } from './
 import { generateWarChronicle, recordWarFact } from './narrative';
 import { applyPlayerActionToWorldSim } from './world-sim';
 import {
+  applyPlayerFrontImpact,
+  assignEnemiesToFronts,
+  buildWarCoalitions,
+  determineWarPlayerRole,
+  initWarAllies,
+  initWarFronts,
+  NON_COMBATANT_VILLAGES,
+  tickFrontsAtDawn,
+} from './war/fronts';
+import {
   adjustPartnerTrust,
   applyResolvePartnerReaction,
   createPermanentPartnerFromWar,
@@ -121,6 +131,8 @@ export function markEnemyDead(war: WarState, victim: WarCompetitor): void {
 }
 
 export function applyWarResultsToPeople(state: GameState, war: WarState): void {
+  if (war.resultsApplied) return;
+  war.resultsApplied = true;
   const year = state.birthYear + state.age;
   for (const e of war.enemies) {
     const person = getPerson(state, e.personId);
@@ -207,18 +219,27 @@ export function initWarState(
   const partner = selectWarPartner(state, rng, new Set());
   const excludedPersonIds = new Set<string>([partner.personId]);
   const familyIds = new Set(state.family.map((f) => f.personId));
-  const foreignVillages = VILLAGES.filter((v) => v.id !== state.villageId);
+  // F1/F3: Build allied vs enemy village coalitions (Iron, Waves, Uzushio stay strictly out of war enemies)
+  const { alliedVillages, enemyVillages } = buildWarCoalitions(state, isCrisisWar, rng);
+  const playerRole = determineWarPlayerRole(state);
+  const fronts = initWarFronts(state, alliedVillages, enemyVillages, isCrisisWar, rng);
+  const enemyVillageSet = new Set<string>(enemyVillages);
+  const foreignVillages =
+    enemyVillages.length > 0
+      ? enemyVillages.map((id) => VILLAGE_MAP[id])
+      : VILLAGES.filter((v) => v.id !== state.villageId && !NON_COMBATANT_VILLAGES.has(v.id));
   const enemies: WarCompetitor[] = [];
 
   BASE_ARCHETYPES.forEach((arch, idx) => {
-    // 1. Prefer an existing living combatant from another village matching this archetype
+    // 1. Prefer an existing living combatant from the enemy coalition matching this archetype (never same-village or neutral Iron)
     const worldCandidates = (state.worldSim?.npcs ?? []).filter((n) => {
       const id = n.identity;
       if (!id.alive) return false;
-      if (id.occupation !== 'shinobi' && id.occupation !== 'samurai') return false;
+      if (id.occupation !== 'shinobi') return false;
       if (id.age < 16 || (id.rank !== 'chunin' && id.rank !== 'jonin')) return false;
       if (id.specialStatus === 'kage') return false;
-      if (id.villageId === state.villageId) return false;
+      if (id.villageId === state.villageId || NON_COMBATANT_VILLAGES.has(id.villageId)) return false;
+      if (enemyVillageSet.size > 0 && !enemyVillageSet.has(id.villageId)) return false;
       if (id.archetype !== arch) return false;
       if (excludedPersonIds.has(id.id) || familyIds.has(id.id)) return false;
       return true;
@@ -228,13 +249,13 @@ export function initWarState(
       worldCandidates.length > 0
         ? rng.pick(worldCandidates)
         : (() => {
-            const foreignV = foreignVillages.length > 0 ? rng.pick(foreignVillages) : VILLAGE_MAP[state.villageId];
+            const foreignV = foreignVillages.length > 0 ? rng.pick(foreignVillages) : VILLAGE_MAP.iwa;
             return generateCharacter(
               state,
               {
                 villageId: foreignV.id,
-                occupation: foreignV.id === 'iron' ? 'samurai' : 'shinobi',
-                age: Math.max(17, state.age + rng.int(1, 14)),
+                occupation: 'shinobi',
+                age: clamp(Math.max(17, state.age + rng.int(1, 14)), 17, 54),
                 rank: rng.chance(0.75) ? 'jonin' : 'chunin',
                 archetype: arch,
                 lodTier: 'L1',
@@ -300,7 +321,7 @@ export function initWarState(
               {
                 villageId: originV.id,
                 occupation: originV.id === 'iron' ? 'samurai' : 'shinobi',
-                age: Math.max(22, state.age + rng.int(4, 18)),
+                age: clamp(Math.max(22, state.age + rng.int(4, 18)), 22, 58),
                 rank: 'jonin',
                 specialStatus: 'missing_nin',
                 archetype: 'rogue_s',
@@ -318,70 +339,9 @@ export function initWarState(
     enemies.push(comp);
   }
 
-  // Ensure at least 1 same-village comrade is deployed when player serves a village (village-vs-village war)
-  if (state.specialStatus !== 'missing_nin') {
-    const loyalRival =
-      state.rivalId && state.rivalId !== partner.personId
-        ? state.team?.members.find((m) => {
-            const p = getPerson(state, m.personId);
-            return m.personId === state.rivalId && Boolean(p && p.identity.alive && p.identity.specialStatus !== 'missing_nin');
-          })
-        : undefined;
-    const hasSameVillage = enemies.some((e) => !e.isExTeammateRogue && e.villageId === state.villageId);
-    if ((loyalRival || !hasSameVillage) && enemies.length > 0) {
-      const swapIdx = 0;
-      if (loyalRival) {
-        const rivalPerson = getPerson(state, loyalRival.personId);
-        if (rivalPerson && !excludedPersonIds.has(rivalPerson.identity.id) && !enemies.some((e) => e.personId === rivalPerson.identity.id)) {
-          const v = VILLAGE_MAP[state.villageId];
-          excludedPersonIds.add(rivalPerson.identity.id);
-          enemies[swapIdx] = competitorFromPerson(state, rivalPerson, swapIdx + 1, {
-            id: `en_rival_${rivalPerson.identity.id}`,
-            epithet: `Sworn Rival of ${v.name}`,
-            tactic: 'proud',
-            formerShinobi: false,
-          });
-        }
-      } else if (!hasSameVillage) {
-        const v = VILLAGE_MAP[state.villageId];
-        const existingComrade = state.worldSim?.npcs.find(
-          (n) =>
-            n.identity.alive &&
-            (n.identity.occupation === 'shinobi' || n.identity.occupation === 'samurai') &&
-            n.identity.age >= 16 &&
-            (n.identity.rank === 'chunin' || n.identity.rank === 'jonin') &&
-            n.identity.specialStatus !== 'kage' &&
-            n.identity.specialStatus !== 'missing_nin' &&
-            n.identity.villageId === state.villageId &&
-            !excludedPersonIds.has(n.identity.id) &&
-            !familyIds.has(n.identity.id) &&
-            !enemies.some((e) => e.personId === n.identity.id),
-        );
-        const comradePerson =
-          existingComrade ??
-          generateCharacter(
-            state,
-            {
-              age: Math.max(17, state.age + rng.int(1, 7)),
-              villageId: state.villageId,
-              occupation: state.villageId === 'iron' ? 'samurai' : 'shinobi',
-              rank: 'chunin',
-              roleTitle: `${v.name} Vanguard`,
-              archetype: enemies[swapIdx].archetype === 'rogue_s' ? 'vanguard' : enemies[swapIdx].archetype,
-              lodTier: 'L1',
-              observed: true,
-            },
-            rng,
-          );
-        excludedPersonIds.add(comradePerson.identity.id);
-        enemies[swapIdx] = competitorFromPerson(state, comradePerson, swapIdx + 1, {
-          id: `en_ally_${comradePerson.identity.id}`,
-          tactic: 'defensive',
-          formerShinobi: false,
-        });
-      }
-    }
-  }
+  // F2: Separate Allied Forces roster (squad, rival, allied villages) instead of placing allies in war.enemies[]
+  const allies = initWarAllies(state, alliedVillages, fronts, excludedPersonIds, rng);
+  assignEnemiesToFronts(enemies, fronts);
 
   const hasBarrier = state.disciplines.some((d) => d.id === 'barrier' || d.id === 'trap_craft');
   const startFort = (approach === 'flank' ? 24 : 16) + (hasBarrier ? 12 : 0);
@@ -402,7 +362,7 @@ export function initWarState(
     beatClock: 0,
     beatQueue: [],
     timeOfDay: 'morning',
-    statusText: 'Establishing sector perimeter...',
+    statusText: 'Establishing front perimeter...',
     npcNightActed: [],
     npcExtraRaidPressure: 0,
     hp: clamp(Math.max(70, state.stats.health + 12), 70, 100),
@@ -432,6 +392,14 @@ export function initWarState(
     loyalInterceptUsed: false,
     partner,
     usedPartnerScenes: [],
+    alliedVillages,
+    enemyVillages,
+    fronts,
+    allies,
+    activeFrontId: fronts[0]?.id,
+    playerRole,
+    allyExhaustion: 0,
+    enemyExhaustion: 0,
     facts: [],
     crisis: null,
     conviction: null,
@@ -440,11 +408,14 @@ export function initWarState(
   };
 
   const tierInfo = getPartnerTrustTier(partner.trust);
+  const allyCoalitionNames = alliedVillages.map((id) => VILLAGE_MAP[id].name).join(', ');
+  const enemyCoalitionNames =
+    enemyVillages.length > 0 ? enemyVillages.map((id) => VILLAGE_MAP[id].name).join(', ') : 'Crisis Hostiles';
   pushLog(
     state,
     'bond',
-    `War Partner Assigned: ${partner.name} (${partner.epithet}) deploys directly beside you (Trust ${partner.trust} · ${tierInfo.label}, Affinity Fit ${partner.fit}).`,
-    { title: `War Partner: ${partner.name}` },
+    `War Deployment (${allyCoalitionNames} vs ${enemyCoalitionNames}): Partner ${partner.name} (${partner.epithet}, Trust ${partner.trust} · ${tierInfo.label}) and ${allies.length} allied division specialists hold the three contested fronts beside you.`,
+    { title: `Front Deployment: ${fronts[0]?.name ?? 'Frontier'}` },
   );
 
   if (isCrisisWar) {
@@ -452,14 +423,6 @@ export function initWarState(
   }
 
   initWarRelations(state, war);
-  if (state.specialStatus !== 'missing_nin') {
-    const villageComrade =
-      war.enemies.find((e) => e.alive && e.id.startsWith('en_rival_')) ??
-      war.enemies.find((e) => e.alive && !e.isExTeammateRogue && e.villageId === state.villageId);
-    if (villageComrade) {
-      establishPlayerAlliance(state, war, villageComrade, rng, true);
-    }
-  }
   runDailyStrategicPlanner(state, war, rng);
   return war;
 }
@@ -899,12 +862,62 @@ export function buildWarDayDecision(state: GameState): PendingDecision {
     });
   }
 
+  if (war.fronts && war.fronts.length > 0) {
+    const activeFront = war.fronts.find((f) => f.id === war.activeFrontId) ?? war.fronts[0];
+    const role = war.playerRole ?? determineWarPlayerRole(state);
+    if (role === 'kage_hq') {
+      options.unshift({
+        id: 'day_kage_allocate',
+        label: `War HQ Decree: Reinforce Weakest Front (+10 Ally Strength, +6 Front Control)`,
+        sublabel: 'Direct reserve divisions from HQ and stabilize the most pressured line.',
+        statHints: ['Intel', 'Bonds'],
+        autoEligible: true,
+      });
+    } else if (role === 'mercenary') {
+      options.unshift({
+        id: 'day_front_push',
+        label: `Mercenary Contract Raid on ${activeFront.name} (+8 Ryo, +7 Front Control)`,
+        sublabel: 'Strike supply columns along the contested front for war spoils (+5 Exposure).',
+        statHints: ['Chakra', 'Ryo'],
+        autoEligible: true,
+      });
+    } else if (role === 'genin_support') {
+      options.unshift({
+        id: 'day_front_hold',
+        label: `Rear-Front Support & Triage at ${activeFront.name} (+5 Front Control, +6 HP, +4 Fort)`,
+        sublabel: 'Escort ammunition, mend wounded comrades, and steady the rear perimeter.',
+        statHints: ['Bonds', 'Health'],
+        autoEligible: true,
+      });
+    } else {
+      options.unshift({
+        id: 'day_front_push',
+        label: `Lead Front Assault on ${activeFront.name} (+8 Front Control, -4 Enemy Strength)`,
+        sublabel: 'Push enemy divisions back on your active front (+5 Exposure, -6 CP).',
+        statHints: ['Chakra', 'Will'],
+        autoEligible: war.hp >= 55 && war.cp >= 20,
+      });
+      if (role === 'jonin_commander' && war.fronts.length > 1) {
+        const weakestFront = [...war.fronts].sort((a, b) => a.control - b.control)[0];
+        if (weakestFront.id !== activeFront.id) {
+          options.push({
+            id: 'day_switch_front',
+            label: `Redeploy Unit to ${weakestFront.name} (Control ${weakestFront.control}%)`,
+            sublabel: 'Switch your active front as a Jonin Commander and bolster its line (+6 Ally Strength).',
+            statHints: ['Intel', 'Will'],
+            autoEligible: weakestFront.control < 42,
+          });
+        }
+      }
+    }
+  }
+
   return {
     id: `war_day_${war.warNumber}_${war.day}`,
     kind: 'war_day',
     eventId: 'war_day',
     title: `War #${war.warNumber}: Day ${war.day}/${war.maxDays} (Daylight Phase)`,
-    body: `${living} rival shinobi remain active in the sector. Your status: HP ${war.hp}/100, CP ${war.cp}/100, Fort ${war.fort}, Exposure ${war.exposure}%, Resolves ${war.resolves}.`,
+    body: `${living} enemy Aces active across ${war.fronts?.length ?? 3} fronts. Your status: HP ${war.hp}/100, CP ${war.cp}/100, Fort ${war.fort}, Exposure ${war.exposure}%, Resolves ${war.resolves}.`,
     manual: false,
     options,
   };
@@ -1394,14 +1407,29 @@ function runSingleNpcNightStep(state: GameState, npcId: string, rng: SeededRng):
         war.npcExtraRaidPressure += 0.06;
         return false;
       }
+      // F1: Shinobi of the same village NEVER fight each other!
       const foe =
-        living.find((o) => o.alive && o.id === npc.planTargetId && o.id !== npc.id && o.id !== npc.allyId) ??
-        living.find((o) => o.alive && o.id !== npc.id && o.id !== npc.allyId);
-      if (foe && rng.chance(0.72)) {
+        living.find(
+          (o) =>
+            o.alive &&
+            o.id === npc.planTargetId &&
+            o.id !== npc.id &&
+            o.id !== npc.allyId &&
+            o.villageId !== npc.villageId,
+        ) ??
+        living.find(
+          (o) => o.alive && o.id !== npc.id && o.id !== npc.allyId && o.villageId !== npc.villageId,
+        );
+      if (foe && rng.chance(0.42)) {
         war.npcNightActed.push(foe.id);
         const res = resolveNpcSkirmish(npc, foe, rng, war);
         pushLog(state, 'war', res.logLine);
         return true;
+      }
+      // Otherwise enemy Ace pressures their assigned war front against allied divisions
+      const aceFront = war.fronts?.find((f) => f.id === npc.frontId);
+      if (aceFront) {
+        aceFront.control = clamp(aceFront.control - rng.int(1, 3), 0, 100);
       }
       return false;
     }
@@ -1415,8 +1443,17 @@ function runNightThreatCheck(state: GameState, rng: SeededRng): boolean {
 
   const stealthSkill = state.disciplines.some((d) => d.id === 'silent_killing' || d.id === 'genjutsu') ? 0.04 : 0;
   const coalitionBoost = war.coalitionEnemyIds.some((id) => raiders.some((r) => r.id === id)) ? 0.1 : 0;
+  const frontPressure =
+    war.approach === 'front'
+      ? state.rank === 'genin'
+        ? 0.17
+        : state.rank === 'chunin'
+          ? 0.05
+          : 0.0
+      : 0.02;
   const raidProb = clamp(
-    0.12 +
+    0.13 +
+    frontPressure +
     war.exposure * 0.003 +
     war.day * 0.011 +
     war.npcExtraRaidPressure +
@@ -1531,12 +1568,12 @@ export function runDawnTick(state: GameState, rng: SeededRng): void {
     return;
   }
 
-  // Final Two with Ally check!
-  if (living.length === 1 && war.allyId === living[0].id) {
+  // F7: Do not end the war prematurely on "Final Two with Ally"; only end on Day 14 armistice or when all enemy Aces fall
+  if (living.length === 0) {
     if (hasActiveCrisis(war)) {
       escalateToCrisisBoss(state, war);
     } else {
-      state.pending = buildAllyFinalDecision(state, living[0]);
+      concludeWar(state, rng, 'victor');
     }
     return;
   }
@@ -1546,12 +1583,38 @@ export function runDawnTick(state: GameState, rng: SeededRng): void {
   runDailyStrategicPlanner(state, war, rng);
   advanceCrisisPhase(state, war, rng);
 
+  // F3/F5/F6/F7: Advance 3-Front War control, division reinforcement AI, exhaustion & Land of Iron armistice check
+  const frontTick = tickFrontsAtDawn(state, war, rng);
+  for (const fLog of frontTick.logs) {
+    pushLog(state, 'danger', fLog);
+  }
+  if (frontTick.armisticeOutcome) {
+    war.armisticeOutcome = frontTick.armisticeOutcome;
+    pushLog(
+      state,
+      frontTick.armisticeOutcome === 'defeat' ? 'danger' : 'milestone',
+      `Land of Iron Armistice (${frontTick.armisticeOutcome.toUpperCase()}): ${frontTick.armisticeReason}`,
+      { title: 'Armistice at the Land of Iron' },
+    );
+    const mappedOutcome =
+      frontTick.armisticeOutcome === 'victory'
+        ? 'victor'
+        : frontTick.armisticeOutcome === 'draw'
+          ? 'shared'
+          : 'survived';
+    concludeWar(state, rng, mappedOutcome);
+    return;
+  }
+
   const hpGain = war.hp - prevHp;
   const cpGain = war.cp - prevCp;
+  const frontSummary = war.fronts
+    ? ` | Fronts: ${war.fronts.map((f) => `${f.name.split(' ')[0]} ${f.control}%`).join(', ')}`
+    : '';
   pushLog(
     state,
     'war',
-    `Day ${war.day}/${war.maxDays} Dawn: ${living.length} rival shinobi remain active across the sector (Recovered +${hpGain} HP, +${cpGain} CP | Fort ${war.fort}).`,
+    `Day ${war.day}/${war.maxDays} Dawn: ${living.length} enemy Aces active${frontSummary} (Recovered +${hpGain} HP, +${cpGain} CP | Fort ${war.fort}).`,
     { title: `Day ${war.day} Breaks` },
   );
 
@@ -1583,7 +1646,7 @@ function runDayOpenBeat(state: GameState, rng: SeededRng): void {
     return;
   }
 
-  // Day 14 Final Night resolution
+  // Day 14 resolution: Crisis Confrontation OR Decisive Enemy Ace Clash -> Land of Iron Armistice (F7: Final Night culling removed!)
   if (war.day >= war.maxDays) {
     if (hasActiveCrisis(war)) {
       war.crisis!.phase = 3;
@@ -1592,48 +1655,54 @@ function runDayOpenBeat(state: GameState, rng: SeededRng): void {
       pushLog(
         state,
         'crisis',
-        `DAY 14 FINAL RECKONING: ${war.crisis!.bossName} threatens to consume the Five Great Nations unless stopped tonight!`,
+        `DAY 14 FINAL RECKONING: ${war.crisis!.bossName} threatens the Allied Shinobi Forces unless stopped tonight!`,
         { title: 'Final Night Crisis Confrontation' },
       );
       state.pending = buildCrisisBossDecision(state);
       return;
     }
 
-    while (getLivingEnemies(war).length > 1) {
-      const pool = getLivingEnemies(war);
-      const a = pool[0];
-      const b = pool[1];
-      const res = resolveNpcSkirmish(a, b, rng, war);
-      if (a.alive && b.alive) {
-        const culled = a.hp >= b.hp ? b : a;
-        const survivor = culled === b ? a : b;
-        markEnemyDead(war, culled);
-        survivor.kills += 1;
-        pushLog(
-          state,
-          'war',
-          `Final Night culling: ${culled.intel >= 80 ? culled.name : `a rival ${culled.archetype}`} falls in the desperate valley clash.`,
-        );
-      } else {
-        pushLog(state, 'war', res.logLine);
-      }
-    }
-
-    const finalist = getLivingEnemies(war)[0];
-    if (!finalist) {
-      concludeWar(state, rng, 'victor');
+    // F5/F7: If an enemy Ace still holds the contested front on Day 14, clash decisively before the Land of Iron armistice!
+    const frontAces = getLivingEnemies(war).filter((e) => e.frontId === war.activeFrontId);
+    const acePool = frontAces.length > 0 ? frontAces : getLivingEnemies(war);
+    const enemyCommander = acePool.length > 0 ? rng.pick(acePool) : undefined;
+    if (enemyCommander && !war.armisticeOutcome) {
+      enemyCommander.hp = Math.max(38, enemyCommander.hp);
+      enemyCommander.cp = Math.max(42, enemyCommander.cp);
+      war.subPhase = 'final';
+      pushLog(
+        state,
+        'war',
+        `Decisive Frontline Clash: Enemy commander ${enemyCommander.intel >= 80 ? enemyCommander.name : `an elite ${enemyCommander.archetype}`} spearheads a final breakthrough before the Land of Iron armistice!`,
+        { title: 'Day 14 Frontline Climax' },
+      );
+      startWarBattle(state, enemyCommander.id, {
+        isFinal: true,
+        isAmbush: false,
+        isDefense: false,
+        startedInPhase: 'night',
+      });
       return;
     }
 
-    if (war.allyId === finalist.id) {
-      state.pending = buildAllyFinalDecision(state, finalist);
-      return;
-    }
-
-    finalist.hp = Math.max(55, finalist.hp);
-    finalist.cp = Math.max(60, finalist.cp);
-    war.subPhase = 'final';
-    startWarBattle(state, finalist.id, { isFinal: true, isAmbush: false, isDefense: false, startedInPhase: 'night' });
+    const avgCtrl =
+      war.fronts && war.fronts.length > 0
+        ? war.fronts.reduce((acc, f) => acc + f.control, 0) / war.fronts.length
+        : 55;
+    const armistice: 'victory' | 'draw' | 'defeat' =
+      avgCtrl >= 57 ? 'victory' : avgCtrl <= 43 ? 'defeat' : 'draw';
+    war.armisticeOutcome = armistice;
+    pushLog(
+      state,
+      armistice === 'defeat' ? 'danger' : 'milestone',
+      `Day 14 Armistice at the Land of Iron (${armistice.toUpperCase()}): Average front control stands at ${Math.round(avgCtrl)}%. Envoys from both coalitions ratify ceasefire terms under samurai arbitration.`,
+      { title: 'Land of Iron Armistice' },
+    );
+    concludeWar(
+      state,
+      rng,
+      armistice === 'victory' ? 'victor' : armistice === 'draw' ? 'shared' : 'survived',
+    );
     return;
   }
 
@@ -1827,8 +1896,8 @@ function buildWarFinaleWishDecision(
     id: `war_finale_wish_${war.warNumber}`,
     kind: 'war_finale_wish',
     eventId: 'war_finale_wish',
-    title: `War #${war.warNumber} Finale: The Winner's Demand`,
-    body: `Smoke clears over the contested valley. Standing victorious${war.partner?.active ? ` beside ${war.partner.name}` : ''}, your voice carries the weight of the entire front. What demand will you carve into the armistice treaty?`,
+    title: `War #${war.warNumber} Finale: Armistice Recommendation`,
+    body: `Smoke clears over the contested front as envoys gather at the Land of Iron. Standing victorious${war.partner?.active ? ` beside ${war.partner.name}` : ''}, your wartime record earns you a formal audience with the ${leader}. What recommendation will you put forward for the armistice treaty?`,
     manual: true,
     meta: { outcome },
     options,
@@ -1856,6 +1925,10 @@ export function concludeWar(
     }
   }
 
+  // A4: Persist war casualties before checking Conviction Route so slain squadmates never appear at Valley of the End
+  applyWarResultsToPeople(state, war);
+  syncPartnerBackToState(state, war.partner);
+
   // Trigger hidden Extreme Conviction Route on non-Crisis victory when Leaning >= 8!
   if (!skipConviction && (outcome === 'victor' || outcome === 'shared') && canTriggerConvictionRoute(state, war)) {
     state.pending = startConvictionRoute(state, war, outcome);
@@ -1877,7 +1950,9 @@ export function concludeWar(
   state.stats.health = clamp(state.stats.health - wear, 8, 100);
   state.stats.will += outcome === 'victor' || outcome === 'shared' ? 6 : 3;
   state.stats.intel += 3;
-  state.stats.ryo += outcome === 'victor' ? 18 : outcome === 'shared' ? 14 : 9;
+  // C30/F7: War payout reflects outcome; Defeat armistice incurs war reparations & keeps tension elevated
+  const isDefeatArmistice = war.armisticeOutcome === 'defeat';
+  state.stats.ryo += isDefeatArmistice ? -8 : outcome === 'victor' ? 36 : outcome === 'shared' ? 26 : 16;
   if (outcome === 'shared') state.stats.bonds += 5;
 
   if (state.disciplines.length > 0) {
@@ -1891,7 +1966,11 @@ export function concludeWar(
   }
 
   let fieldPromoted = false;
-  if (state.rank === 'genin' && (outcome === 'victor' || outcome === 'shared' || war.kills >= 1)) {
+  if (
+    state.rank === 'genin' &&
+    state.specialStatus !== 'missing_nin' &&
+    (outcome === 'victor' || outcome === 'shared' || war.kills >= 1)
+  ) {
     promoteRank(state, 'chunin');
     fieldPromoted = true;
   }
@@ -1899,9 +1978,17 @@ export function concludeWar(
   if (war.isCrisisWar && (outcome === 'victor' || outcome === 'shared')) {
     state.world.crisisStage = 3;
     state.world.truePeace = true;
-    if (state.rank === 'jonin' && state.stats.bonds >= 55 && state.specialStatus !== 'missing_nin') {
+    if (
+      state.rank === 'jonin' &&
+      state.age >= 24 &&
+      state.stats.bonds >= 55 &&
+      state.specialStatus !== 'missing_nin' &&
+      state.specialStatus !== 'kage' &&
+      !state.flags.declined_kage
+    ) {
       const title = kageTitle(state);
       state.specialStatus = 'kage';
+      applyPlayerActionToWorldSim(state, { type: 'kage_ascend' });
       pushLog(
         state,
         'milestone',
@@ -1931,7 +2018,14 @@ export function concludeWar(
   state.world.warsSurvived += 1;
   state.world.eraNumber += 1;
   state.world.lastWarAge = state.age;
-  state.world.tension = state.world.truePeace ? 5 : rng.int(10, 24);
+  const hasPeaceAccord = Boolean(state.world.peaceAccordUntilAge && state.age < state.world.peaceAccordUntilAge);
+  state.world.tension = state.world.truePeace
+    ? 5
+    : hasPeaceAccord
+      ? 8
+      : isDefeatArmistice
+        ? rng.int(34, 48)
+        : rng.int(10, 24);
   state.world.omenActive = false;
   if (state.worldSim) {
     applyPlayerActionToWorldSim(state, { type: 'war_ended', outcome });
@@ -1946,7 +2040,9 @@ export function concludeWar(
   recordMemory(
     state,
     'war',
-    `Survived Great Shinobi War #${war.warNumber} (${chronicle.title}) fighting for ${VILLAGE_MAP[state.villageId].name}.`,
+    state.specialStatus === 'missing_nin'
+      ? `Survived Great Shinobi War #${war.warNumber} (${chronicle.title}) as a Missing-Nin operative.`
+      : `Survived Great Shinobi War #${war.warNumber} (${chronicle.title}) fighting for ${VILLAGE_MAP[state.villageId].name}.`,
   );
 
   if (fieldPromoted && state.team?.active) {
@@ -2001,8 +2097,8 @@ export function handleWarDecision(
         state,
         'crisis',
         war.crisis?.id === 'mastermind'
-          ? 'Unable to break Akatsuki by dawn, a pale Infinite Tsukuyomi illusion washes across the borderlands.'
-          : `Unchecked at dawn, ${war.crisis?.bossName ?? 'the unbound Bijuu'} scorches the entire contested valley before vanishing beneath the mountains.`,
+          ? 'Unable to break Akatsuki by dawn, a pale regional Moon-Eye genjutsu washes across the border valley before Allied sensors shatter the projection.'
+          : `Unchecked at dawn, ${war.crisis?.bossName ?? 'the unbound Bijuu'} scorches the contested front before withdrawing beyond the mountains.`,
         { title: 'Crisis Uncontained' },
       );
       concludeWar(state, rng, 'survived', true);
@@ -2066,13 +2162,18 @@ export function handleWarDecision(
     }
     state.world.crisisStage = 3;
     state.world.truePeace = true;
+    const isBijuuCrisis = war.crisis?.id === 'calamity';
     pushLog(
       state,
       'milestone',
       optionId === 'crisis_seal'
-        ? 'Your Grand Seal locks the crisis core cleanly beneath the stone. Sunlight finally pierces the storm.'
-        : 'Your final blast shatters the crisis core into harmless drifting light across all five nations.',
-      { title: 'Endgame Crisis Defeated!' },
+        ? isBijuuCrisis
+          ? 'Your Grand Seal binds the rampaging Bijuu cleanly inside a Jinchuriki vessel. Sunlight finally pierces the storm.'
+          : 'Your Grand Seal locks the Akatsuki Relic Matrix cleanly beneath the stone. Sunlight finally pierces the storm.'
+        : isBijuuCrisis
+          ? 'Your decisive blast disperses the Bijuu’s volatile chakra across the leylines; it will not reform for decades, securing an era of peace.'
+          : 'Your final blast shatters the Relic Matrix into harmless drifting light across all five nations.',
+      { title: 'Endgame Crisis Contained!' },
     );
     concludeWar(state, rng, 'victor', true);
     return;
@@ -2246,6 +2347,10 @@ export function handleWarDecision(
       if (opt.exposureDelta) war.exposure = clamp(war.exposure + opt.exposureDelta, 0, 100);
       if (opt.id === 'poison_well') {
         for (const e of getLivingEnemies(war)) e.hp = Math.max(12, e.hp - 14);
+        // E3: Tainted runoff also affects downstream allied camps & your own canteen supply
+        war.hp = Math.max(8, war.hp - 6);
+        if (war.partner?.active) war.partner.hp = Math.max(8, war.partner.hp - 6);
+        pushLog(state, 'danger', 'Bitter runoff drifts downstream into allied lines too, sickening nearby squads (-6 HP).');
       }
       if (opt.id === 'take_cipher_honor_letter') {
         const livingRivals = getLivingEnemies(war);
@@ -2288,6 +2393,17 @@ export function handleWarDecision(
       }
       clampStats(state);
       pushLog(state, 'war', `${opt.resultText}${partnerReactionNote}`);
+      // E3: Crossroads honor duel actually launches a live duel against a living challenger
+      if (def.id === 'wc_rival_honor_duel' && opt.id === 'accept_honor') {
+        const challengers = getLivingEnemies(war).filter(
+          (e) => e.id !== war.allyId && (e.villageId !== state.villageId || e.isExTeammateRogue),
+        );
+        if (challengers.length > 0) {
+          const foe = rng.pick(challengers);
+          startWarBattle(state, foe.id, { isFinal: false, isAmbush: false, isDefense: false, startedInPhase: 'day' });
+          return;
+        }
+      }
     }
     queueDayDecision(war, 0.55);
     return;
@@ -2438,7 +2554,60 @@ export function handleWarDecision(
     const hasMedical = state.disciplines.some((d) => d.id === 'medical');
     const hasFortBonus = state.disciplines.some((d) => d.id === 'barrier' || d.id === 'trap_craft' || d.id === 'earth_release');
 
-    if (optionId === 'day_cover') {
+    if (optionId === 'day_kage_allocate' && war.fronts && war.fronts.length > 0) {
+      const weakest = [...war.fronts].sort((a, b) => a.control - b.control)[0];
+      applyPlayerFrontImpact(war, 6, 0, 10, weakest.id);
+      war.activeFrontId = weakest.id;
+      pushLog(
+        state,
+        'milestone',
+        `War HQ Decree: You redirect reserve divisions to ${weakest.name} (+10 Ally Strength, Control now ${weakest.control}%).`,
+      );
+    } else if (optionId === 'day_front_push' && war.fronts && war.fronts.length > 0) {
+      const isMerc = war.playerRole === 'mercenary';
+      const front = applyPlayerFrontImpact(war, isMerc ? 5 : 6, isMerc ? -2 : -3, 0);
+      war.exposure = clamp(war.exposure + 6, 0, 100);
+      war.cp = Math.max(0, war.cp - (isMerc ? 4 : 6));
+      if (isMerc) state.stats.ryo = clamp(state.stats.ryo + 8, 0, 100);
+      pushLog(
+        state,
+        'war',
+        isMerc
+          ? `Mercenary Raid along ${front?.name ?? 'the front'} nets +8 Ryo and pushes control to ${front?.control ?? 50}% (+6 Exposure).`
+          : `Front Assault at ${front?.name ?? 'the front'} drives enemy squads back (Control now ${front?.control ?? 50}%, +6 Exposure).`,
+      );
+      // F5: Pushing a contested front risks live interception by an enemy Ace holding that sector
+      const frontEnemies = living.filter((e) => e.frontId === (front?.id ?? war.activeFrontId));
+      const interceptPool = frontEnemies.length > 0 ? frontEnemies : living;
+      if (interceptPool.length > 0 && rng.chance(0.1)) {
+        const interceptor = rng.pick(interceptPool);
+        startWarBattle(state, interceptor.id, {
+          isFinal: false,
+          isAmbush: false,
+          isDefense: false,
+          startedInPhase: 'day',
+        });
+        return;
+      }
+    } else if (optionId === 'day_front_hold' && war.fronts && war.fronts.length > 0) {
+      const front = applyPlayerFrontImpact(war, 3, 0, 2);
+      war.hp = clamp(war.hp + 5, 0, 100);
+      war.fort = clamp(war.fort + 4, 0, 85);
+      pushLog(
+        state,
+        'bond',
+        `Rear-Front Support at ${front?.name ?? 'the front'} steadies triage tents and supply wagons (Control now ${front?.control ?? 50}%, +5 HP, +4 Fort).`,
+      );
+    } else if (optionId === 'day_switch_front' && war.fronts && war.fronts.length > 1) {
+      const weakest = [...war.fronts].sort((a, b) => a.control - b.control)[0];
+      war.activeFrontId = weakest.id;
+      applyPlayerFrontImpact(war, 3, 0, 6, weakest.id);
+      pushLog(
+        state,
+        'milestone',
+        `Unit Redeployed: You lead your Jonin strike team to reinforce ${weakest.name} (+6 Ally Strength, Control now ${weakest.control}%).`,
+      );
+    } else if (optionId === 'day_cover') {
       war.exposure = clamp(war.exposure - 7, 0, 100);
       state.stats.will = clamp(state.stats.will + 1, 0, 100);
       pushLog(state, 'war', 'You blend into supply columns and scrub chakra traces along your approach (Exposure -7).');
@@ -2765,8 +2934,8 @@ export function handleWarDecision(
       pushLog(
         state,
         'milestone',
-        `Armistice Decree: You compel the five border commanders to ratify a Twelve-Year Peace Accord (War cooldown doubled).`,
-        { title: 'Winner’s Wish: Peace Accord' },
+        `Armistice Recommendation: Backed by the ${leader} at the Land of Iron summit, your proposal helps ratify a Twelve-Year Peace Accord (War cooldown doubled).`,
+        { title: 'Armistice Recommendation: Peace Accord' },
       );
       recordMemory(state, 'war', `Ratified a twelve-year Peace Accord after Great Shinobi War #${war.warNumber}.`);
     } else if (optionId === 'wish_protect') {
@@ -2795,7 +2964,14 @@ export function handleWarDecision(
       );
       recordMemory(state, 'promotion', `Won formal council endorsement for ${leader} after War #${war.warNumber}.`);
     } else if (optionId === 'wish_vengeance') {
-      const target = war.enemies.find((e) => e.alive) ?? war.enemies[0];
+      const hostileLiving = war.enemies.filter(
+        (e) =>
+          e.alive &&
+          e.id !== war.allyId &&
+          (e.villageId !== state.villageId || e.isExTeammateRogue),
+      );
+      const killerTarget = [...hostileLiving].sort((a, b) => b.kills - a.kills)[0];
+      const target = killerTarget ?? hostileLiving[0] ?? null;
       state.world.vengeanceTargetId = target?.personId ?? null;
       state.stats.chakra += 6;
       state.stats.will += 6;
@@ -2985,6 +3161,15 @@ export function handleWarDecision(
     }
 
     if (status === 'player_won') {
+      // F3/F5: Defeating an enemy Ace swings front control and weakens enemy division strength on that front
+      const swungFront = applyPlayerFrontImpact(war, battle.isFinal ? 4 : 8, -5, 0, enemy.frontId);
+      if (swungFront) {
+        pushLog(
+          state,
+          'milestone',
+          `Enemy Ace neutralized on ${swungFront.name}! Allied front control surges to ${swungFront.control}%.`,
+        );
+      }
       if (war.bountyActive) {
         war.bountyActive = false;
         war.resolves += 1;
@@ -2996,7 +3181,29 @@ export function handleWarDecision(
         if (hasActiveCrisis(war)) {
           escalateToCrisisBoss(state, war);
         } else {
-          concludeWar(state, rng, 'victor');
+          // F7: After Day 14 Frontline Climax, resolve Land of Iron Armistice by 3-front average control
+          const avgCtrl =
+            war.fronts && war.fronts.length > 0
+              ? war.fronts.reduce((acc, f) => acc + f.control, 0) / war.fronts.length
+              : 62;
+          const armistice: 'victory' | 'draw' | 'defeat' =
+            getLivingEnemies(war).length === 0 || avgCtrl >= 57
+              ? 'victory'
+              : avgCtrl <= 43
+                ? 'defeat'
+                : 'draw';
+          war.armisticeOutcome = armistice;
+          pushLog(
+            state,
+            armistice === 'defeat' ? 'danger' : 'milestone',
+            `Land of Iron Armistice (${armistice.toUpperCase()}): Average front control stands at ${Math.round(avgCtrl)}%. Envoys seal the ceasefire under samurai arbitration.`,
+            { title: 'Land of Iron Armistice' },
+          );
+          concludeWar(
+            state,
+            rng,
+            armistice === 'victory' ? 'victor' : armistice === 'draw' ? 'shared' : 'survived',
+          );
         }
         return;
       }

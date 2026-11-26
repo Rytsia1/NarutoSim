@@ -16,6 +16,7 @@ import {
   isPersonObserved,
   learnNewNpcJutsu,
   personName,
+  vacateSeats,
 } from './people';
 import { clamp } from './powers';
 import { applyRel6Delta, buildVectorFromLegacy, createRelVector6 } from './relationships';
@@ -271,6 +272,9 @@ export function computeNpcSchedule(
   }
   if (npc.currentGoal.type === 'shadow_scheme') return 'forbidden_research';
   if (npc.identity.rank === 'genin') return 'training_ground';
+  if (npc.identity.age >= 58) {
+    return npc.identity.rank === 'jonin' ? 'clan_council' : 'academy_drills';
+  }
   if (worldSim.activeDisasters.some((d) => d.villageId === npc.identity.villageId)) {
     return 'hospital_ward';
   }
@@ -353,11 +357,20 @@ export function chooseNextNpcGoal(
     };
   }
 
-  if (id.rank === 'academy' || id.rank === 'genin') {
+  if (id.rank === 'academy') {
+    return {
+      type: 'master_art',
+      label: `Graduate from the ${VILLAGE_MAP[id.villageId].institutions.academyLabel}`,
+      progress: 15,
+      startedAge: id.age,
+    };
+  }
+
+  if (id.rank === 'genin') {
     return {
       type: 'pass_chunin',
       label: 'Pass the Chunin Exams and earn a flak jacket',
-      progress: id.rank === 'genin' ? 35 : 10,
+      progress: 35,
       startedAge: id.age,
     };
   }
@@ -458,6 +471,20 @@ export function seedInitialWorldNpcs(
   for (const vDef of GREAT_VILLAGES) {
     const vSim = worldSim.villages[vDef.id];
     const clans = getClansForVillage(vDef.id);
+    // D7: Weighted Kage selection across village clans & non-clan veterans (never always clans[0] / Uchiha)
+    const kageClanPool: { item: string | null; weight: number }[] = [
+      { item: null, weight: 2.2 },
+      ...clans.map((c) => ({
+        item: c.id as string | null,
+        weight:
+          c.id === 'senju' || c.id === 'sarutobi' || c.id === 'ishikawa' || c.id === 'yotsuki' || c.id === 'sabaku'
+            ? 2.8
+            : c.id === 'uchiha' || c.id === 'chinoike' || c.id === 'kaguya'
+              ? 0.45
+              : 1.4,
+      })),
+    ];
+    const kageClanId = rng.weighted(kageClanPool);
     const primaryClan = clans[0] ?? null;
 
     // Kage
@@ -465,7 +492,7 @@ export function seedInitialWorldNpcs(
       genCtx,
       {
         villageId: vDef.id,
-        clanId: primaryClan?.id ?? null,
+        clanId: kageClanId,
         occupation: 'shinobi',
         age: rng.int(36, 54),
         rank: 'jonin',
@@ -485,7 +512,8 @@ export function seedInitialWorldNpcs(
       rng,
     );
     vSim.kageNpcId = kage.identity.id;
-    if (vSim.clans[0]) vSim.clans[0].headNpcId = kage.identity.id;
+    const matchedClanState = kageClanId ? vSim.clans.find((c) => c.clanId === kageClanId) : undefined;
+    if (matchedClanState) matchedClanState.headNpcId = kage.identity.id;
 
     // Shadow / ANBU Commander
     const shadowHead = generateCharacter(
@@ -638,6 +666,48 @@ export function seedInitialWorldNpcs(
     const vDef = VILLAGE_MAP[mId];
     const vSim = worldSim.villages[mId];
     const clans = getClansForVillage(mId);
+
+    // D2/D3: Uzushio is ruins (no village leader); Waves is civilian-only (port elder, no Kage/shinobi)
+    if (mId === 'uzushio') {
+      vSim.kageNpcId = null;
+      generateCharacter(
+        genCtx,
+        {
+          villageId: mId,
+          clanId: clans[0]?.id ?? null,
+          occupation: 'artisan',
+          age: rng.int(42, 66),
+          rank: 'civilian',
+          specialStatus: 'none',
+          roleTitle: 'Uzushio Remnant Keeper',
+          roleBias: 'peer',
+          usedNames,
+        },
+        rng,
+      );
+      continue;
+    }
+
+    if (mId === 'waves') {
+      vSim.kageNpcId = null;
+      generateCharacter(
+        genCtx,
+        {
+          villageId: mId,
+          clanId: null,
+          occupation: 'merchant',
+          age: rng.int(38, 60),
+          rank: 'civilian',
+          specialStatus: 'none',
+          roleTitle: 'Harbor Master',
+          roleBias: 'peer',
+          usedNames,
+        },
+        rng,
+      );
+      continue;
+    }
+
     const leaderOcc: NpcOccupation = mId === 'iron' ? 'samurai' : 'shinobi';
     const leader = generateCharacter(
       genCtx,
@@ -682,7 +752,7 @@ export function seedInitialWorldNpcs(
         genCtx,
         {
           villageId: mId,
-          occupation: mId === 'waves' ? 'merchant' : rng.pick(civilianOccs),
+          occupation: rng.pick(civilianOccs),
           age: rng.int(24, 52),
           rank: 'civilian',
           specialStatus: 'none',
@@ -708,16 +778,19 @@ function handleNpcDeathConsequences(
   npc.identity.deathCause = cause;
 
   const village = worldSim.villages[npc.identity.villageId];
+  const wasKage = village?.kageNpcId === npc.identity.id;
+  const wasClanHead = Boolean(
+    village && npc.identity.clanId && village.clans.some((c) => c.clanId === npc.identity.clanId && c.headNpcId === npc.identity.id),
+  );
+  vacateSeats(state, npc.identity.id);
   if (village) {
-    if (village.kageNpcId === npc.identity.id) {
-      village.kageNpcId = null;
+    if (wasKage) {
       village.stability = clamp(village.stability - 10, 10, 100);
       village.morale = clamp(village.morale - 8, 10, 100);
     }
-    if (npc.identity.clanId) {
+    if (wasClanHead && npc.identity.clanId) {
       const cState = village.clans.find((c) => c.clanId === npc.identity.clanId);
-      if (cState && cState.headNpcId === npc.identity.id) {
-        cState.headNpcId = null;
+      if (cState) {
         cState.power = clamp(cState.power - 8, 15, 100);
       }
     }
@@ -784,6 +857,7 @@ export function triggerNpcDefection(
   const homeVillage = worldSim.villages[npc.identity.homeVillageId];
   const vName = VILLAGE_MAP[npc.identity.homeVillageId].name;
 
+  vacateSeats(state, npc.identity.id);
   npc.identity.specialStatus = 'missing_nin';
   npc.identity.roleTitle = 'Missing-Nin Rogue';
   npc.schedule = 'wandering_exile';
@@ -998,17 +1072,36 @@ export function tickAutonomousNpcs(
     // 4. Advance active Goal & trigger independent life outcomes with real consequences!
     npc.currentGoal.progress = clamp(npc.currentGoal.progress + rng.int(16, 34), 0, 100);
 
-    // Academy Graduation (age 12): ONLY Academy cadets graduate to Genin; civilians remain civilians!
+    // A1: Combatant children (shinobi/samurai born as civilian rank) enroll in Academy at age 6
+    if (isCombatant && id.rank === 'civilian' && id.age >= 6 && id.age < 12) {
+      id.rank = 'academy';
+      id.roleTitle = id.occupation === 'samurai' ? 'Dojo Apprentice' : 'Academy Cadet';
+      id.powerScore = computePowerScoreFromRanks(computeRanksFromIdentity(id));
+      addNpcMemory(npc, {
+        year,
+        age: id.age,
+        tag: 'promotion',
+        summary: `Enrolled at the ${vDef.institutions.academyLabel}.`,
+        impact: 3,
+      });
+      npc.currentGoal = chooseNextNpcGoal(npc, village, worldSim, rng);
+      continue;
+    }
+
+    // Academy Graduation (age 12): ONLY Academy cadets graduate to Genin (or Sworn Samurai in Iron); civilians remain civilians!
     if (isCombatant && id.rank === 'academy' && id.age >= 12) {
       id.rank = 'genin';
-      id.roleTitle = id.occupation === 'samurai' ? 'Young Samurai' : 'Village Genin';
+      const isSamurai = id.occupation === 'samurai';
+      id.roleTitle = isSamurai ? 'Young Samurai' : 'Village Genin';
       id.powerScore = computePowerScoreFromRanks(computeRanksFromIdentity(id));
       learnNewNpcJutsu(npc, rng);
       addNpcMemory(npc, {
         year,
         age: id.age,
         tag: 'promotion',
-        summary: `Graduated from the ${vDef.institutions.academyLabel} as a Genin.`,
+        summary: isSamurai
+          ? `Completed apprenticeship at the ${vDef.institutions.academyLabel} as a Sworn Samurai.`
+          : `Graduated from the ${vDef.institutions.academyLabel} as a Genin.`,
         impact: 4,
       });
       npc.currentGoal = chooseNextNpcGoal(npc, village, worldSim, rng);
@@ -1106,17 +1199,23 @@ export function tickAutonomousNpcs(
         npc.currentGoal = chooseNextNpcGoal(npc, village, worldSim, rng);
       } else if (gType === 'marry_partner' && id.specialStatus !== 'missing_nin') {
         const hasSpouse = Object.values(npc.relationships).some((r) => r.kind === 'spouse');
+        const playerFamilyIds = new Set(state.family.map((f) => f.personId));
+        const npcInPlayerFamily = playerFamilyIds.has(id.id);
         if (!hasSpouse) {
-          const partner = worldSim.npcs.find(
-            (other) =>
-              other.identity.alive &&
-              other.identity.id !== id.id &&
-              other.identity.villageId === id.villageId &&
-              other.identity.specialStatus !== 'missing_nin' &&
-              other.identity.age >= 19 &&
-              Math.abs(other.identity.age - id.age) <= 10 &&
-              !Object.values(other.relationships).some((r) => r.kind === 'spouse'),
-          );
+          const partner = worldSim.npcs.find((other) => {
+            if (!other.identity.alive || other.identity.id === id.id) return false;
+            if (other.identity.villageId !== id.villageId) return false;
+            if (other.identity.specialStatus === 'missing_nin') return false;
+            if (other.identity.sex === id.sex) return false;
+            if (other.identity.age < 19 || Math.abs(other.identity.age - id.age) > 10) return false;
+            if (Object.values(other.relationships).some((r) => r.kind === 'spouse')) return false;
+            const existingRel = npc.relationships[other.identity.id];
+            if (existingRel && (existingRel.kind === 'family' || existingRel.kind === 'spouse')) return false;
+            const revRel = other.relationships[id.id];
+            if (revRel && (revRel.kind === 'family' || revRel.kind === 'spouse')) return false;
+            if (npcInPlayerFamily && playerFamilyIds.has(other.identity.id)) return false;
+            return true;
+          });
           if (partner) {
             setBidirectionalRelation(npc, partner, 'spouse', 'spouse', 45, 35, 0);
             addNpcMemory(npc, {

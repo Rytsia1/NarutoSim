@@ -194,11 +194,14 @@ export function applyPlayerActionToWorldSim(
   const myName = VILLAGE_MAP[state.villageId].name;
 
   if (action.type === 'kage_ascend') {
-    const oldKage = worldSim.npcs.find((n) => n.identity.id === myVillage.kageNpcId);
-    if (oldKage && oldKage.identity.alive) {
-      oldKage.identity.specialStatus = 'none';
-      oldKage.identity.roleTitle = `Retired ${VILLAGE_MAP[state.villageId].kageTitle}`;
-      setPlayerRelation(oldKage, state.name, 'ally', 25, 25, 0);
+    for (const n of worldSim.npcs) {
+      if (n.identity.villageId === state.villageId && n.identity.specialStatus === 'kage') {
+        n.identity.specialStatus = 'none';
+        if (n.identity.alive) {
+          n.identity.roleTitle = `Retired ${VILLAGE_MAP[state.villageId].kageTitle}`;
+          setPlayerRelation(n, state.name, 'ally', 25, 25, 0);
+        }
+      }
     }
     myVillage.kageNpcId = 'player';
     myVillage.stability = clamp(myVillage.stability + 8, 10, 100);
@@ -265,6 +268,9 @@ export function applyPlayerActionToWorldSim(
   }
 
   if (action.type === 'player_defect') {
+    if (myVillage.kageNpcId === 'player') {
+      myVillage.kageNpcId = null;
+    }
     myVillage.stability = clamp(myVillage.stability - 8, 10, 100);
     myVillage.anbu.activeOp = `Hunting Missing-Nin ${state.name}`;
     if (state.clanId) {
@@ -305,7 +311,15 @@ export function pickEmergentWorldDecision(
   rng: SeededRng,
 ): PendingDecision | null {
   const worldSim = state.worldSim;
-  if (!worldSim || state.age < 13 || state.rank === 'civilian' || state.rank === 'academy') return null;
+  if (
+    !worldSim ||
+    state.age < 13 ||
+    state.rank === 'civilian' ||
+    state.rank === 'academy' ||
+    state.specialStatus === 'missing_nin'
+  ) {
+    return null;
+  }
   if (state.age - worldSim.lastEmergentAge < 4) return null;
   if (!rng.chance(0.32)) return null;
 
@@ -329,7 +343,7 @@ export function pickEmergentWorldDecision(
       kind: 'world_emergent',
       eventId: 'em_npc_defection_brink',
       title: `Footsteps at the Gate: ${defectingNpc.identity.name}`,
-      body: `Rain taps against the outer gate of ${vDef.name}. You intercept ${defectingNpc.identity.name} (${defectingNpc.identity.roleTitle}) with a packed travel scroll and a loosened forehead protector. Still haunted by "${latestMem}", they whisper that this village has nothing left for them.`,
+      body: `${vDef.weatherLine} You intercept ${defectingNpc.identity.name} (${defectingNpc.identity.roleTitle}) near the outer gate with a packed travel scroll and a loosened forehead protector. Still haunted by "${latestMem}", they whisper that this village has nothing left for them.`,
       manual: false,
       meta: { scenario: 'em_npc_defection_brink', npcId: defectingNpc.identity.id },
       options: [
@@ -573,8 +587,8 @@ export function resolveEmergentWorldDecision(
       state.stats.will += 2;
       return {
         tone: 'danger',
-        title: `${npc.identity.name} Vanished into the Rain`,
-        text: `${npc.identity.name} shook their head quietly and leaped into the canopy, leaving ${vDef.name} behind as a Missing-Nin.`,
+        title: `${npc.identity.name} Vanished Beyond the Gate`,
+        text: `${npc.identity.name} shook their head quietly and slipped beyond the perimeter, leaving ${vDef.name} behind as a Missing-Nin.`,
         checkLabel: 'Bonds & Will Persuasion',
         checkPassed: false,
       };

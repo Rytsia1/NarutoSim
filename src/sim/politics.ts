@@ -198,7 +198,7 @@ export function pickPoliticsDecision(
   const leaderTitle = kageTitle(state);
   state.lastPoliticsAge = state.age;
 
-  // Scenario 1: ANBU / Covert Surveillance of a LIVING Friend or Squadmate!
+  // Scenario 1: ANBU / Covert Surveillance of a LIVING Friend or Squadmate! (Not for Kage; Kage gives orders)
   const watchedFriend = worldSim.npcs.find((n) => {
     if (!n.identity.alive || n.identity.villageId !== state.villageId || n.identity.specialStatus === 'kage') return false;
     const rel = n.relationships.player;
@@ -206,7 +206,7 @@ export function pickPoliticsDecision(
     const vec = getRelVector(rel);
     return vec.trust >= 50 || vec.affection >= 50;
   });
-  if ((state.specialStatus === 'anbu' || state.rank === 'jonin') && watchedFriend && rng.chance(0.45)) {
+  if (state.specialStatus !== 'kage' && (state.specialStatus === 'anbu' || state.rank === 'jonin') && watchedFriend && rng.chance(0.45)) {
     return {
       id: `pol_watch_${watchedFriend.identity.id}_${state.age}`,
       kind: 'politics_event',
@@ -241,8 +241,8 @@ export function pickPoliticsDecision(
     };
   }
 
-  // Scenario 2: Orders vs Nindo (Jonin moral collision!)
-  if (state.nindo && state.rank === 'jonin' && rng.chance(0.45)) {
+  // Scenario 2: Orders vs Nindo (Jonin moral collision! Skipped for Kage who signs council orders directly)
+  if (state.specialStatus !== 'kage' && state.nindo && state.rank === 'jonin' && rng.chance(0.45)) {
     const nindoDef = NINDO_MAP[state.nindo];
     const rivalNation = rng.pick(GREAT_VILLAGES.filter((v) => v.id !== state.villageId)) ?? GREAT_VILLAGES[0];
     return {
@@ -279,9 +279,9 @@ export function pickPoliticsDecision(
     };
   }
 
-  // Scenario 3: Clan Head vs Kage Standoff
+  // Scenario 3: Clan Head vs Kage Standoff (when player is Kage, exclude self-overreach option)
   const strainedClan = vSim.clans.find((c) => c.loyalty < 65) ?? vSim.clans[0];
-  if (strainedClan && rng.chance(0.45)) {
+  if (strainedClan && state.specialStatus !== 'kage' && rng.chance(0.45)) {
     const cDef = CLAN_MAP[strainedClan.clanId];
     return {
       id: `pol_clan_kage_${strainedClan.clanId}_${state.age}`,
@@ -317,20 +317,20 @@ export function pickPoliticsDecision(
     };
   }
 
-  // Scenario 4: Daimyo Corruption & Embezzlement
+  // Scenario 4: Daimyo Corruption & Embezzlement (D14: use proper countryName, never region/archipelago)
   if (pol.corruption >= 22 || rng.chance(0.5)) {
     return {
       id: `pol_corrupt_${state.age}`,
       kind: 'politics_event',
       eventId: 'pol_daimyo_corruption',
-      title: `${vDef.region} Daimyo Ministry Embezzlement`,
-      body: `While reviewing supply manifests, you uncover a ring of Daimyo officials skimming 20% of ${vDef.name}'s hospital and mission stipends into private syndicates (Village Corruption: ${pol.corruption}%).`,
+      title: `${vDef.countryName} Treasury Ministry Embezzlement`,
+      body: `While reviewing supply manifests, you uncover a ring of ${vDef.countryName} officials skimming 20% of ${vDef.name}'s hospital and mission stipends into private syndicates (Village Corruption: ${pol.corruption}%).`,
       manual: false,
       meta: { polScenario: 'daimyo_corruption' },
       options: [
         {
           id: 'expose_scandal',
-          label: 'Publish the ledgers to the Gazette and force an immediate purge',
+          label: 'Post the audited ledgers to the village notice board and force an immediate purge',
           sublabel: '-15 Corruption, +6 Will, +6 Hospital/Academy, risks brief Daimyo funding dip.',
           statHints: ['Will', 'Intel'],
           autoEligible: true,
@@ -354,12 +354,15 @@ export function pickPoliticsDecision(
   }
 
   // Scenario 5: Shadow Power Struggle / Coup Crisis
+  const playerIsKage = state.specialStatus === 'kage';
   return {
     id: `pol_coup_${state.age}`,
     kind: 'politics_event',
     eventId: 'pol_shadow_coup',
     title: `Midnight Power Struggle: ${vDef.institutions.shadowOrgName} Moves on the Tower`,
-    body: `Lanterns flicker across the rooftops of ${vDef.name}. Armed cells loyal to ${vDef.institutions.shadowOrgName} and hawkish elders have surrounded the council hall, demanding the ${leaderTitle} step aside immediately.`,
+    body: playerIsKage
+      ? `Lanterns flicker across the rooftops of ${vDef.name}. Armed cells loyal to ${vDef.institutions.shadowOrgName} and hawkish elders have surrounded your tower, demanding you step aside immediately.`
+      : `Lanterns flicker across the rooftops of ${vDef.name}. Armed cells loyal to ${vDef.institutions.shadowOrgName} and hawkish elders have surrounded the council hall, demanding the ${leaderTitle} step aside immediately.`,
     manual: true,
     meta: { polScenario: 'shadow_coup' },
     options: [
@@ -377,13 +380,17 @@ export function pickPoliticsDecision(
         statHints: ['Intel', 'Bonds'],
         autoEligible: true,
       },
-      {
-        id: 'join_coup',
-        label: 'Back the hardline coalition to seize iron control over village policy',
-        sublabel: 'Shifts village to Expansionist/Shadow Ops (+12 Ryo, +Ruthless, -Stability).',
-        statHints: ['Chakra'],
-        autoEligible: false,
-      },
+      ...(!playerIsKage
+        ? [
+            {
+              id: 'join_coup',
+              label: 'Back the hardline coalition to seize iron control over village policy',
+              sublabel: 'Shifts village to Expansionist/Shadow Ops (+12 Ryo, +Ruthless, -Stability).',
+              statHints: ['Chakra'],
+              autoEligible: false,
+            },
+          ]
+        : []),
     ],
   };
 }
@@ -665,7 +672,10 @@ export function resolvePoliticsDecision(
         year,
         layer: 'village',
         title: `Coup Crushed at ${vDef.name} Tower`,
-        summary: `${state.name} repelled a midnight ${vDef.institutions.shadowOrgName} coup attempt and saved the sitting ${vDef.kageTitle}.`,
+        summary:
+          state.specialStatus === 'kage'
+            ? `${state.name} personally crushed a midnight ${vDef.institutions.shadowOrgName} coup attempt against the ${vDef.kageTitle} Tower.`
+            : `${state.name} repelled a midnight ${vDef.institutions.shadowOrgName} coup attempt and saved the sitting ${vDef.kageTitle}.`,
         villageId: state.villageId,
         tone: 'milestone',
       });
@@ -696,7 +706,7 @@ export function resolvePoliticsDecision(
       tone: ok ? 'milestone' : 'normal',
       title: ok ? 'Bloodless Counter-Coup' : 'Conspirators Scattered',
       text: ok
-        ? `Simultaneous owl dispatches exposed every conspirator to the clan heads before midnight, collapsing the coup without a single drop of blood.`
+        ? `Simultaneous messenger hawks exposed every conspirator to the clan heads before midnight, collapsing the coup without a single drop of blood.`
         : `Half the conspirators fled before clan guards closed the gates, leaving lingering distrust across the council.`,
       checkLabel: 'Counter-Intel Leak',
       checkPassed: ok,

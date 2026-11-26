@@ -428,19 +428,19 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
     role: 'pierce',
     rank: 'B',
     chakraCost: 14,
-    requires: { clanId: 'sarutobi', hidenId: 'hiden_sarutobi_ash' },
+    requires: { clanId: 'sarutobi', hidenId: 'hiden_sarutobi_ash', summonClanId: 'ape' },
     seals: [],
     sealless: true,
     hiden: true,
     ref: 'Transformation:_Adamantine_Staff',
-    description: 'Extends an indestructible adamantine staff to smash fortifications while raising a solid guard.',
+    description: 'Transforms your contracted Adamantine Ape ally into an indestructible staff to smash fortifications while raising a solid guard.',
     effect: {
       power: 1.28,
       pierce: true,
       pierceWall: true,
       fortShave: 5,
       self: [{ state: 'wall', rounds: 1, value: 24 }],
-      tags: ['physical'],
+      tags: ['physical', 'summon'],
     },
   },
   {
@@ -465,7 +465,7 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
         { status: 'shock', rounds: 1, value: 8 },
       ],
       setup: { sets: ['prev_fire'] },
-      tags: ['fire', 'five_elements'],
+      tags: ['fire', 'wind', 'lightning', 'earth', 'water', 'five_elements'],
     },
   },
 
@@ -680,7 +680,7 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
     effect: {
       power: 1.16,
       onHit: [{ status: 'bind', rounds: 2 }],
-      tags: ['wood', 'earth'],
+      tags: ['wood', 'earth', 'water'],
     },
   },
   {
@@ -702,7 +702,7 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
         { state: 'wall', rounds: 2, value: 36 },
         { state: 'guard', rounds: 2, value: 45 },
       ],
-      tags: ['wood'],
+      tags: ['wood', 'earth', 'water'],
     },
   },
   {
@@ -725,7 +725,7 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
         { status: 'bind', rounds: 1 },
         { status: 'drain', rounds: 3, value: 8 },
       ],
-      tags: ['wood'],
+      tags: ['wood', 'earth', 'water'],
     },
   },
   {
@@ -744,7 +744,7 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
     effect: {
       power: 1.82,
       self: [{ state: 'wall', rounds: 2, value: 34 }],
-      tags: ['wood'],
+      tags: ['wood', 'earth', 'water'],
     },
   },
 
@@ -843,7 +843,7 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
         { status: 'slow', rounds: 2, value: 9 },
       ],
       setup: { sets: ['sand_field'] },
-      tags: ['sand', 'magnet'],
+      tags: ['sand', 'magnet', 'wind', 'earth'],
     },
   },
   {
@@ -866,7 +866,7 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
       pierce: true,
       pierceWall: true,
       onHit: [{ status: 'bleed', rounds: 2, value: 5 }],
-      tags: ['magnet', 'projectile'],
+      tags: ['magnet', 'wind', 'earth', 'projectile'],
     },
   },
 
@@ -1110,7 +1110,7 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
       hits: 4,
       speed: 2,
       onHit: [{ status: 'bleed', rounds: 2, value: 5 }],
-      tags: ['ice', 'projectile'],
+      tags: ['ice', 'water', 'wind', 'projectile'],
     },
   },
   {
@@ -1132,7 +1132,7 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
         { state: 'wall', rounds: 2, value: 34 },
         { state: 'guard', rounds: 2, value: 45 },
       ],
-      tags: ['ice'],
+      tags: ['ice', 'water', 'wind'],
     },
   },
   {
@@ -1156,7 +1156,7 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
       speed: 2,
       self: [{ state: 'evade', rounds: 1, value: 1 }],
       onHit: [{ status: 'bleed', rounds: 2, value: 5 }],
-      tags: ['ice'],
+      tags: ['ice', 'water', 'wind'],
     },
   },
 
@@ -1229,7 +1229,7 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
         { status: 'slow', rounds: 1, value: 7 },
       ],
       setup: { sets: ['prev_fire'] },
-      tags: ['lava', 'fire'],
+      tags: ['lava', 'fire', 'earth'],
     },
   },
   {
@@ -1253,7 +1253,7 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
       fortShave: 7,
       onHit: [{ status: 'burn', rounds: 3, value: 7 }],
       setup: { sets: ['prev_fire'] },
-      tags: ['lava', 'fire'],
+      tags: ['lava', 'fire', 'earth'],
     },
   },
 
@@ -1530,7 +1530,7 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
     },
   },
 
-  // --- IWAGANE EXPLOSION CORPS (Original Iwa Hiden) ---
+  // --- IWAGANE EXPLOSION CORPS (Bakuton Bloodline) ---
   {
     id: 'iwagane_clay_swarm',
     name: 'Bakuton: Detonating Clay Figures',
@@ -1540,18 +1540,18 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
     element: 'earth',
     rank: 'B',
     chakraCost: 16,
-    requires: { clanId: 'iwagane', hidenId: 'hiden_iwagane_clay' },
+    requires: { clanId: 'iwagane', hidenId: 'hiden_iwagane_clay', bloodlineId: 'bakuton', minBloodlineStage: 'awakened' },
     seals: ['Tora'],
     hiden: true,
     ref: 'Explosive_Clay',
-    description: 'Releases mobile explosive clay birds that detonate across clones, burning targets and shattering walls.',
+    description: 'Releases mobile explosive clay birds infused with Bakuton chakra that detonate across clones, burning targets and shattering walls.',
     effect: {
       power: 1.3,
       hits: 3,
       aoe: true,
       fortShave: 5,
       onHit: [{ status: 'burn', rounds: 2, value: 5 }],
-      tags: ['explosive', 'earth'],
+      tags: ['explosive', 'earth', 'lightning'],
     },
   },
   {
@@ -1561,21 +1561,21 @@ export const JUTSU_CLANS: readonly JutsuDefinition[] = [
     style: 'ninjutsu',
     role: 'clash',
     element: 'earth',
-    rank: 'S',
-    chakraCost: 38,
-    requires: { clanId: 'iwagane', hidenId: 'hiden_iwagane_c3' },
+    rank: 'A',
+    chakraCost: 30,
+    requires: { bloodlineId: 'bakuton', minBloodlineStage: 'ctrl2' },
     seals: ['Tora'],
-    hiden: true,
+    forbidden: true,
     ref: 'C3',
-    description: 'Drops a colossal explosive clay payload capable of obliterating fortresses and clashing with S-Rank Ultimates.',
+    description: 'Forbidden Bakuton clay payload capable of obliterating siege fortifications across an entire canyon.',
     effect: {
-      power: 1.82,
+      power: 1.62,
       aoe: true,
       pierce: true,
       pierceWall: true,
       fortShave: 10,
       onHit: [{ status: 'burn', rounds: 3, value: 7 }],
-      tags: ['explosive', 'earth'],
+      tags: ['explosive', 'earth', 'lightning'],
     },
   },
 

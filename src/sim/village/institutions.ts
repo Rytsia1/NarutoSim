@@ -173,8 +173,38 @@ export function tickVillageOrgLayer(
       vSim.hospital.capacity = clamp(vSim.hospital.capacity + 1, 30, 98);
     }
 
-    // 2. Kage Succession (if Kage seat is vacant)
-    if (vSim.kageNpcId === null) {
+    // 2. Kage Succession (vacate stale/dead/missing-nin seat & ensure strictly 1 Kage per village; D2/D3: no Kage in Uzushio ruins or civilian Waves)
+    if (vDef.id === 'uzushio' || vDef.id === 'waves') {
+      vSim.kageNpcId = null;
+      for (const n of worldSim.npcs) {
+        if (n.identity.villageId === vDef.id && n.identity.specialStatus === 'kage') {
+          n.identity.specialStatus = 'none';
+        }
+      }
+    } else if (vSim.kageNpcId === 'player') {
+      if (!isPlayerVillage || state.specialStatus !== 'kage') {
+        vSim.kageNpcId = null;
+      }
+    } else if (vSim.kageNpcId !== null) {
+      const holder = worldSim.npcs.find((n) => n.identity.id === vSim.kageNpcId);
+      if (!holder || !holder.identity.alive || holder.identity.specialStatus === 'missing_nin') {
+        if (holder && holder.identity.specialStatus === 'kage') {
+          holder.identity.specialStatus = 'none';
+        }
+        vSim.kageNpcId = null;
+      }
+    }
+    // Enforce single Kage invariant: demote any extra NPC claiming 'kage' in this village
+    for (const n of worldSim.npcs) {
+      if (n.identity.villageId === vDef.id && n.identity.specialStatus === 'kage' && n.identity.id !== vSim.kageNpcId) {
+        n.identity.specialStatus = 'none';
+        if (n.identity.alive) {
+          n.identity.roleTitle = `Retired ${vDef.kageTitle}`;
+        }
+      }
+    }
+
+    if (vSim.kageNpcId === null && vDef.id !== 'uzushio' && vDef.id !== 'waves') {
       if (isPlayerVillage && state.specialStatus === 'kage') {
         vSim.kageNpcId = 'player';
       } else {
@@ -182,6 +212,7 @@ export function tickVillageOrgLayer(
           .filter(
             (n) =>
               n.identity.alive &&
+              (n.identity.occupation === 'shinobi' || n.identity.occupation === 'samurai') &&
               n.identity.villageId === vDef.id &&
               n.identity.specialStatus !== 'missing_nin' &&
               n.identity.rank === 'jonin',
@@ -262,13 +293,19 @@ export function tickVillageOrgLayer(
       cState.status = updateClanStatus(cState.loyalty, cState.power);
 
       if (!cState.headNpcId || !worldSim.npcs.some((n) => n.identity.id === cState.headNpcId && n.identity.alive)) {
-        const heir = worldSim.npcs.find(
-          (n) =>
-            n.identity.alive &&
-            n.identity.villageId === vDef.id &&
-            n.identity.clanId === cState.clanId &&
-            n.identity.specialStatus !== 'missing_nin',
-        );
+        // D8: Clan Head candidates must be age >= 25 and active combatants (shinobi/samurai)
+        const headCandidates = worldSim.npcs
+          .filter(
+            (n) =>
+              n.identity.alive &&
+              n.identity.age >= 25 &&
+              (n.identity.occupation === 'shinobi' || n.identity.occupation === 'samurai') &&
+              n.identity.villageId === vDef.id &&
+              n.identity.clanId === cState.clanId &&
+              n.identity.specialStatus !== 'missing_nin',
+          )
+          .sort((a, b) => b.identity.powerScore - a.identity.powerScore);
+        const heir = headCandidates[0];
         if (heir) {
           cState.headNpcId = heir.identity.id;
           if (heir.identity.specialStatus !== 'kage') {

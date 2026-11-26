@@ -45,15 +45,15 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
   {
     id: 'ach_chunin',
     category: 'path',
-    title: 'Green Flak Jacket',
-    desc: 'Earn promotion to Chunin rank.',
+    title: 'Chunin Flak Jacket',
+    desc: 'Earn promotion to Chunin rank and receive your village tactical vest.',
     check: (s) => s.peakRank === 'chunin' || s.peakRank === 'jonin',
   },
   {
     id: 'ach_jonin',
     category: 'path',
     title: 'Village Elite',
-    desc: 'Pass the Jonin Promotion Board and achieve Jonin rank.',
+    desc: 'Earn Kage recommendation and achieve Jonin rank.',
     check: (s) => s.peakRank === 'jonin',
   },
   {
@@ -89,15 +89,15 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
   {
     id: 'ach_bell_test',
     category: 'kizuna',
-    title: 'Two Bells, Three Genin',
-    desc: 'Pass your Jonin Sensei\'s induction Bell Test.',
+    title: 'Squad Induction Passed',
+    desc: 'Pass your Sensei\'s Genin induction test with your three-man cell.',
     check: (s) => Boolean(s.team?.bellTestPassed),
   },
   {
     id: 'ach_disband',
     category: 'kizuna',
     title: 'Paths Diverge',
-    desc: 'Experience the disbandment of your Genin squad upon Chunin promotion.',
+    desc: 'Experience the disbandment of your Genin squad as teammates move on to new paths.',
     check: (s) => Boolean(s.team && !s.team.active && s.team.disbandedAge !== null),
   },
   {
@@ -179,7 +179,7 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
     id: 'ach_s_mission',
     category: 'war',
     title: 'Bingo Book Executioner',
-    desc: 'Complete an S-Rank mission during peacetime.',
+    desc: 'Complete an S-Rank mission contract.',
     check: (s) => s.missions.s >= 1,
   },
 
@@ -187,8 +187,8 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
   {
     id: 'ach_secret_art',
     category: 'powers',
-    title: 'S-Rank Kinjutsu Mastery',
-    desc: 'Advance any Jutsu Discipline to Tier 4 (S-Rank Secret Art).',
+    title: 'S-Rank Discipline Mastery',
+    desc: 'Advance any Jutsu Discipline to Tier 4 (S-Rank Mastery).',
     check: (s) => s.disciplines.some((d) => d.level === 4),
   },
   {

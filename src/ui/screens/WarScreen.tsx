@@ -493,6 +493,76 @@ export function WarScreen({
             </section>
           )}
 
+          {/* F9: 3-Front War Map & Coalition Exhaustion */}
+          {war.fronts && war.fronts.length > 0 && (
+            <section className="panel" aria-label="War Fronts Overview" style={{ marginBottom: 12 }}>
+              <div className="disc-head">
+                <h2 className="panel-title" style={{ marginBottom: 0 }}>War Fronts (3 Sectors)</h2>
+                <span className="history-sub tabular">
+                  Exhaustion: Allies {war.allyExhaustion ?? 0}% | Enemy {war.enemyExhaustion ?? 0}%
+                </span>
+              </div>
+              <div className="stat-list" style={{ marginTop: 8 }}>
+                {war.fronts.map((front) => {
+                  const isActive = front.id === war.activeFrontId;
+                  const statusTone =
+                    front.control >= 75 ? 'rank-genin' : front.control <= 25 ? 'tension-high' : '';
+                  return (
+                    <article key={front.id} className="squad-card">
+                      <div className="disc-head">
+                        <span>
+                          {front.name}
+                          {isActive ? ' ★' : ''}
+                        </span>
+                        <span className={`status-tag ${statusTone} tabular`}>
+                          Control {front.control}%
+                        </span>
+                      </div>
+                      <div className="bar-track" style={{ marginTop: 4 }}>
+                        <div
+                          className={`bar-fill ${front.control >= 50 ? 'health' : 'tension'}`}
+                          style={{ width: `${front.control}%` }}
+                        />
+                      </div>
+                      <div className="disc-sub tabular" style={{ marginTop: 4 }}>
+                        Allied Div: {front.allyStrength} vs Enemy Div: {front.enemyStrength}
+                        {front.dominantTurnsAlly > 0 ? ` | Holding ${front.dominantTurnsAlly}/3` : ''}
+                        {front.dominantTurnsEnemy > 0 ? ` | Critical ${front.dominantTurnsEnemy}/3` : ''}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
+          {/* F2/F9: Dedicated Allied Forces Roster (Separate from Enemy Aces) */}
+          {war.allies && war.allies.length > 0 && (
+            <section className="panel" aria-label="Allied Forces Roster" style={{ marginBottom: 12 }}>
+              <h2 className="panel-title">
+                Allied Forces ({war.allies.filter((a) => a.alive).length}/{war.allies.length})
+              </h2>
+              <div className="stat-list">
+                {war.allies.map((a) => {
+                  const frontName = war.fronts?.find((f) => f.id === a.frontId)?.name ?? 'Frontline';
+                  return (
+                    <article key={a.id} className={`squad-card ${!a.alive ? 'fallen' : ''}`}>
+                      <div className="disc-head">
+                        <span>{a.name}</span>
+                        <span className={`status-tag ${a.alive ? 'rank-genin' : 'tension-high'} tabular`}>
+                          {a.alive ? `HP ${a.hp}` : 'KIA'}
+                        </span>
+                      </div>
+                      <div className="disc-sub">
+                        {a.role} · {VILLAGE_MAP[a.villageId].name} · {frontName}
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            </section>
+          )}
+
           <div className="tab-strip" style={{ gridTemplateColumns: '1fr 1fr' }} role="tablist">
             <button
               type="button"
@@ -501,7 +571,7 @@ export function WarScreen({
               className="tab-btn"
               onClick={() => setSideTab('competitors')}
             >
-              Competitors ({livingCount})
+              Enemy Aces ({livingCount})
             </button>
             <button
               type="button"
@@ -516,12 +586,13 @@ export function WarScreen({
 
           {sideTab === 'competitors' ? (
             <section className="panel">
-              <h2 className="panel-title">Sector Competitors</h2>
+              <h2 className="panel-title">Enemy Aces by Front</h2>
               <div className="stat-list">
                 {war.enemies.map((e) => {
                   const knownName = e.intel >= 80 || !e.alive;
                   const rel = getRel(war, e.id, 'player');
                   const isAlly = war.allyId === e.id;
+                  const aceFrontName = war.fronts?.find((f) => f.id === e.frontId)?.name;
                   return (
                     <article key={e.id} className={`squad-card ${!e.alive ? 'fallen' : ''}`}>
                       <div className="disc-head">
@@ -539,7 +610,7 @@ export function WarScreen({
                         </span>
                       </div>
                       <div className="disc-sub tabular">
-                        Intel: {e.intel}%
+                        {aceFrontName ? `${aceFrontName} | ` : ''}Intel: {e.intel}%
                         {e.intel >= 30 ? ` | Fort ${e.fort}` : ''}
                         {e.intel >= 60 ? ` | ${ELEMENT_NAMES[e.element]} | ${VILLAGE_MAP[e.villageId].name}` : ''}
                       </div>

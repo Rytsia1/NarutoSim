@@ -1,6 +1,7 @@
 import { DISCIPLINE_MAP } from '../data/powers';
 import { SENSEI_ARCHETYPES, TEAMMATE_ARCHETYPES } from '../data/events-team';
 import { getClansForVillage } from '../data/clans';
+import { triggerNpcDefection } from './npc-sim';
 import {
   applyYearlyNpcGrowth,
   assignEpithetIfEligible,
@@ -267,11 +268,19 @@ export function formGeninTeam(state: GameState, rng: SeededRng): TeamState {
   const remaining = pool.filter((a) => a.id !== arch1.id);
   const arch2 = rng.pick(remaining);
 
+  // D6: Exclude academy classmates who already graduated to Genin+ while you repeated a year
   const acadPeers: WorldNpc[] =
     state.academy && state.worldSim
       ? state.academy.classmateNpcIds
           .map((cid) => getPerson(state, cid))
-          .filter((n): n is WorldNpc => Boolean(n && n.identity.alive))
+          .filter(
+            (n): n is WorldNpc =>
+              Boolean(
+                n &&
+                  n.identity.alive &&
+                  (n.identity.rank === 'academy' || n.identity.rank === 'civilian'),
+              ),
+          )
       : [];
 
   const mateNpcs: WorldNpc[] = [];
@@ -542,8 +551,12 @@ export function tickTeamYear(state: GameState, rng: SeededRng): string[] {
         id.age <= 32 &&
         rng.chance(0.11)
       ) {
-        id.specialStatus = 'missing_nin';
-        id.roleTitle = 'Missing-Nin Rogue';
+        if (state.worldSim) {
+          triggerNpcDefection(person, 'disillusionment after squad disbandment', state, state.worldSim, []);
+        } else {
+          id.specialStatus = 'missing_nin';
+          id.roleTitle = 'Missing-Nin Rogue';
+        }
         m.fateNote = `Defected from the village at age ${id.age} as a Missing-Nin.`;
         notices.push(`Shocking dispatch: your former squadmate ${id.name} has abandoned the village and entered the Bingo Book as a Missing-Nin.`);
       } else if (id.age >= 18 && id.age < 60 && rng.chance(0.06)) {

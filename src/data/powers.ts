@@ -327,6 +327,16 @@ export const BLOODLINES: readonly BloodlineDef[] = [
     bonusSummary: '+Defense barrier, +Ranged versatility.',
   },
   {
+    id: 'bakuton',
+    name: 'Explosion Release (Bakuton)',
+    category: 'elemental',
+    weight: 10,
+    gradeRange: [2, 4],
+    strainCost: 5,
+    description: 'Volatile fusion of Earth and Lightning chakra that turns sculpted clay or strikes into shaped charges.',
+    bonusSummary: '+Siege demolition, +AoE blast pressure.',
+  },
+  {
     id: 'mokuton',
     name: 'Wood Release (Mokuton)',
     category: 'elemental',

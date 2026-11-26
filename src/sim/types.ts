@@ -4,6 +4,15 @@ export type LifePhase = 'life' | 'war' | 'retirement' | 'posthumous' | 'ended';
 
 export type ShinobiRank = 'civilian' | 'academy' | 'genin' | 'chunin' | 'jonin';
 export type SpecialStatus = 'none' | 'anbu' | 'missing_nin' | 'kage';
+export type StatusGateTag =
+  | 'active_shinobi'
+  | 'not_kage'
+  | 'not_missing_nin'
+  | 'not_civilian'
+  | 'not_retired'
+  | 'sensei_alive'
+  | 'teammate_alive'
+  | 'in_village';
 export type ChuninExamStage = 1 | 2 | 3 | 4 | 5 | 6;
 
 export type OriginId =
@@ -324,6 +333,7 @@ export interface WarCompetitor {
   kills: number;
   survivedOnce: boolean;
   isExTeammateRogue: boolean;
+  frontId?: string;
 }
 
 export type NindoId =
@@ -477,6 +487,37 @@ export interface ActiveBattleState {
   rounds: BattleRoundSummary[];
 }
 
+export type WarPlayerRole =
+  | 'genin_support'
+  | 'chunin_squad'
+  | 'jonin_commander'
+  | 'kage_hq'
+  | 'mercenary';
+
+export interface WarFront {
+  id: string;
+  territoryId: string;
+  name: string;
+  control: number; // 0..100 (50 = contested)
+  allyStrength: number;
+  enemyStrength: number;
+  dominantTurnsAlly: number;
+  dominantTurnsEnemy: number;
+}
+
+export interface WarAlly {
+  id: string;
+  personId: string;
+  name: string;
+  epithet: string;
+  villageId: VillageId;
+  role: string;
+  frontId: string;
+  powerScore: number;
+  hp: number;
+  alive: boolean;
+}
+
 export interface WarState {
   warNumber: number;
   isCrisisWar: boolean;
@@ -520,6 +561,17 @@ export interface WarState {
   partner: WarPartnerState | null;
   usedPartnerScenes: string[];
   finaleWishDone?: boolean;
+  resultsApplied?: boolean;
+  // Tier F: Full Front War fields
+  alliedVillages?: VillageId[];
+  enemyVillages?: VillageId[];
+  fronts?: WarFront[];
+  allies?: WarAlly[];
+  activeFrontId?: string;
+  playerRole?: WarPlayerRole;
+  allyExhaustion?: number;
+  enemyExhaustion?: number;
+  armisticeOutcome?: 'victory' | 'draw' | 'defeat';
   facts: WarFact[];
   crisis: WarCrisisState | null;
   conviction: ConvictionState | null;

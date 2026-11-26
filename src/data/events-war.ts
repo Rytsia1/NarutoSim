@@ -66,7 +66,7 @@ export const WAR_CROSSROADS: readonly WarCrossroadDef[] = [
       {
         id: 'take_cipher_honor_letter',
         label: 'Seize the military map, but seal their family letter for neutral post',
-        sublabel: '+10 Rival Intel, +3 Intel, +2 Will, +3 Ally/Squad Trust',
+        sublabel: '+12 Rival Intel, +3 Intel, +2 Will, +3 Ally/Squad Trust',
         autoEligible: true,
         stats: { intel: 3, will: 2 },
         allyTrustDelta: 3,
@@ -127,7 +127,7 @@ export const WAR_CROSSROADS: readonly WarCrossroadDef[] = [
       {
         id: 'disarm_loot',
         label: 'Carefully sever the chakra wire and claim the cache',
-        sublabel: '+14 CP, +8 Fort, +8 Ryo (or -10 HP blast on slip)',
+        sublabel: '+14 CP, +8 Fort, +8 Ryo (or -10 to -16 HP blast on slip)',
         autoEligible: true,
         cpDelta: 14,
         fortDelta: 8,
@@ -168,7 +168,7 @@ export const WAR_CROSSROADS: readonly WarCrossroadDef[] = [
       {
         id: 'burn_scroll',
         label: 'Reduce the scroll to ash with a quick spark',
-        sublabel: '+3 Will, +3 Squad Trust, Will of Fire +1',
+        sublabel: '+3 Will, +3 Squad Trust, Village Creed +1',
         autoEligible: true,
         stats: { will: 3 },
         squadTrustDelta: 3,
@@ -197,7 +197,7 @@ export const WAR_CROSSROADS: readonly WarCrossroadDef[] = [
       {
         id: 'rig_warning_wires',
         label: 'Spare the bridge and lace only the approaches with tripwires',
-        sublabel: 'Fort +6, Bonds +3, Will of Fire +1',
+        sublabel: 'Fort +6, Bonds +3, Village Creed +1',
         autoEligible: true,
         fortDelta: 6,
         stats: { bonds: 3 },
@@ -356,8 +356,8 @@ export const WAR_CROSSROADS: readonly WarCrossroadDef[] = [
     options: [
       {
         id: 'accept_honor',
-        label: 'Leave your own mark in reply and steel your spirit',
-        sublabel: '+4 Will, +5 Ally / +4 Squad Trust, Exposure +5',
+        label: 'Meet your challenger at the dry riverbed in an open honor duel',
+        sublabel: 'Launches an honor duel! +4 Will, +5 Ally / +4 Squad Trust, Exposure +5',
         autoEligible: true,
         exposureDelta: 5,
         allyTrustDelta: 5,

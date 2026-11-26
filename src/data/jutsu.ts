@@ -13,6 +13,7 @@ import type {
   SelfStateId,
   SetupFlag,
   StatusId,
+  SummonClanId,
 } from '../sim/types';
 
 export type JutsuRank = 'D' | 'C' | 'B' | 'A' | 'S';
@@ -67,6 +68,7 @@ export interface JutsuExtraCosts {
   upkeepCp?: number;
   upkeepHp?: number;
   eyeStrain?: number;
+  blindsOneEye?: boolean;
   usesPerBattle?: number;
 }
 
@@ -118,6 +120,10 @@ export interface JutsuRequirements {
   clanId?: string;
   hidenId?: string;
   mangekyoArtId?: string;
+  requiresContract?: boolean;
+  summonClanId?: SummonClanId;
+  requiresTeacherOrFlag?: string;
+  requiresJutsuId?: string;
   requiresContractOrDiscipline?: boolean;
 }
 
@@ -344,6 +350,19 @@ export function getJutsuBasePower(jutsu: JutsuDefinition): number {
   return jutsu.effect.power ?? JUTSU_RANK_BASE_POWER[jutsu.rank];
 }
 
+function hasTeacherForJutsu(state: GameState, flagKey: string): boolean {
+  if (state.flags[flagKey] || state.flags.has_teacher) return true;
+  if (state.rank === 'academy') return true;
+  if (state.team?.active) {
+    const sensei = state.team.members.find((m) => m.role === 'sensei');
+    if (sensei) {
+      const npc = state.worldSim?.npcs.find((n) => n.identity.id === sensei.personId);
+      if (!npc || npc.identity.alive) return true;
+    }
+  }
+  return false;
+}
+
 export function meetsJutsuRequirements(state: GameState, req: JutsuRequirements): boolean {
   if (req.clanId && state.clanId !== req.clanId) {
     return false;
@@ -351,6 +370,12 @@ export function meetsJutsuRequirements(state: GameState, req: JutsuRequirements)
   if (req.hidenId) {
     const unlocked = state.clanHeritage?.unlockedHiden ?? [];
     if (!unlocked.includes(req.hidenId)) return false;
+  }
+  if (req.requiresContract && !state.summonContract) {
+    return false;
+  }
+  if (req.summonClanId && state.summonContract?.clanId !== req.summonClanId) {
+    return false;
   }
   if (req.mangekyoArtId) {
     if (!state.bloodline?.mangekyoAwakened) return false;
@@ -370,6 +395,13 @@ export function meetsJutsuRequirements(state: GameState, req: JutsuRequirements)
         return false;
       }
     }
+  }
+  if (req.requiresTeacherOrFlag && !hasTeacherForJutsu(state, req.requiresTeacherOrFlag)) {
+    return false;
+  }
+  if (req.requiresJutsuId) {
+    const prereq = JUTSU_MAP[req.requiresJutsuId];
+    if (!prereq || !meetsJutsuRequirements(state, prereq.requires)) return false;
   }
   if (req.requiresContractOrDiscipline) {
     if (state.summonContract) return true;
@@ -414,7 +446,12 @@ export function getKnownJutsu(state: GameState): JutsuDefinition[] {
         for (const jId of art.jutsuIds) {
           if (seen.has(jId)) continue;
           const def = JUTSU_MAP[jId];
-          if (def) {
+          if (
+            def &&
+            (!def.requires.summonClanId || state.summonContract?.clanId === def.requires.summonClanId) &&
+            (!def.requires.bloodlineId ||
+              (state.bloodline?.id === def.requires.bloodlineId && state.bloodline.stage !== 'latent'))
+          ) {
             seen.add(jId);
             list.push(def);
           }

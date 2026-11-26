@@ -1,6 +1,7 @@
 import { t } from '../../data/i18n';
 import { ELEMENT_NAMES } from '../../data/powers';
 import { getKageTitle } from '../../data/villages';
+import { formatEraRange } from '../../sim/history/chronicle';
 import type { LifeRecord } from '../../sim/types';
 
 export function formatShareText(rec: LifeRecord): string {
@@ -13,7 +14,7 @@ export function formatShareText(rec: LifeRecord): string {
 
   const parts = [
     `[NarutoSim Shinobi Record] ${rec.name}`,
-    `${rec.villageName} | ${rec.originName} | Lived ${rec.birthYear} to ${rec.deathYear} (Age ${rec.deathAge})`,
+    `${rec.villageName} | ${rec.originName} | Lived ${formatEraRange(rec.birthYear, rec.deathYear)} (Age ${rec.deathAge})`,
     `Peak Rank: ${rankLabel} | Bingo Tier: ${rec.threatTier}-Rank | Element: ${ELEMENT_NAMES[rec.element]}`,
     `Kekkei Genkai: ${rec.bloodlineName ?? 'None'} | Wars Survived: ${rec.warsSurvived}/${rec.warsFought}`,
     `World Fate: ${rec.crisisStatus} | Cause: ${rec.causeOfDeath}`,
@@ -146,7 +147,7 @@ export function renderShinobiCardCanvas(rec: LifeRecord): HTMLCanvasElement {
   ctx.fillStyle = '#b9af9c';
   ctx.font = '600 28px system-ui, sans-serif';
   ctx.fillText(
-    `${rec.villageName}  |  ${rec.birthYear} to ${rec.deathYear} (Age ${rec.deathAge})  |  ${rankLabel}`,
+    `${rec.villageName}  |  ${formatEraRange(rec.birthYear, rec.deathYear)} (Age ${rec.deathAge})  |  ${rankLabel}`,
     86,
     246,
     W - 172,

@@ -122,11 +122,10 @@ describe('Naruto Immersion Plan Verification (Fases 0-5)', () => {
     state.team = formGeninTeam(state, new SeededRng(62));
 
     const war = initWarState(state, new SeededRng(63), false, 'front');
-    expect(war.allyId).not.toBeNull();
-    const ally = war.enemies.find((e) => e.id === war.allyId);
-    expect(ally).toBeDefined();
-    expect(ally!.villageId).toBe('suna');
-    expect(ally!.intel).toBe(100);
+    // F2: Same-village comrades deploy in separate war.allies[], never inside war.enemies[]
+    expect(war.allies && war.allies.length).toBeGreaterThanOrEqual(1);
+    expect(war.allies!.some((a) => a.villageId === 'suna')).toBe(true);
+    expect(war.enemies.every((e) => e.villageId !== 'suna' || e.isExTeammateRogue)).toBe(true);
 
     // Expanded Fase 5 content pools & kanji maps
     expect(TEAM_EVENTS.length).toBeGreaterThanOrEqual(12);

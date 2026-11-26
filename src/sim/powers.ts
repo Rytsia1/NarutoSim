@@ -187,20 +187,25 @@ export function pickStartingDiscipline(
   const origin = ORIGIN_MAP[originId];
   if (!origin.isShinobiHouse || origin.familyDisciplines.length === 0) return null;
 
-  // Hyuga clan members naturally train Gentle Fist from childhood; non-Hyuga never roll it.
-  if (clanId === 'hyuga') {
-    const hyugaPool = ['gentle_fist', 'gentle_fist', 'sensory', 'strong_fist'];
-    const idx = Math.floor(hashRand(seed, 0, 'family_discipline') * hyugaPool.length);
-    const chosenId = hyugaPool[idx] ?? 'gentle_fist';
-    return {
-      id: chosenId,
-      level: 1,
-      xp: 0,
-      lastLevelAge: 0,
-      quality: 1,
-      isMain: true,
-      declinedUntilAge: 0,
-    };
+  // C8: Clan members draw starting family discipline from their clan's signature disciplines first
+  const clan = clanId ? CLAN_MAP[clanId] : null;
+  if (clan && clan.signatureDisciplines.length > 0) {
+    const clanPool = clan.signatureDisciplines.filter(
+      (id) => (id !== 'gentle_fist' || clanId === 'hyuga') && Boolean(DISCIPLINE_MAP[id]),
+    );
+    if (clanPool.length > 0) {
+      const idx = Math.floor(hashRand(seed, 0, 'family_discipline') * clanPool.length);
+      const chosenId = clanPool[idx] ?? clanPool[0];
+      return {
+        id: chosenId,
+        level: 1,
+        xp: 0,
+        lastLevelAge: 0,
+        quality: 1,
+        isMain: true,
+        declinedUntilAge: 0,
+      };
+    }
   }
 
   const allowedPool = origin.familyDisciplines.filter((id) => id !== 'gentle_fist');
@@ -350,8 +355,12 @@ export function tryBloodlineEvent(
   const r = hashRand(state.rng.seed, state.age, `bloodline_${b.stage}`);
 
   if (b.stage === 'latent' && state.age >= 6 && state.age <= 22 && state.age - b.lastEventAge >= 3) {
-    // 4-Layer Clan Heritage: awakening is NOT automatic at birth! Compatibility, trauma catalyst & training govern it.
+    // C1: Sharingan ONLY awakens through genuine trauma (parent death or traumaCatalyst >= 50)
     const ch = state.clanHeritage;
+    if (b.id === 'sharingan' && !parentDiedThisYear && (ch?.traumaCatalyst ?? 0) < 50 && !(state.age === 18 && state.flags.custom_run)) {
+      return null;
+    }
+    // 4-Layer Clan Heritage: awakening is NOT automatic at birth! Compatibility, trauma catalyst & training govern it.
     const compatFactor = ch ? clamp(ch.compatibility / 65, 0.55, 1.45) : 1.0;
     const catalystBoost = ch ? clamp(ch.traumaCatalyst / 220, 0, 0.25) : 0;
     const baseProb = parentDiedThisYear
@@ -421,9 +430,11 @@ export function tryBloodlineEvent(
     }
   }
 
-  // Eternal Mangekyo Sharingan Transplant Event (when Mangekyo Eye Strain >= 14)
+  // C2: Eternal Mangekyo Sharingan Transplant Event (Uchiha non-transplant only, Eye Strain >= 14)
   if (
     b.id === 'sharingan' &&
+    state.clanId === 'uchiha' &&
+    !b.transplanted &&
     b.mangekyoAwakened &&
     !b.eternalMangekyo &&
     (b.eyeStrain ?? 0) >= 14 &&
@@ -497,7 +508,7 @@ export function tryBloodlineEvent(
 }
 
 export function tryDisciplineEvent(state: GameState, rng: SeededRng): PendingDecision | null {
-  if (state.rank === 'civilian' && state.disciplines.length === 0) return null;
+  if (state.rank === 'civilian') return null;
 
   // 1. Check advancement for existing disciplines (with Pity Timer!)
   for (const prog of state.disciplines) {
@@ -579,7 +590,17 @@ export function tryDisciplineEvent(state: GameState, rng: SeededRng): PendingDec
       const candidates = DISCIPLINES.filter((def) => {
         if (owned.has(def.id)) return false;
         if (def.id === 'gentle_fist' && state.clanId !== 'hyuga') return false;
-        if (def.id === 'senjutsu' && state.age < 18) return false;
+        // C20: Sage Mode requires a Toad, Snake, or Slug summoning contract
+        if (
+          def.id === 'senjutsu' &&
+          (state.age < 18 ||
+            !state.summonContract ||
+            (state.summonContract.clanId !== 'toad' &&
+              state.summonContract.clanId !== 'snake' &&
+              state.summonContract.clanId !== 'slug'))
+        ) {
+          return false;
+        }
         if (def.id === 'space_time' && state.stats.intel < 50) return false;
         if (def.branch === 'taijutsu') return taiCount < 2;
         return ninGenCount < 3;

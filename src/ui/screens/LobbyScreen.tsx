@@ -3,6 +3,7 @@ import { ACHIEVEMENTS } from '../../data/achievements';
 import { getClansForVillage } from '../../data/clans';
 import { t } from '../../data/i18n';
 import { getKageTitle, VILLAGES, VILLAGE_MAP } from '../../data/villages';
+import { formatEraRange, formatEraYear } from '../../sim/history/chronicle';
 import type {
   CrisisId,
   CustomBuildConfig,
@@ -202,7 +203,7 @@ export function LobbyScreen({
                   <span className="status-tag">{t(`rank.${savedLife.rank}`)}</span>
                 </div>
                 <div className="continue-meta tabular">
-                  Age {savedLife.age} ({savedLife.birthYear + savedLife.age}) in{' '}
+                  Age {savedLife.age} ({formatEraYear(savedLife.birthYear + savedLife.age)}) in{' '}
                   {VILLAGE_MAP[savedLife.villageId]?.name ?? savedLife.villageId} | Wars Survived:{' '}
                   {savedLife.world.warsSurvived}
                 </div>
@@ -362,7 +363,7 @@ export function LobbyScreen({
                       </span>
                     </div>
                     <div className="history-sub tabular">
-                      {rec.villageName} | Lived to {rec.deathAge} ({rec.birthYear} to {rec.deathYear})
+                      {rec.villageName} | Lived to {rec.deathAge} ({formatEraRange(rec.birthYear, rec.deathYear)})
                     </div>
                     <div className="history-sub">
                       Threat Tier: {rec.threatTier}-Rank | Wars Survived: {rec.warsSurvived} | Cause:{' '}

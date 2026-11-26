@@ -18,6 +18,7 @@ import { kageTitle, VILLAGE_MAP } from '../../data/villages';
 import { getSenseiBiasLabel } from '../../sim/academy';
 import { getBranchLabel } from '../../sim/clan-heritage';
 import { canEnterRetirement } from '../../sim/epilogue';
+import { formatEraYear, formatRyo, formatRyoDelta } from '../../sim/history/chronicle';
 import { resolveFamilyMemberView, resolveSquadMemberView } from '../../sim/people';
 import { computeCombatProjection, getChakraCap, XP_NEED_FOR_NEXT } from '../../sim/powers';
 import { deriveRelArchetype } from '../../sim/relationships';
@@ -144,7 +145,7 @@ export function GameScreen({
           )}
           {state.phase === 'retirement' && <span className="status-tag">Retired</span>}
           <span className="history-sub tabular">
-            Age {state.age} ({state.birthYear + state.age}) | {village.name}
+            Age {state.age} ({formatEraYear(state.birthYear + state.age)}) | {village.name}
           </span>
           <span
             className={`status-tag ${state.world.tension >= 70 ? 'tension-high' : ''}`}
@@ -208,7 +209,7 @@ export function GameScreen({
               <article key={entry.id} className={`log-entry tone-${entry.tone}`}>
                 <div className="log-meta tabular">
                   <span>
-                    Age {entry.age} (Year {entry.year})
+                    Age {entry.age} ({formatEraYear(entry.year)})
                   </span>
                   {entry.tone !== 'normal' && <span>{entry.tone.toUpperCase()}</span>}
                 </div>
@@ -238,7 +239,9 @@ export function GameScreen({
                     ))}
                     {entry.deltas?.map((d, idx) => (
                       <span key={`${d.stat}_${idx}`} className={`chip ${d.delta > 0 ? 'pos' : 'neg'}`}>
-                        {d.label} {d.delta > 0 ? `+${d.delta}` : d.delta}
+                        {d.stat === 'ryo'
+                          ? formatRyoDelta(d.delta)
+                          : `${d.label} ${d.delta > 0 ? `+${d.delta}` : d.delta}`}
                       </span>
                     ))}
                   </div>
@@ -353,7 +356,7 @@ export function GameScreen({
                     <div className="bar-track">
                       <div className="bar-fill" style={{ width: `${state.stats.ryo}%` }} />
                     </div>
-                    <span>{state.stats.ryo}</span>
+                    <span>{formatRyo(state.stats.ryo)}</span>
                   </div>
                 </div>
 

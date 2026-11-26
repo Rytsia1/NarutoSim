@@ -14,7 +14,7 @@ import type {
 export const CHANNEL_LABELS: Record<DiscoveryChannel, string> = {
   hidden: 'UNDISCOVERED',
   rumor: 'RUMOR',
-  newspaper: 'VILLAGE GAZETTE',
+  newspaper: 'VILLAGE NOTICE BOARD',
   mission_report: 'MISSION INTEL',
   npc_talk: 'NPC CONVERSATION',
   anbu_dossier: 'ANBU CLASSIFIED',
@@ -252,8 +252,17 @@ export function tickLivingTimeline(
         immediateChannel: 'hidden',
       });
     } else {
-      // Famous Jonin or Clan Milestone
-      const notableNpc = worldSim.npcs.find((n) => n.identity.alive && n.identity.rank === 'jonin');
+      // Famous Jonin or Clan Milestone (pick random non-Kage Jonin from vA so it isn't always the Hokage!)
+      const villageJonins = worldSim.npcs.filter(
+        (n) => n.identity.alive && n.identity.rank === 'jonin' && n.identity.specialStatus !== 'kage' && n.identity.villageId === vA.id,
+      );
+      const anyJonins =
+        villageJonins.length > 0
+          ? villageJonins
+          : worldSim.npcs.filter(
+              (n) => n.identity.alive && n.identity.rank === 'jonin' && n.identity.specialStatus !== 'kage',
+            );
+      const notableNpc = anyJonins.length > 0 ? rng.pick(anyJonins) : undefined;
       const subjectName = notableNpc ? notableNpc.identity.name : `a veteran ${vA.name} Jonin`;
       recordTimelineEvent(state, worldSim, {
         category: 'npc_fate',
