@@ -1,17 +1,23 @@
 import { useState } from 'react';
 import { CLAN_MAP } from '../../data/clans';
+import { GOVERNANCE_ACTIONS, type GovernanceActionId } from '../../data/events-politics';
 import { t } from '../../data/i18n';
 import { GREAT_VILLAGES, VILLAGE_MAP } from '../../data/villages';
 import { getPrimaryPersonalityTags, getScheduleLabel } from '../../sim/npc-sim';
+import { canAccessGovernance, canRunGovernanceAction } from '../../sim/politics';
+import { deriveRelArchetype, getRelVector } from '../../sim/relationships';
+import { CHANNEL_LABELS } from '../../sim/timeline';
 import type { GameState, VillageId, WorldNpc } from '../../sim/types';
 import { getDiplomacyEdge } from '../../sim/world-sim';
 import { NpcDossierModal } from './NpcDossierModal';
 
 interface WorldSimulationPanelProps {
   state: GameState;
+  onInvestigateTimeline?: (eventId: string) => void;
+  onGovernanceAction?: (actionId: GovernanceActionId) => void;
 }
 
-type SubView = 'world' | 'village' | 'npcs';
+type SubView = 'timeline' | 'village' | 'world' | 'npcs';
 type NpcFilter = 'my_village' | 'leaders' | 'all_living' | 'missing_nin' | 'fallen';
 
 function diplomacyClass(status: string): string {
@@ -20,8 +26,12 @@ function diplomacyClass(status: string): string {
   return '';
 }
 
-export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
-  const [subView, setSubView] = useState<SubView>('village');
+export function WorldSimulationPanel({
+  state,
+  onInvestigateTimeline,
+  onGovernanceAction,
+}: WorldSimulationPanelProps) {
+  const [subView, setSubView] = useState<SubView>('timeline');
   const [selectedVillageId, setSelectedVillageId] = useState<VillageId>(state.villageId);
   const [npcFilter, setNpcFilter] = useState<NpcFilter>('my_village');
   const [selectedNpcId, setSelectedNpcId] = useState<string | null>(null);
@@ -38,6 +48,7 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
 
   const inspectedVillage = worldSim.villages[selectedVillageId] ?? worldSim.villages[state.villageId];
   const inspectedVillageDef = VILLAGE_MAP[inspectedVillage.villageId];
+  const inspectedPolitics = inspectedVillage.politics;
   const kageNpc =
     inspectedVillage.kageNpcId && inspectedVillage.kageNpcId !== 'player'
       ? worldSim.npcs.find((n) => n.identity.id === inspectedVillage.kageNpcId) ?? null
@@ -47,12 +58,18 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
     ? worldSim.npcs.find((n) => n.identity.id === selectedNpcId) ?? null
     : null;
 
+  const knownTimeline = [...(worldSim.timeline ?? [])]
+    .filter((ev) => ev.knownByPlayer)
+    .reverse();
+  const hiddenCount = (worldSim.timeline ?? []).filter((ev) => !ev.knownByPlayer).length;
+
   const filteredNpcs = worldSim.npcs
     .filter((n) => {
       if (npcFilter === 'fallen') return !n.identity.alive;
       if (!n.identity.alive) return false;
       if (npcFilter === 'my_village') return n.identity.villageId === state.villageId;
-      if (npcFilter === 'leaders') return n.identity.specialStatus === 'kage' || n.identity.roleTitle.includes('Head') || n.identity.specialStatus === 'anbu';
+      if (npcFilter === 'leaders')
+        return n.identity.specialStatus === 'kage' || n.identity.roleTitle.includes('Head') || n.identity.specialStatus === 'anbu';
       if (npcFilter === 'missing_nin') return n.identity.specialStatus === 'missing_nin';
       return true;
     })
@@ -68,6 +85,8 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
     ...(GREAT_VILLAGES.some((v) => v.id === state.villageId) ? [] : [state.villageId]),
   ];
 
+  const hasGovAccess = canAccessGovernance(state);
+
   return (
     <section className="panel">
       <div className="disc-head" style={{ marginBottom: 8 }}>
@@ -79,7 +98,16 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
         </span>
       </div>
 
-      <div className="tab-strip" style={{ marginBottom: 12 }} role="tablist" aria-label="World Layers">
+      <div className="tab-strip tab-strip-4" style={{ marginBottom: 12 }} role="tablist" aria-label="World Layers">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={subView === 'timeline'}
+          className="tab-btn"
+          onClick={() => setSubView('timeline')}
+        >
+          Timeline
+        </button>
         <button
           type="button"
           role="tab"
@@ -87,7 +115,7 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
           className="tab-btn"
           onClick={() => setSubView('village')}
         >
-          Village &amp; Orgs
+          Politics
         </button>
         <button
           type="button"
@@ -96,7 +124,7 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
           className="tab-btn"
           onClick={() => setSubView('world')}
         >
-          World &amp; Diplomacy
+          Diplomacy
         </button>
         <button
           type="button"
@@ -109,7 +137,75 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
         </button>
       </div>
 
-      {/* LAYER 2: VILLAGE & ORGANIZATIONS */}
+      {/* PILLAR 1: LIVING TIMELINE + EPISTEMIC FOG-OF-WAR */}
+      {subView === 'timeline' && (
+        <div className="stat-list">
+          <div className="disc-item">
+            <div className="disc-head">
+              <span>Living Timeline (Player Knowledge)</span>
+              <span className="disc-sub tabular">
+                {knownTimeline.length} Known | {hiddenCount} Undiscovered
+              </span>
+            </div>
+            <div className="disc-sub" style={{ marginTop: 4 }}>
+              World events unfold independently. You only see what reaches you via Gazette, Rumors, Mission Intel, Trusted NPCs, or ANBU Dossiers.
+            </div>
+          </div>
+
+          <div className="stat-list npc-list-scroll">
+            {knownTimeline.map((ev) => {
+              const title = ev.playerKnowsTruth ? ev.truthTitle : ev.rumorTitle;
+              const summary = ev.playerKnowsTruth ? ev.truthSummary : ev.rumorSummary;
+              const isRumor = !ev.playerKnowsTruth;
+              const canInvestigate =
+                isRumor &&
+                state.phase === 'life' &&
+                !state.pending &&
+                Boolean(onInvestigateTimeline) &&
+                (state.stats.ryo >= 4 || state.specialStatus === 'anbu' || state.specialStatus === 'kage');
+
+              return (
+                <article
+                  key={ev.id}
+                  className="disc-item"
+                  style={isRumor ? { borderColor: 'var(--accent-gold)' } : undefined}
+                >
+                  <div className="disc-head">
+                    <span className="tabular">
+                      Year {ev.eraYear} ({ev.year}): {title}
+                    </span>
+                    <span className={`chip ${isRumor ? '' : ev.discoveryChannel === 'anbu_dossier' ? 'neg' : 'pos'}`}>
+                      {CHANNEL_LABELS[ev.discoveryChannel]}
+                    </span>
+                  </div>
+                  <div className="disc-sub" style={{ marginTop: 4 }}>
+                    {summary}
+                  </div>
+                  <div className="disc-head" style={{ marginTop: 6 }}>
+                    <span className="disc-sub">
+                      Source: {ev.sourceLabel ?? CHANNEL_LABELS[ev.discoveryChannel]}
+                      {isRumor ? ' (Unverified: hidden truth may lie deeper)' : ''}
+                    </span>
+                    {isRumor && onInvestigateTimeline && (
+                      <button
+                        type="button"
+                        className="btn btn-sm btn-ghost"
+                        disabled={!canInvestigate}
+                        onClick={() => onInvestigateTimeline(ev.id)}
+                        title="Spend 4 Ryo (or ANBU/Kage clearance) to uncover the truth behind this rumor"
+                      >
+                        Investigate {state.specialStatus === 'anbu' || state.specialStatus === 'kage' ? '(ANBU)' : '(-4 Ryo)'}
+                      </button>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* PILLAR 6 & LAYER 2: VILLAGE ORGANIZATIONS & GOVERNANCE POLITICS */}
       {subView === 'village' && (
         <div className="stat-list">
           <div className="chip-row" style={{ marginBottom: 4 }}>
@@ -134,9 +230,6 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
             <div className="disc-sub" style={{ marginTop: 4 }}>
               {inspectedVillageDef.culture}
             </div>
-            <div className="disc-sub" style={{ marginTop: 4 }}>
-              <strong>Interests:</strong> {inspectedVillageDef.politicalInterests}
-            </div>
             <div className="disc-sub" style={{ marginTop: 6 }}>
               <strong>{inspectedVillageDef.kageTitle}:</strong>{' '}
               {inspectedVillage.kageNpcId === 'player' ? (
@@ -157,7 +250,7 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
 
           <div className="disc-item tabular">
             <div className="disc-head">
-              <span>Village Institutions</span>
+              <span>Institutions &amp; Governance</span>
               <span className="disc-sub">Daimyo: {inspectedVillage.daimyo.stance}</span>
             </div>
             <div className="stat-list" style={{ marginTop: 6 }}>
@@ -169,19 +262,21 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
                 <span>{inspectedVillage.daimyo.funding}</span>
               </div>
               <div className="stat-row">
-                <span>Military</span>
-                <div className="bar-track">
-                  <div className="bar-fill chakra" style={{ width: `${inspectedVillage.military}%` }} />
-                </div>
-                <span>{inspectedVillage.military}</span>
-              </div>
-              <div className="stat-row">
                 <span>Stability</span>
                 <div className="bar-track">
                   <div className="bar-fill health" style={{ width: `${inspectedVillage.stability}%` }} />
                 </div>
                 <span>{inspectedVillage.stability}</span>
               </div>
+              {inspectedPolitics && (
+                <div className="stat-row">
+                  <span>Corruption</span>
+                  <div className="bar-track">
+                    <div className="bar-fill tension" style={{ width: `${inspectedPolitics.corruption}%` }} />
+                  </div>
+                  <span>{inspectedPolitics.corruption}</span>
+                </div>
+              )}
               <div className="stat-row">
                 <span>Academy</span>
                 <div className="bar-track">
@@ -199,16 +294,27 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
               <div className="stat-row">
                 <span>ANBU</span>
                 <div className="bar-track">
-                  <div className="bar-fill" style={{ width: `${inspectedVillage.anbu.strength}%` }} />
+                  <div className="bar-fill chakra" style={{ width: `${inspectedVillage.anbu.strength}%` }} />
                 </div>
                 <span>{inspectedVillage.anbu.strength}</span>
               </div>
             </div>
-            <div className="disc-sub" style={{ marginTop: 6 }}>
-              <strong>Academy:</strong> {inspectedVillageDef.institutions.academyLabel}
-              {inspectedVillage.academy.bloodyMistActive ? ' (Bloody Mist Active)' : ''}
-            </div>
-            <div className="disc-sub" style={{ marginTop: 3 }}>
+
+            {inspectedPolitics && (
+              <>
+                <div className="chip-row tabular" style={{ marginTop: 8 }}>
+                  <span className="chip">Hawks {inspectedPolitics.factions.hawks}</span>
+                  <span className="chip pos">Doves {inspectedPolitics.factions.doves}</span>
+                  <span className="chip">Elders {inspectedPolitics.factions.elders}</span>
+                  <span className="chip">Clans {inspectedPolitics.factions.clans}</span>
+                </div>
+                <div className="disc-sub" style={{ marginTop: 6 }}>
+                  <strong>Active Directives:</strong> {inspectedPolitics.activeDirectives.join(' | ')}
+                </div>
+              </>
+            )}
+
+            <div className="disc-sub" style={{ marginTop: 4 }}>
               <strong>{inspectedVillage.shadowOrg.name}:</strong> Influence {inspectedVillage.shadowOrg.influence} | Agenda:{' '}
               {inspectedVillage.shadowOrg.agenda.replace('_', ' ')}
             </div>
@@ -218,6 +324,35 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
               </div>
             )}
           </div>
+
+          {/* Interactive Council Governance Actions for Home Village (Jonin / ANBU / Clan Heir / Kage) */}
+          {selectedVillageId === state.villageId && hasGovAccess && onGovernanceAction && (
+            <div className="disc-item" style={{ borderColor: 'var(--accent-gold)' }}>
+              <div className="disc-head">
+                <span>Village Governance Actions</span>
+                <span className="disc-sub">3-year cooldown</span>
+              </div>
+              <div className="stat-list" style={{ marginTop: 6 }}>
+                {GOVERNANCE_ACTIONS.map((act) => {
+                  const enabled = canRunGovernanceAction(state, act.id);
+                  return (
+                    <button
+                      key={act.id}
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      style={{ textAlign: 'left', justifyContent: 'space-between' }}
+                      disabled={!enabled}
+                      onClick={() => onGovernanceAction(act.id)}
+                      title={act.desc}
+                    >
+                      <span>{act.label}</span>
+                      <span className="tabular">-{act.ryoCost} Ryo</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           <div className="disc-item">
             <div className="disc-head">
@@ -264,7 +399,7 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
         </div>
       )}
 
-      {/* LAYER 1: WORLD LAYER */}
+      {/* LAYER 1: WORLD LAYER & DIPLOMACY */}
       {subView === 'world' && (
         <div className="stat-list">
           {worldSim.activeDisasters.length > 0 && (
@@ -319,7 +454,7 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
 
           <div className="disc-item">
             <div className="disc-head">
-              <span>World History Chronicle</span>
+              <span>World History Archive</span>
             </div>
             <div className="stat-list npc-memory-list" style={{ marginTop: 6 }}>
               {[...worldSim.history]
@@ -368,7 +503,8 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
                 const vName = VILLAGE_MAP[identity.villageId].name;
                 const cName = identity.clanId ? CLAN_MAP[identity.clanId]?.name : null;
                 const tags = getPrimaryPersonalityTags(personality);
-                const knowsPlayer = Boolean(relationships.player);
+                const pRel = relationships.player;
+                const arch = pRel ? deriveRelArchetype(getRelVector(pRel)) : null;
                 return (
                   <button
                     key={identity.id}
@@ -379,7 +515,7 @@ export function WorldSimulationPanel({ state }: WorldSimulationPanelProps) {
                     <div className="disc-head">
                       <span>
                         {identity.name}
-                        {knowsPlayer ? ' *' : ''}
+                        {arch ? ` (${arch})` : ''}
                       </span>
                       <span
                         className={`status-tag ${

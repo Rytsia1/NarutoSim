@@ -3,6 +3,7 @@ import { NINDO_MAP } from '../data/nindo';
 import { DISCIPLINE_MAP } from '../data/powers';
 import { GREAT_VILLAGES, VILLAGE_MAP } from '../data/villages';
 import { clamp } from './powers';
+import { applyRel6Delta, buildVectorFromLegacy, createRelVector6 } from './relationships';
 import type { SeededRng } from './rng';
 import type {
   ChakraElement,
@@ -130,23 +131,51 @@ export function setBidirectionalRelation(
   grudgeDelta = 0,
 ): void {
   const existingA = a.relationships[b.identity.id];
+  const nextAffA = clamp((existingA?.affinity ?? 0) + affinityDelta, -100, 100);
+  const nextTrustA = clamp((existingA?.trust ?? 40) + trustDelta, 0, 100);
+  const nextGrudgeA = clamp((existingA?.grudge ?? 0) + grudgeDelta, 0, 100);
+  const vecA = existingA?.vector
+    ? applyRel6Delta(existingA.vector, {
+        trust: trustDelta,
+        affection: Math.round(affinityDelta * 0.5),
+        respect: Math.round(trustDelta * 0.35),
+        resentment: grudgeDelta,
+        rivalry: kindForA === 'rival' ? 20 : 0,
+      })
+    : buildVectorFromLegacy({ kind: kindForA, affinity: nextAffA, trust: nextTrustA, grudge: nextGrudgeA });
+
   a.relationships[b.identity.id] = {
     targetId: b.identity.id,
     targetName: b.identity.name,
     kind: kindForA,
-    affinity: clamp((existingA?.affinity ?? 0) + affinityDelta, -100, 100),
-    trust: clamp((existingA?.trust ?? 40) + trustDelta, 0, 100),
-    grudge: clamp((existingA?.grudge ?? 0) + grudgeDelta, 0, 100),
+    affinity: nextAffA,
+    trust: nextTrustA,
+    grudge: nextGrudgeA,
+    vector: vecA,
   };
 
   const existingB = b.relationships[a.identity.id];
+  const nextAffB = clamp((existingB?.affinity ?? 0) + affinityDelta, -100, 100);
+  const nextTrustB = clamp((existingB?.trust ?? 40) + trustDelta, 0, 100);
+  const nextGrudgeB = clamp((existingB?.grudge ?? 0) + grudgeDelta, 0, 100);
+  const vecB = existingB?.vector
+    ? applyRel6Delta(existingB.vector, {
+        trust: trustDelta,
+        affection: Math.round(affinityDelta * 0.5),
+        respect: Math.round(trustDelta * 0.35),
+        resentment: grudgeDelta,
+        rivalry: kindForB === 'rival' ? 20 : 0,
+      })
+    : buildVectorFromLegacy({ kind: kindForB, affinity: nextAffB, trust: nextTrustB, grudge: nextGrudgeB });
+
   b.relationships[a.identity.id] = {
     targetId: a.identity.id,
     targetName: a.identity.name,
     kind: kindForB,
-    affinity: clamp((existingB?.affinity ?? 0) + affinityDelta, -100, 100),
-    trust: clamp((existingB?.trust ?? 40) + trustDelta, 0, 100),
-    grudge: clamp((existingB?.grudge ?? 0) + grudgeDelta, 0, 100),
+    affinity: nextAffB,
+    trust: nextTrustB,
+    grudge: nextGrudgeB,
+    vector: vecB,
   };
 }
 
@@ -159,13 +188,42 @@ export function setPlayerRelation(
   grudgeDelta = 0,
 ): void {
   const existing = npc.relationships.player;
+  const nextAff = clamp((existing?.affinity ?? 0) + affinityDelta, -100, 100);
+  const nextTrust = clamp((existing?.trust ?? 45) + trustDelta, 0, 100);
+  const nextGrudge = clamp((existing?.grudge ?? 0) + grudgeDelta, 0, 100);
+  const vec = existing?.vector
+    ? applyRel6Delta(existing.vector, {
+        trust: trustDelta,
+        affection: Math.round(affinityDelta * 0.5),
+        respect: Math.round(trustDelta * 0.35),
+        resentment: grudgeDelta,
+        rivalry: kind === 'rival' ? 18 : 0,
+      })
+    : buildVectorFromLegacy({ kind, affinity: nextAff, trust: nextTrust, grudge: nextGrudge });
+  const recip = existing?.reciprocal
+    ? applyRel6Delta(existing.reciprocal, {
+        trust: Math.round(trustDelta * 0.7),
+        affection: Math.round(affinityDelta * 0.4),
+        resentment: Math.round(grudgeDelta * 0.5),
+      })
+    : createRelVector6({
+        trust: nextTrust,
+        affection: clamp(Math.round((nextAff + 100) / 2), 0, 100),
+        respect: vec.respect,
+        fear: 8,
+        rivalry: kind === 'rival' ? 58 : 15,
+        resentment: Math.round(nextGrudge * 0.6),
+      });
+
   npc.relationships.player = {
     targetId: 'player',
     targetName: playerName,
     kind,
-    affinity: clamp((existing?.affinity ?? 0) + affinityDelta, -100, 100),
-    trust: clamp((existing?.trust ?? 45) + trustDelta, 0, 100),
-    grudge: clamp((existing?.grudge ?? 0) + grudgeDelta, 0, 100),
+    affinity: nextAff,
+    trust: nextTrust,
+    grudge: nextGrudge,
+    vector: vec,
+    reciprocal: recip,
   };
 }
 

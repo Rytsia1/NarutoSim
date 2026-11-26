@@ -1,7 +1,8 @@
 import { CLAN_MAP } from '../data/clans';
 import { ORIGIN_MAP } from '../data/origins';
 import { BLOODLINE_MAP, DISCIPLINE_MAP } from '../data/powers';
-import { clampStats, getChakraCap } from './powers_bridge';
+import { clampStats } from './history/chronicle';
+import { getChakraCap } from './powers';
 import type { CustomBuildConfig, GameState, StatKey } from './types';
 
 export const CUSTOM_BUDGET = 12;

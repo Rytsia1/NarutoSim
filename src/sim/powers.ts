@@ -243,9 +243,17 @@ export function tryBloodlineEvent(
 
   const r = hashRand(state.rng.seed, state.age, `bloodline_${b.stage}`);
 
-  if (b.stage === 'latent' && state.age >= 6 && state.age <= 18 && state.age - b.lastEventAge >= 3) {
-    const prob = parentDiedThisYear ? 0.45 : state.age === 18 && state.flags.custom_run ? 1.0 : 0.16;
-    if (r < prob) {
+  if (b.stage === 'latent' && state.age >= 6 && state.age <= 22 && state.age - b.lastEventAge >= 3) {
+    // 4-Layer Clan Heritage: awakening is NOT automatic at birth! Compatibility, trauma catalyst & training govern it.
+    const ch = state.clanHeritage;
+    const compatFactor = ch ? clamp(ch.compatibility / 65, 0.55, 1.45) : 1.0;
+    const catalystBoost = ch ? clamp(ch.traumaCatalyst / 220, 0, 0.25) : 0;
+    const baseProb = parentDiedThisYear
+      ? 0.45
+      : state.age === 18 && state.flags.custom_run
+        ? 1.0
+        : clamp(0.14 * compatFactor + catalystBoost, 0.06, 0.42);
+    if (r < baseProb) {
       return {
         id: `bl_awaken_${state.age}`,
         kind: 'bloodline_event',

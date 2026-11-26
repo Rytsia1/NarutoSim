@@ -6,6 +6,13 @@ import { DANGEROUS_MISSIONS, FLAVOR_LINES, GROWTH_EVENTS, LIFE_EVENTS } from '..
 import { CRISIS_WHISPERS, SENSEI_ARCHETYPES, TEAMMATE_ARCHETYPES, TEAM_EVENTS } from '../src/data/events-team';
 import { WAR_CROSSROADS } from '../src/data/events-war';
 import { EMERGENT_TEMPLATES, VILLAGE_CRISIS_COPY } from '../src/data/events-world';
+import { GOVERNANCE_ACTIONS, POLITICAL_SCENARIOS } from '../src/data/events-politics';
+import {
+  MISSION_COMPLICATIONS,
+  MISSION_LOCATIONS,
+  MISSION_OBJECTIVES,
+  MISSION_THREATS,
+} from '../src/data/mission-templates';
 import { EN_DICT } from '../src/data/i18n';
 import { ORIGINS } from '../src/data/origins';
 import { BLOODLINES, DISCIPLINES } from '../src/data/powers';
@@ -26,6 +33,10 @@ describe('Content pack data integrity', () => {
     assertUniqueIds('VILLAGES', VILLAGES);
     assertUniqueIds('CLANS', CLANS);
     assertUniqueIds('EMERGENT_TEMPLATES', EMERGENT_TEMPLATES);
+    assertUniqueIds('POLITICAL_SCENARIOS', POLITICAL_SCENARIOS);
+    assertUniqueIds('GOVERNANCE_ACTIONS', GOVERNANCE_ACTIONS);
+    assertUniqueIds('MISSION_OBJECTIVES', MISSION_OBJECTIVES);
+    assertUniqueIds('MISSION_COMPLICATIONS', MISSION_COMPLICATIONS);
     assertUniqueIds('DISCIPLINES', DISCIPLINES);
     assertUniqueIds('BLOODLINES', BLOODLINES);
     assertUniqueIds('LIFE_EVENTS', LIFE_EVENTS);
@@ -45,7 +56,19 @@ describe('Content pack data integrity', () => {
   it('contains no em-dash characters in UI dictionary or event prose', () => {
     const allStrings: string[] = [
       ...Object.values(EN_DICT),
-      ...CLANS.flatMap((c) => [c.name, c.ethos, c.historyNote, c.yearlyBonus.label]),
+      ...CLANS.flatMap((c) => [
+        c.name,
+        c.ethos,
+        c.historyNote,
+        c.yearlyBonus.label,
+        ...c.hidenArts.flatMap((h) => [h.name, h.desc]),
+      ]),
+      ...POLITICAL_SCENARIOS.flatMap((p) => [p.title, p.summary]),
+      ...GOVERNANCE_ACTIONS.flatMap((g) => [g.label, g.desc]),
+      ...MISSION_OBJECTIVES.flatMap((m) => [m.title, m.objective, m.client, m.constraint]),
+      ...MISSION_COMPLICATIONS.flatMap((c) => [c.title, c.detail]),
+      ...MISSION_LOCATIONS,
+      ...MISSION_THREATS,
       ...VILLAGES.flatMap((v) => [
         v.name,
         v.flavor,

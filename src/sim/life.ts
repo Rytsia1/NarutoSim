@@ -11,7 +11,6 @@ import {
 } from '../data/events-life';
 import { CRISIS_WHISPERS, TEAM_EVENTS } from '../data/events-team';
 import { rewriteOrphanText } from '../data/i18n';
-import { pickPlayerJutsu } from '../data/jutsu';
 import { NINDO_MAP, NINDOS } from '../data/nindo';
 import { ORIGINS, ORIGIN_MAP } from '../data/origins';
 import { SUMMON_CLANS, SUMMON_CLAN_MAP } from '../data/summons';
@@ -29,7 +28,6 @@ import {
   clamp,
   computeCombatProjection,
   ensureAcademyElementDiscipline,
-  getChakraCap,
   hasActiveTeacher,
   pickStartingDiscipline,
   rollBirthBloodline,
@@ -37,6 +35,7 @@ import {
   tryDisciplineEvent,
 } from './powers';
 import {
+  advanceChuninTournamentStage,
   buildAcademyChoiceDecision,
   buildChuninExamStage,
   buildGraduationExamDecision,
@@ -45,6 +44,8 @@ import {
   canTakeGraduationExam,
   canTakeJoninEvaluation,
   evaluateTeammatesChuninPass,
+  finalizeChuninTournament,
+  initChuninTournament,
   promoteRank,
 } from './ranks';
 import { SeededRng } from './rng';
@@ -63,15 +64,12 @@ import type {
   FocusId,
   GameState,
   LeaningKey,
-  LogEntry,
   NindoId,
   OdActionId,
   PendingDecision,
   ScenarioConfig,
-  ShinobiMemory,
   StatDeltaChip,
   StatKey,
-  Stats,
   SummonClanId,
 } from './types';
 import {
@@ -83,24 +81,44 @@ import {
 } from './world';
 import { handleWarDecision, initWarState, queueWarStart } from './war';
 import { applyCustomBuild } from './custom';
+import {
+  initAcademyState,
+  pickAcademyEventDecision,
+  tickAcademyYear,
+} from './academy';
+import {
+  bumpClanTraumaCatalyst,
+  initClanHeritage,
+  pickClanPoliticsDecision,
+} from './clan-heritage';
+import {
+  clampStats,
+  diffStats,
+  pushLog,
+  recordMemory,
+  snapshotStats,
+} from './history/chronicle';
+import {
+  defaultDecisionRouter,
+  defaultDomainBus,
+} from './kernel';
+import { ensureKernelBootstrapped } from './kernel/bootstrap';
+import {
+  buildProceduralMissionStageDecision,
+  generateMissionContract,
+  tickMissionConsequences,
+} from './missions';
 import { syncTeamMembersToWorldNpcs } from './npc-sim';
+import { pickPoliticsDecision } from './politics';
 import {
   applyPlayerActionToWorldSim,
   getVillageInstitutionalModifiers,
   initWorldSim,
   pickEmergentWorldDecision,
-  resolveEmergentWorldDecision,
   tickAutonomousWorldYear,
 } from './world-sim';
 
-const STAT_LABELS: Record<StatKey, string> = {
-  chakra: 'Chakra',
-  intel: 'Intel',
-  will: 'Will',
-  bonds: 'Bonds',
-  health: 'Health',
-  ryo: 'Ryo',
-};
+export { clampStats, diffStats, pushLog, recordMemory, snapshotStats };
 
 const LEANING_LINES: Record<LeaningKey, [string, string]> = {
   vengeance: [
@@ -124,70 +142,6 @@ const LEANING_LINES: Record<LeaningKey, [string, string]> = {
     'Sovereign ambition drives every move you make across the shinobi board.',
   ],
 };
-
-let logCounter = 0;
-
-export function pushLog(
-  state: GameState,
-  tone: LogEntry['tone'],
-  text: string,
-  opts?: { title?: string; deltas?: StatDeltaChip[]; checks?: CheckResultChip[] },
-): LogEntry {
-  const isOrphan = ORIGIN_MAP[state.originId].isOrphan;
-  const entry: LogEntry = {
-    id: `log_${state.rng.seed}_${state.age}_${++logCounter}`,
-    age: state.age,
-    year: state.birthYear + state.age,
-    tone,
-    title: opts?.title,
-    text: rewriteOrphanText(text, isOrphan),
-    deltas: opts?.deltas && opts.deltas.length > 0 ? opts.deltas : undefined,
-    checks: opts?.checks && opts.checks.length > 0 ? opts.checks : undefined,
-  };
-  state.logs.push(entry);
-  if (state.logs.length > 260) {
-    state.logs.splice(0, state.logs.length - 260);
-  }
-  return entry;
-}
-
-export function snapshotStats(state: GameState): Stats {
-  return { ...state.stats };
-}
-
-export function clampStats(state: GameState): void {
-  const cap = getChakraCap(state);
-  state.stats.chakra = clamp(Math.round(state.stats.chakra), 0, cap);
-  state.stats.intel = clamp(Math.round(state.stats.intel), 0, 100);
-  state.stats.will = clamp(Math.round(state.stats.will), 0, 100);
-  state.stats.bonds = clamp(Math.round(state.stats.bonds), 0, 100);
-  state.stats.health = clamp(Math.round(state.stats.health), 0, 100);
-  state.stats.ryo = clamp(Math.round(state.stats.ryo), 0, 100);
-}
-
-export function diffStats(before: Stats, after: Stats): StatDeltaChip[] {
-  const keys: StatKey[] = ['chakra', 'intel', 'will', 'bonds', 'health', 'ryo'];
-  const chips: StatDeltaChip[] = [];
-  for (const k of keys) {
-    const delta = after[k] - before[k];
-    if (delta !== 0) {
-      chips.push({ stat: k, label: STAT_LABELS[k], delta });
-    }
-  }
-  return chips;
-}
-
-export function recordMemory(
-  state: GameState,
-  tag: ShinobiMemory['tag'],
-  text: string,
-): void {
-  if (!state.memories) state.memories = [];
-  state.memories.push({ age: state.age, tag, text });
-  if (state.memories.length > 12) {
-    state.memories.splice(0, state.memories.length - 12);
-  }
-}
 
 export function buildNindoChoiceDecision(state: GameState): PendingDecision {
   const leader = kageTitle(state);
@@ -590,7 +544,9 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
     applyCustomBuild(state, customCfg);
   }
 
-  // Initialize the 3-Layer Autonomous World Simulation (World, Villages/Orgs, Living NPCs)
+  // Initialize 4-Layer Clan Heritage & the 3-Layer Autonomous World Simulation
+  state.clanHeritage = initClanHeritage(state, rng);
+  state.missionConsequences = [];
   state.worldSim = initWorldSim(state, rng);
 
   // Save RNG snapshot AFTER all birth & world-seeding rolls so Year 1 never replays birth RNG draws
@@ -845,6 +801,7 @@ function tickFamilyYear(state: GameState, rng: SeededRng): { parentDied: boolean
         state.stats.bonds -= 5;
         state.stats.will -= 2;
         addLeaning(state, 'vengeance', 1);
+        bumpClanTraumaCatalyst(state, 28);
         pushLog(
           state,
           'danger',
@@ -1175,6 +1132,16 @@ export function advanceYear(state: GameState): void {
     pushLog(state, d.tone, d.text, { title: d.title });
   }
 
+  // Academy Yearly Simulator & Persistent Mission Fallout ticks
+  if (state.rank === 'academy') {
+    if (!state.academy) state.academy = initAcademyState(state, rng);
+    tickAcademyYear(state, rng);
+  }
+  const falloutLogs = tickMissionConsequences(state, rng);
+  for (const fLog of falloutLogs) {
+    pushLog(state, 'danger', fLog, { title: 'Mission Consequence' });
+  }
+
   // Check natural mortality before events
   if (state.stats.health <= 0 || state.age >= 104 || rng.chance(yearlyMortalityChance(state))) {
     killCharacter(state, causeOfNaturalDeath(state, rng));
@@ -1186,10 +1153,11 @@ export function advanceYear(state: GameState): void {
   if (state.age === 6 && ORIGIN_MAP[state.originId].isShinobiHouse && state.rank === 'civilian') {
     promoteRank(state, 'academy');
     ensureAcademyElementDiscipline(state);
+    state.academy = initAcademyState(state, rng);
     pushLog(
       state,
       'milestone',
-      `At age 6, your household sends you through the gates of the ${VILLAGE_MAP[state.villageId].name} Shinobi Academy.`,
+      `At age 6, your household sends you through the gates of the ${VILLAGE_MAP[state.villageId].institutions.academyLabel} under Instructor ${state.academy.senseiName}.`,
       { title: 'Entered the Shinobi Academy' },
     );
   }
@@ -1271,9 +1239,10 @@ export function advanceYear(state: GameState): void {
     nextDecision = buildGraduationExamDecision(state);
   }
 
-  // Priority 6: Chunin Exam (Genin -> Chunin & Team Disbandment trigger!)
+  // Priority 6: Chunin Exam (12-16 participant tournament + 6 Stages!)
   if (!nextDecision && canTakeChuninExam(state) && rng.chance(state.chuninAttempts === 0 ? 0.8 : 0.65)) {
     state.chuninAttempts += 1;
+    initChuninTournament(state, rng);
     nextDecision = buildChuninExamStage(state, 1);
   }
 
@@ -1302,6 +1271,16 @@ export function advanceYear(state: GameState): void {
   // Priority 9: Discipline Advancement / New Discipline
   if (!nextDecision) {
     nextDecision = tryDisciplineEvent(state, rng);
+  }
+
+  // Priority 9.2: Multi-Year Academy Cohort Simulator Events (ages 7-11)
+  if (!nextDecision && state.rank === 'academy' && state.age >= 7 && state.age <= 11) {
+    nextDecision = pickAcademyEventDecision(state, rng);
+  }
+
+  // Priority 9.3: 4-Layer Clan Heritage & Secret Hiden Trials
+  if (!nextDecision && state.clanHeritage) {
+    nextDecision = pickClanPoliticsDecision(state, rng);
   }
 
   // Priority 9.5: Kuchiyose Summoning Contract (K3: Genin+, Age >= 12, once per life, Affinity exp(fit/8))
@@ -1354,6 +1333,11 @@ export function advanceYear(state: GameState): void {
     nextDecision = worldTick.whisperDecision;
   }
 
+  // Priority 10.2: Mature Adult Politics & Village Governance Dilemmas (Jonin / ANBU / Clan Heir / Kage)
+  if (!nextDecision) {
+    nextDecision = pickPoliticsDecision(state, rng);
+  }
+
   // Priority 10.5: Emergent Autonomous World / NPC / Village Crisis Decision
   if (!nextDecision) {
     nextDecision = pickEmergentWorldDecision(state, rng);
@@ -1385,6 +1369,13 @@ export function advanceYear(state: GameState): void {
     nextDecision = rollPoolDecision(state, rng);
   }
 
+  defaultDomainBus.emit({
+    type: 'world.year_advanced',
+    year: state.birthYear + state.age,
+    age: state.age,
+  });
+  defaultDomainBus.flush(state, rng);
+
   state.pending = nextDecision;
   state.rng = rng.snapshot();
 }
@@ -1398,6 +1389,7 @@ export function resolvePendingDecision(
   const decision = state.pending;
   if (!decision) return;
   const rng = new SeededRng(state.rng.seed, state.rng.state);
+  ensureKernelBootstrapped(killCharacter);
 
   if (
     (decision.kind === 'war_day' ||
@@ -1422,6 +1414,23 @@ export function resolvePendingDecision(
     return;
   }
 
+  // Delegate domain-owned decisions cleanly through the Kernel DecisionRouter!
+  if (defaultDecisionRouter.has(decision.kind)) {
+    state.pending = null;
+    defaultDecisionRouter.dispatch({
+      state,
+      decision,
+      optionId,
+      freeText,
+      odAction,
+      rng,
+      bus: defaultDomainBus,
+    });
+    defaultDomainBus.flush(state, rng);
+    state.rng = rng.snapshot();
+    return;
+  }
+
   const before = snapshotStats(state);
   state.pending = null;
 
@@ -1439,12 +1448,13 @@ export function resolvePendingDecision(
       if (optionId === 'enroll') {
         promoteRank(state, 'academy');
         ensureAcademyElementDiscipline(state);
+        state.academy = initAcademyState(state, rng);
         state.stats.will += 2;
         clampStats(state);
         pushLog(
           state,
           'milestone',
-          `You enroll in the ${VILLAGE_MAP[state.villageId].name} Shinobi Academy, tying a practice headband around your wrist.`,
+          `You enroll in the ${VILLAGE_MAP[state.villageId].institutions.academyLabel} under Instructor ${state.academy.senseiName}, tying a practice headband around your wrist.`,
           { title: 'Entered the Shinobi Academy', deltas: diffStats(before, state.stats) },
         );
       } else {
@@ -1473,10 +1483,14 @@ export function resolvePendingDecision(
       }
       const isEarly = state.age < 12;
       const acadMods = getVillageInstitutionalModifiers(state);
+      const acBonus = state.academy
+        ? Math.round((state.academy.bunshin + state.academy.henge + state.academy.kawarimi) / 18) +
+          (state.academy.favoredBySensei ? 4 : 0)
+        : 0;
       const passed =
         optionId === 'chakra_form'
-          ? state.stats.chakra + state.stats.intel + rng.int(0, 28) > (isEarly ? 82 : 46 + acadMods.academyGradOffset)
-          : state.stats.health + state.stats.will + rng.int(0, 28) > (isEarly ? 128 : 88 + acadMods.academyGradOffset);
+          ? state.stats.chakra + state.stats.intel + acBonus + rng.int(0, 28) > (isEarly ? 82 : 46 + acadMods.academyGradOffset)
+          : state.stats.health + state.stats.will + acBonus + rng.int(0, 28) > (isEarly ? 128 : 88 + acadMods.academyGradOffset);
       checks.push({ label: optionId === 'chakra_form' ? 'Clone & Chakra Exam' : 'Taijutsu & Target Exam', passed });
 
       if (passed) {
@@ -1833,7 +1847,12 @@ export function resolvePendingDecision(
 
       if (stage === 1) {
         if (optionId === 'withdraw_exam') {
-          pushLog(state, 'normal', 'You raise your hand and withdraw from the Chunin Exams to prepare another year.');
+          const fin = finalizeChuninTournament(state, false, rng);
+          pushLog(
+            state,
+            'normal',
+            `You raise your hand and withdraw from the Chunin Exams to prepare another year.${fin.summary ? ` ${fin.summary}` : ''}`,
+          );
           break;
         }
         const passed =
@@ -1854,15 +1873,25 @@ export function resolvePendingDecision(
           state.stats.intel += optionId === 'bloodline_sensory_cheat' ? 3 : 2;
           state.stats.will += 2;
           clampStats(state);
-          pushLog(state, 'milestone', 'You clear Stage 1 (Written Cipher) and march into the Forest of Death!', {
-            deltas: diffStats(before, state.stats),
-            checks,
-          });
+          const tNotes = advanceChuninTournamentStage(state, 1, rng);
+          pushLog(
+            state,
+            'milestone',
+            `You clear Stage 1 (Written Cipher) and march into the Forest of Death!${tNotes.length > 0 ? ` ${tNotes.join(' ')}` : ''}`,
+            {
+              deltas: diffStats(before, state.stats),
+              checks,
+            },
+          );
           state.pending = buildChuninExamStage(state, 2);
         } else {
-          pushLog(state, 'normal', 'Caught out by the proctor’s trap, you are eliminated in Stage 1 of the Chunin Exams.', {
-            checks,
-          });
+          const fin = finalizeChuninTournament(state, false, rng);
+          pushLog(
+            state,
+            'normal',
+            `Caught out by the proctor’s trap, you are eliminated in Stage 1 of the Chunin Exams.${fin.summary ? ` ${fin.summary}` : ''}`,
+            { checks },
+          );
           const matesPassed = evaluateTeammatesChuninPass(state, rng);
           if (matesPassed.length > 0 && state.team?.active) {
             state.pending = disbandGeninTeam(state, 'teammate_chunin', matesPassed);
@@ -1893,10 +1922,11 @@ export function resolvePendingDecision(
             state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 3));
           }
           clampStats(state);
+          const tNotes = advanceChuninTournamentStage(state, 2, rng);
           pushLog(
             state,
             'milestone',
-            'You secure the missing Earth Scroll on Day 2 and begin the perilous push toward the Central Tower!',
+            `You secure the missing Earth Scroll on Day 2 and begin the perilous push toward the Central Tower!${tNotes.length > 0 ? ` ${tNotes.join(' ')}` : ''}`,
             { deltas: diffStats(before, state.stats), checks },
           );
           state.pending = buildChuninExamStage(state, 3);
@@ -1911,12 +1941,11 @@ export function resolvePendingDecision(
             killCharacter(state, 'mortally wounded inside the Forest of Death during the Chunin Exams');
             break;
           }
+          const fin = finalizeChuninTournament(state, false, rng);
           pushLog(
             state,
             'danger',
-            loyalMate
-              ? `Rival Genin shatter your guard in the Forest of Death, and only ${loyalMate.name} dragging you clear saves your life. Your exam run ends here.`
-              : 'An enemy squad seizes your scroll in the Forest of Death, ending your Chunin Exam run with harsh bruises.',
+            `${loyalMate ? `Rival Genin shatter your guard in the Forest of Death, and only ${loyalMate.name} dragging you clear saves your life. Your exam run ends here.` : 'An enemy squad seizes your scroll in the Forest of Death, ending your Chunin Exam run with harsh bruises.'}${fin.summary ? ` ${fin.summary}` : ''}`,
             { deltas: diffStats(before, state.stats), checks },
           );
           const matesPassed = evaluateTeammatesChuninPass(state, rng);
@@ -1946,10 +1975,11 @@ export function resolvePendingDecision(
             state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, optionId === 'protect_teammate' ? 6 : 3));
           }
           clampStats(state);
+          const tNotes = advanceChuninTournamentStage(state, 3, rng);
           pushLog(
             state,
             'milestone',
-            'Mud-streaked and breathless, you slam through the Central Tower doors with both Heaven and Earth scrolls before the five-day horn sounds!',
+            `Mud-streaked and breathless, you slam through the Central Tower doors with both Heaven and Earth scrolls before the five-day horn sounds!${tNotes.length > 0 ? ` ${tNotes.join(' ')}` : ''}`,
             { deltas: diffStats(before, state.stats), checks },
           );
           state.pending = buildChuninExamStage(state, 4);
@@ -1999,10 +2029,11 @@ export function resolvePendingDecision(
             main.xp += 4;
           }
           clampStats(state);
+          const tNotes = advanceChuninTournamentStage(state, 4, rng);
           pushLog(
             state,
             'milestone',
-            'Victory in the Tower Preliminaries! Your name flashes across the electronic match board for next month’s Stadium Finals.',
+            `Victory in the Tower Preliminaries! Your name flashes across the electronic match board for next month’s Stadium Finals.${tNotes.length > 0 ? ` ${tNotes.join(' ')}` : ''}`,
             { deltas: diffStats(before, state.stats), checks },
           );
           state.pending = buildChuninExamStage(state, 5);
@@ -2010,10 +2041,11 @@ export function resolvePendingDecision(
           state.stats.health = Math.max(8, state.stats.health - 8);
           state.stats.will += 2;
           clampStats(state);
+          const fin = finalizeChuninTournament(state, false, rng);
           pushLog(
             state,
             'normal',
-            'Your opponent edges you out in a fierce Tower Preliminary bout. You watch the remaining qualifiers from the balcony, hungry for next year.',
+            `Your opponent edges you out in a fierce Tower Preliminary bout. You watch the remaining qualifiers from the balcony, hungry for next year.${fin.summary ? ` ${fin.summary}` : ''}`,
             { deltas: diffStats(before, state.stats), checks },
           );
           const matesPassed = evaluateTeammatesChuninPass(state, rng);
@@ -2112,6 +2144,7 @@ export function resolvePendingDecision(
           label: tacticalPromotion ? 'Tactical Composure Promotion' : 'Chunin Arena Finals',
           passed: playerPassed,
         });
+        const tourneyResult = finalizeChuninTournament(state, playerPassed, rng);
         const matesPassed = evaluateTeammatesChuninPass(state, rng);
 
         if (playerPassed) {
@@ -2131,11 +2164,7 @@ export function resolvePendingDecision(
           pushLog(
             state,
             'milestone',
-            tacticalPromotion
-              ? 'Though your opponent edged out the final clash, the Kage and Jonin examiners applaud your calm strategic command and award you the Chunin flak jacket anyway!'
-              : rivalName
-                ? `After a thrilling two-round Finals clash against your rival ${rivalName}, the examiners award you the green flak jacket and promote you to Chunin!`
-                : 'The examiners commend your composure and tactical judgment across the Finals. You are awarded the green flak jacket and promoted to Chunin!',
+            `${tacticalPromotion ? 'Though your opponent edged out the final clash, the Kage and Jonin examiners applaud your calm strategic command and award you the Chunin flak jacket anyway!' : rivalName ? `After a thrilling two-round Finals clash against your rival ${rivalName}, the examiners award you the green flak jacket and promote you to Chunin!` : 'The examiners commend your composure and tactical judgment across the Finals. You are awarded the green flak jacket and promoted to Chunin!'}${tourneyResult.promotedNpcs.length > 0 ? ` Other promoted peers: ${tourneyResult.promotedNpcs.join(', ')}.` : ''}`,
             { title: 'Promoted to Chunin!', deltas: diffStats(before, state.stats), checks },
           );
           if (state.team?.active) {
@@ -2147,7 +2176,7 @@ export function resolvePendingDecision(
           pushLog(
             state,
             'normal',
-            'You fight hard in the Arena Finals, yet the examiners judge you need another season of maturity before leading Chunin missions.',
+            `You fight hard in the Arena Finals, yet the examiners judge you need another season of maturity before leading Chunin missions.${tourneyResult.summary ? ` ${tourneyResult.summary}` : ''}`,
             { deltas: diffStats(before, state.stats), checks },
           );
           if (matesPassed.length > 0 && state.team?.active) {
@@ -2585,82 +2614,14 @@ export function resolvePendingDecision(
 
       const rankLetter =
         optionId === 's_mission' ? 'S' : optionId === 'a_mission' ? 'A' : optionId === 'b_mission' ? 'B' : 'C';
-      const mission = DANGEROUS_MISSIONS.find((m) => m.rank === rankLetter) ?? DANGEROUS_MISSIONS[0];
-
-      // C-Rank: 1 tactical check; B-Rank: 2 checks; A/S-Rank: 3 multi-stage narrated checks!
-      const jutsu = pickPlayerJutsu(state, 'ninjutsu', state.age);
-      const stageCount = rankLetter === 'C' ? 1 : rankLetter === 'B' ? 2 : 3;
-      const allStages: { label: string; stat: StatKey; thresh: number; line: string }[] = [
-        {
-          label: 'Approach & Recon',
-          stat: 'intel',
-          thresh: mission.threshold - 8,
-          line: 'You read enemy patrol intervals along the misty ridge',
-        },
-        {
-          label: `${jutsu.name} Clash`,
-          stat: 'chakra',
-          thresh: mission.threshold,
-          line: `Steel sparks in the gorge as you unleash ${jutsu.name}`,
-        },
-        {
-          label: 'Extraction & Resolve',
-          stat: 'will',
-          thresh: mission.threshold - 4,
-          line: 'You hold your nerve through the counter-ambush to secure the objective',
-        },
-      ];
-      const stages = allStages.slice(0, stageCount);
-
-      let passedStages = 0;
-      const beats: string[] = [];
-      for (const stg of stages) {
-        const ok = state.stats[stg.stat] + rng.int(0, 34) > stg.thresh;
-        checks.push({ label: stg.label, passed: ok });
-        if (ok) {
-          passedStages += 1;
-          beats.push(`${stg.line} and break through.`);
-        } else {
-          beats.push(`${stg.line}, but enemy traps clip your flank.`);
-        }
-      }
-
-      const succeeded = passedStages >= Math.ceil(stageCount * 0.6);
-      if (succeeded) {
-        const rankKey = mission.rank.toLowerCase() as keyof GameState['missions'];
-        state.missions[rankKey] += 1;
-        const ryoMult = getVillageInstitutionalModifiers(state).missionRyoMult;
-        state.stats.ryo += Math.max(3, Math.round(mission.ryoReward * ryoMult));
-        state.stats.will += rankLetter === 'S' ? 3 : 2;
-        if (passedStages < stageCount) {
-          state.stats.health = Math.max(8, state.stats.health - Math.round(mission.failHealthLoss * 0.35));
-        }
-        if (state.disciplines.length > 0) {
-          const main = state.disciplines.find((d) => d.isMain) ?? state.disciplines[0];
-          main.xp += mission.xpReward;
-        }
-        clampStats(state);
-        pushLog(
-          state,
-          rankLetter === 'S' || rankLetter === 'A' ? 'milestone' : 'normal',
-          `${mission.title} Accomplished! ${beats.join(' ')}`,
-          { title: `${rankLetter}-Rank Mission Cleared`, deltas: diffStats(before, state.stats), checks },
-        );
-      } else {
-        state.stats.health -= mission.failHealthLoss;
-        clampStats(state);
-        const deathProb = passedStages === 0 ? mission.deathChanceOnFail : mission.deathChanceOnFail * 0.4;
-        if (state.stats.health <= 0 || rng.chance(deathProb)) {
-          killCharacter(state, mission.deathCause);
-          break;
-        }
-        pushLog(
-          state,
-          'danger',
-          `${mission.title} Failed! ${beats.join(' ')} You barely extract alive through the treeline.`,
-          { deltas: diffStats(before, state.stats), checks },
-        );
-      }
+      const generated = generateMissionContract(state, rankLetter, rng);
+      state.activeMission = generated;
+      state.pending = buildProceduralMissionStageDecision(state, generated);
+      pushLog(
+        state,
+        'normal',
+        `Contract accepted: ${generated.title} (${generated.location}). Client: ${generated.client}. Constraint: ${generated.constraint}.`,
+      );
       break;
     }
 
@@ -2714,38 +2675,6 @@ export function resolvePendingDecision(
           { deltas: diffStats(before, state.stats), checks },
         );
       }
-      break;
-    }
-
-    case 'world_emergent': {
-      const outcome = resolveEmergentWorldDecision(state, optionId, decision.meta, rng);
-      if (outcome.tensionDelta) {
-        state.world.tension = clamp(state.world.tension + outcome.tensionDelta, 5, 100);
-        if (state.world.omenActive && state.world.tension < 65) state.world.omenActive = false;
-      }
-      if (outcome.cluesDelta) {
-        state.world.crisisClues = clamp(state.world.crisisClues + outcome.cluesDelta, 0, MAX_CRISIS_CLUES);
-      }
-      clampStats(state);
-      if (state.stats.health <= 0) {
-        killCharacter(state, 'fatal injuries sustained during a village crisis');
-        break;
-      }
-      if (outcome.checkLabel !== undefined && outcome.checkPassed !== undefined) {
-        checks.push({ label: outcome.checkLabel, passed: outcome.checkPassed });
-      }
-      const chips: StatDeltaChip[] = [...diffStats(before, state.stats)];
-      if (outcome.tensionDelta) {
-        chips.push({ stat: 'tension', label: 'World Tension', delta: outcome.tensionDelta });
-      }
-      if (outcome.cluesDelta) {
-        chips.push({ stat: 'clues', label: 'Crisis Clues', delta: outcome.cluesDelta });
-      }
-      pushLog(state, outcome.tone, outcome.text, {
-        title: outcome.title,
-        deltas: chips,
-        checks: checks.length > 0 ? checks : undefined,
-      });
       break;
     }
 

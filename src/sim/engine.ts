@@ -1,12 +1,15 @@
+import type { GovernanceActionId } from '../data/events-politics';
 import { kageTitle, VILLAGE_MAP } from '../data/villages';
 import { NINDO_MAP } from '../data/nindo';
 import { getAvailableOdActions } from './combat';
 import { canEnterRetirement } from './epilogue';
 import { advanceYear, createNewLife, finalizeLifeRecord, pushLog, resolvePendingDecision } from './life';
+import { canRunGovernanceAction, runGovernanceAction } from './politics';
 import { SeededRng } from './rng';
+import { investigateTimelineEvent } from './timeline';
 import type { FocusId, GameState, LifeRecord, OdActionId, ScenarioConfig } from './types';
 import { canCallDiplomaticSummit, runDiplomaticSummit } from './world';
-import { ensureWorldSimDefaults } from './world-sim';
+import { migrateGameState } from './kernel/bootstrap';
 import {
   advanceWarBeat,
   ensureWarClockDefaults,
@@ -47,10 +50,7 @@ export class ShinobiSim {
 
   load(snapshot: GameState): GameState {
     this.state = structuredClone(snapshot);
-    ensureWorldSimDefaults(this.state);
-    if (this.state.war) {
-      ensureWarClockDefaults(this.state.war);
-    }
+    migrateGameState(this.state);
     this.notify(false);
     return this.state;
   }
@@ -132,6 +132,39 @@ export class ShinobiSim {
     );
     this.notify(true);
     return true;
+  }
+
+  investigateTimeline(eventId: string): { ok: boolean; revealed: boolean; message: string } {
+    if (this.state.phase !== 'life') {
+      return { ok: false, revealed: false, message: 'Investigations can only be run during active life.' };
+    }
+    const rng = new SeededRng(this.state.rng.seed, this.state.rng.state);
+    const res = investigateTimelineEvent(this.state, eventId, rng);
+    this.state.rng = rng.snapshot();
+    if (res.ok) {
+      pushLog(this.state, res.revealed ? 'crisis' : 'normal', res.message, {
+        title: res.revealed ? 'Living Timeline Truth Uncovered' : 'Investigation Stalled',
+      });
+      this.notify(true);
+    }
+    return { ok: res.ok, revealed: res.revealed, message: res.message };
+  }
+
+  executeGovernanceAction(actionId: GovernanceActionId): boolean {
+    if (!canRunGovernanceAction(this.state, actionId)) return false;
+    const rng = new SeededRng(this.state.rng.seed, this.state.rng.state);
+    const res = runGovernanceAction(this.state, actionId, rng);
+    this.state.rng = rng.snapshot();
+    if (res.ok) {
+      pushLog(this.state, 'milestone', res.message, {
+        title: res.title,
+        deltas: res.tensionDelta
+          ? [{ stat: 'tension', label: 'World Tension', delta: res.tensionDelta }]
+          : undefined,
+      });
+      this.notify(true);
+    }
+    return res.ok;
   }
 
   /**

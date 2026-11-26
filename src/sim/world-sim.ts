@@ -1,8 +1,6 @@
-import { CLAN_MAP, getClansForVillage } from '../data/clans';
 import { VILLAGE_CRISIS_COPY } from '../data/events-world';
 import { GREAT_VILLAGES, INITIAL_DIPLOMACY_SCORES, VILLAGES, VILLAGE_MAP } from '../data/villages';
 import {
-  addNpcKnowledge,
   addNpcMemory,
   recordWorldHistory,
   seedInitialWorldNpcs,
@@ -13,197 +11,46 @@ import {
   type WorldDispatch,
 } from './npc-sim';
 import { clamp } from './powers';
+import { ensureVillagePolitics, tickVillagePolitics } from './politics';
+import { ensureRel6Defaults } from './relationships';
 import { SeededRng } from './rng';
+import { seedInitialTimeline, tickLivingTimeline } from './timeline';
 import type {
-  ClanStatus,
-  DaimyoStance,
   DiplomacyEdge,
-  DiplomacyStatus,
-  DisasterKind,
   GameState,
   PendingDecision,
-  StatKey,
   VillageId,
   VillageSimState,
-  WorldDisaster,
   WorldNpc,
   WorldSimState,
-  WorldTerritory,
 } from './types';
+import {
+  buildInitialVillageSim,
+  getVillageInstitutionalModifiers,
+  tickVillageOrgLayer,
+  type VillageInstitutionalModifiers,
+} from './village/institutions';
+import {
+  buildInitialTerritories,
+  getDiplomacyEdge,
+  getDiplomacyKey,
+  scoreToDiplomacyStatus,
+  shiftDiplomacy,
+  tickWorldLayer,
+} from './world/geopolitics';
 
-export function getDiplomacyKey(a: VillageId, b: VillageId): string {
-  return a < b ? `${a}_${b}` : `${b}_${a}`;
-}
-
-export function scoreToDiplomacyStatus(score: number): DiplomacyStatus {
-  if (score >= 55) return 'allied';
-  if (score >= 20) return 'treaty';
-  if (score > -18) return 'neutral';
-  if (score > -48) return 'strained';
-  if (score > -78) return 'hostile';
-  return 'at_war';
-}
-
-export function getDiplomacyEdge(
-  worldSim: WorldSimState,
-  a: VillageId,
-  b: VillageId,
-): DiplomacyEdge | undefined {
-  if (a === b) return undefined;
-  return worldSim.diplomacy[getDiplomacyKey(a, b)];
-}
-
-export function shiftDiplomacy(
-  worldSim: WorldSimState,
-  a: VillageId,
-  b: VillageId,
-  delta: number,
-  year: number,
-): DiplomacyEdge | null {
-  if (a === b) return null;
-  const key = getDiplomacyKey(a, b);
-  const [first, second] = a < b ? [a, b] : [b, a];
-  const existing = worldSim.diplomacy[key] ?? {
-    a: first,
-    b: second,
-    score: 0,
-    status: 'neutral' as DiplomacyStatus,
-    lastChangedYear: year,
-  };
-  const nextScore = clamp(existing.score + delta, -100, 100);
-  const nextStatus = scoreToDiplomacyStatus(nextScore);
-  const updated: DiplomacyEdge = {
-    a: first,
-    b: second,
-    score: nextScore,
-    status: nextStatus,
-    lastChangedYear: nextStatus !== existing.status ? year : existing.lastChangedYear,
-  };
-  worldSim.diplomacy[key] = updated;
-  return updated;
-}
-
-function buildInitialTerritories(): WorldTerritory[] {
-  return [
-    {
-      id: 'terr_rain_corridor',
-      name: 'Land of Rain Corridor',
-      controller: 'ame',
-      contestedBy: 'iwa',
-      wealth: 6,
-      strategicValue: 9,
-      flashpoint: 42,
-    },
-    {
-      id: 'terr_kannabi_bridge',
-      name: 'Kannabi Bridge (Land of Grass)',
-      controller: 'konoha',
-      contestedBy: 'iwa',
-      wealth: 7,
-      strategicValue: 10,
-      flashpoint: 38,
-    },
-    {
-      id: 'terr_valley_clouds',
-      name: 'Frost & Thunder Pass',
-      controller: 'kumo',
-      contestedBy: 'konoha',
-      wealth: 7,
-      strategicValue: 8,
-      flashpoint: 34,
-    },
-    {
-      id: 'terr_desert_caravan',
-      name: 'Red Dune Caravan Oasis',
-      controller: 'suna',
-      contestedBy: 'iwa',
-      wealth: 8,
-      strategicValue: 7,
-      flashpoint: 28,
-    },
-    {
-      id: 'terr_mist_strait',
-      name: 'Eastern Sea Mist Strait',
-      controller: 'kiri',
-      contestedBy: 'kumo',
-      wealth: 8,
-      strategicValue: 8,
-      flashpoint: 26,
-    },
-    {
-      id: 'terr_iron_peaks',
-      name: 'Three Wolves Neutral Peaks',
-      controller: 'iron',
-      contestedBy: null,
-      wealth: 6,
-      strategicValue: 7,
-      flashpoint: 10,
-    },
-  ];
-}
-
-function buildInitialVillageSim(vId: VillageId): VillageSimState {
-  const def = VILLAGE_MAP[vId];
-  const inst = def.institutions;
-  const clans = getClansForVillage(vId).map((c) => ({
-    clanId: c.id,
-    power: c.startingPower,
-    loyalty: c.startingLoyalty,
-    reputation: clamp(Math.round((c.startingPower + c.startingLoyalty) / 2), 20, 95),
-    status: (c.startingLoyalty < 50 ? 'strained' : 'thriving') as ClanStatus,
-    headNpcId: null,
-  }));
-
-  const stance: DaimyoStance =
-    inst.daimyoFundingBaseline >= 80
-      ? 'hawkish'
-      : inst.daimyoFundingBaseline <= 55
-        ? 'austerity'
-        : 'balanced';
-
-  return {
-    villageId: vId,
-    kageNpcId: null,
-    daimyo: {
-      funding: inst.daimyoFundingBaseline,
-      favor: clamp(inst.daimyoFundingBaseline + 4, 25, 95),
-      stance,
-    },
-    anbu: {
-      strength: def.tier === 'great' ? 72 : 52,
-      readiness: 68,
-      activeOp: null,
-    },
-    shadowOrg: {
-      name: inst.shadowOrgName,
-      influence: vId === 'konoha' || vId === 'kiri' || vId === 'oto' ? 68 : 54,
-      secrecy: 74,
-      agenda:
-        vId === 'kiri'
-          ? 'bloodline_hunt'
-          : vId === 'kumo' || vId === 'iwa'
-            ? 'sabotage_rival'
-            : vId === 'konoha'
-              ? 'coup_watch'
-              : 'stabilize',
-    },
-    academy: {
-      quality: def.tier === 'great' ? 72 : 58,
-      doctrine: inst.academyDoctrine,
-      bloodyMistActive: inst.bloodlineSuspicion,
-    },
-    hospital: {
-      capacity: inst.hospitalBaseline,
-      readiness: inst.hospitalBaseline,
-    },
-    clans,
-    treasury: clamp(inst.daimyoFundingBaseline, 30, 95),
-    military: def.tier === 'great' ? 74 : 52,
-    morale: vId === 'kiri' ? 58 : vId === 'suna' ? 62 : 72,
-    stability: vId === 'kiri' ? 56 : vId === 'suna' ? 64 : 74,
-    policy: def.militaryPolicy,
-  };
-}
+export {
+  buildInitialTerritories,
+  buildInitialVillageSim,
+  getDiplomacyEdge,
+  getDiplomacyKey,
+  getVillageInstitutionalModifiers,
+  scoreToDiplomacyStatus,
+  shiftDiplomacy,
+  tickVillageOrgLayer,
+  tickWorldLayer,
+  type VillageInstitutionalModifiers,
+};
 
 export function initWorldSim(state: GameState, rng: SeededRng): WorldSimState {
   const startYear = state.birthYear + state.age;
@@ -252,6 +99,10 @@ export function initWorldSim(state: GameState, rng: SeededRng): WorldSimState {
   };
 
   seedInitialWorldNpcs(state, worldSim, rng);
+  for (const v of Object.values(worldSim.villages)) {
+    ensureVillagePolitics(v);
+  }
+  seedInitialTimeline(state, worldSim, rng);
 
   recordWorldHistory(worldSim, {
     year: startYear,
@@ -279,420 +130,18 @@ export function ensureWorldSimDefaults(state: GameState): WorldSimState {
       syncTeamMembersToWorldNpcs(state, rng);
     }
   }
+  for (const v of Object.values(state.worldSim.villages)) {
+    ensureVillagePolitics(v);
+  }
+  if (!state.worldSim.timeline || state.worldSim.timeline.length === 0) {
+    const tRng = new SeededRng((state.rng.seed ^ 0x9931a) >>> 0);
+    seedInitialTimeline(state, state.worldSim, tRng);
+  }
+  if (!state.missionConsequences) state.missionConsequences = [];
+  ensureRel6Defaults(state);
   return state.worldSim;
 }
 
-export interface VillageInstitutionalModifiers {
-  academyGradOffset: number;
-  academyXpBonus: number;
-  hospitalMortalityMult: number;
-  missionRyoMult: number;
-  bloodyMistActive: boolean;
-  clanBonus?: { stat?: StatKey; disciplineId?: string; label: string };
-}
-
-export function getVillageInstitutionalModifiers(state: GameState): VillageInstitutionalModifiers {
-  const vDef = VILLAGE_MAP[state.villageId];
-  const worldSim = state.worldSim;
-  const vSim = worldSim?.villages[state.villageId];
-  const clanDef = state.clanId ? CLAN_MAP[state.clanId] : undefined;
-
-  const bloodyMistActive = Boolean(vSim?.academy.bloodyMistActive ?? vDef.institutions.bloodlineSuspicion);
-  const academyGradOffset =
-    vDef.institutions.academyGradOffset +
-    (bloodyMistActive && vDef.id === 'kiri' ? 0 : vDef.id === 'kiri' ? -6 : 0) +
-    (vSim && vSim.academy.quality >= 80 ? -3 : vSim && vSim.academy.quality < 45 ? 4 : 0);
-
-  const hospitalCap = vSim?.hospital.capacity ?? vDef.institutions.hospitalBaseline;
-  const hospitalMortalityMult = clamp(1.18 - hospitalCap * 0.0045, 0.72, 1.18);
-
-  const daimyoFund = vSim?.daimyo.funding ?? vDef.institutions.daimyoFundingBaseline;
-  const worldEcon = worldSim?.economy ?? 64;
-  const missionRyoMult = clamp(0.75 + ((daimyoFund + worldEcon) / 200) * 0.5, 0.75, 1.25);
-
-  const academyXpBonus = vSim && vSim.academy.quality >= 78 ? 1 : 0;
-
-  return {
-    academyGradOffset,
-    academyXpBonus,
-    hospitalMortalityMult,
-    missionRyoMult,
-    bloodyMistActive,
-    clanBonus: clanDef?.yearlyBonus,
-  };
-}
-
-function updateClanStatus(loyalty: number, power: number): ClanStatus {
-  if (loyalty < 25) return 'exiled';
-  if (loyalty < 50) return 'strained';
-  if (power < 42) return 'declining';
-  return 'thriving';
-}
-
-function tickWorldLayer(
-  state: GameState,
-  worldSim: WorldSimState,
-  rng: SeededRng,
-): { dispatches: WorldDispatch[]; tensionDelta: number } {
-  const dispatches: WorldDispatch[] = [];
-  const year = state.birthYear + state.age;
-  let tensionDelta = 0;
-
-  // 1. Continental Economy driven by treaties, war tension, and active disasters
-  const edges = Object.values(worldSim.diplomacy);
-  const treatyCount = edges.filter((e) => e.status === 'allied' || e.status === 'treaty').length;
-  const hostileCount = edges.filter((e) => e.status === 'hostile' || e.status === 'at_war').length;
-  const disasterDrag = worldSim.activeDisasters.reduce((acc, d) => acc + d.severity * 2, 0);
-
-  const econDrift = rng.int(-3, 4) + Math.min(3, treatyCount) - hostileCount * 2 - Math.round(disasterDrag / 2);
-  worldSim.economy = clamp(worldSim.economy + econDrift, 15, 98);
-  worldSim.economyTrend =
-    worldSim.economy >= 74
-      ? 'boom'
-      : worldSim.economy >= 48
-        ? 'stable'
-        : worldSim.economy >= 30
-          ? 'slump'
-          : 'crisis';
-
-  // 2. Active Disasters tick & rare regional disaster spawning
-  for (const d of worldSim.activeDisasters) {
-    d.yearsLeft -= 1;
-    const vSim = worldSim.villages[d.villageId];
-    if (vSim) {
-      vSim.treasury = clamp(vSim.treasury - d.severity * 2, 10, 100);
-      vSim.morale = clamp(vSim.morale - d.severity * 2, 10, 100);
-    }
-  }
-  worldSim.activeDisasters = worldSim.activeDisasters.filter((d) => d.yearsLeft > 0);
-
-  if (worldSim.activeDisasters.length < 2 && rng.chance(0.11)) {
-    const targetV = rng.pick(GREAT_VILLAGES);
-    const kindByVillage: Record<string, { kind: DisasterKind; title: string }> = {
-      suna: { kind: 'drought', title: 'Great Sandstorm & Oasis Drought' },
-      kiri: { kind: 'storm', title: 'Crimson Typhoon & Coastal Plague' },
-      iwa: { kind: 'quake', title: 'Canyon Tremor & Tunnel Collapse' },
-      kumo: { kind: 'storm', title: 'Alpine Lightning Tempest' },
-      konoha: { kind: 'famine', title: 'Border Harvest Blight' },
-    };
-    const picked = kindByVillage[targetV.id] ?? { kind: 'syndicate_raid', title: 'Rogue Syndicate Frontier Raid' };
-    const disaster: WorldDisaster = {
-      id: `dis_${year}_${targetV.id}`,
-      kind: picked.kind,
-      title: picked.title,
-      villageId: targetV.id,
-      severity: rng.int(1, 3),
-      yearsLeft: rng.int(2, 3),
-    };
-    worldSim.activeDisasters.push(disaster);
-    recordWorldHistory(worldSim, {
-      year,
-      layer: 'world',
-      title: `${disaster.title} Strikes ${targetV.name}`,
-      summary: `A severity-${disaster.severity} disaster disrupted trade and strained ${targetV.name}'s hospitals and treasury.`,
-      villageId: targetV.id,
-      tone: 'crisis',
-    });
-    dispatches.push({
-      priority: targetV.id === state.villageId ? 90 : 58,
-      tone: 'crisis',
-      title: `Regional Disaster: ${disaster.title}`,
-      text: `${disaster.title} struck ${targetV.region}, straining ${targetV.name}'s treasury and medical corps while shaking regional trade.`,
-    });
-  }
-
-  // 3. Bilateral Diplomacy drift based on Village Policies & Economy
-  const greatIds = GREAT_VILLAGES.map((v) => v.id);
-  for (let i = 0; i < greatIds.length; i++) {
-    for (let j = i + 1; j < greatIds.length; j++) {
-      const a = greatIds[i];
-      const b = greatIds[j];
-      const va = worldSim.villages[a];
-      const vb = worldSim.villages[b];
-      let delta = rng.int(-3, 3);
-      if (va.policy === 'diplomatic' || vb.policy === 'diplomatic') delta += 2;
-      if (va.policy === 'expansionist' || vb.policy === 'expansionist') delta -= 3;
-      if (va.policy === 'shadow_ops' || vb.policy === 'shadow_ops') delta -= 2;
-      if (worldSim.economyTrend === 'crisis') delta -= 2;
-      if (state.world.truePeace) delta += 5;
-
-      const beforeStatus = getDiplomacyEdge(worldSim, a, b)?.status;
-      const updated = shiftDiplomacy(worldSim, a, b, delta, year);
-      if (updated && beforeStatus && updated.status !== beforeStatus) {
-        if (updated.status === 'hostile' || updated.status === 'at_war') {
-          tensionDelta += 4;
-          recordWorldHistory(worldSim, {
-            year,
-            layer: 'world',
-            title: `${VILLAGE_MAP[a].name} and ${VILLAGE_MAP[b].name} Turn ${updated.status === 'at_war' ? 'to Open Conflict' : 'Hostile'}`,
-            summary: `Diplomatic ties broke down between ${VILLAGE_MAP[a].name} and ${VILLAGE_MAP[b].name}, pushing continental tension higher.`,
-            tone: 'war',
-          });
-          if (a === state.villageId || b === state.villageId) {
-            dispatches.push({
-              priority: 85,
-              tone: 'war',
-              title: `Diplomatic Rupture: ${VILLAGE_MAP[a].name} & ${VILLAGE_MAP[b].name}`,
-              text: `Relations between ${VILLAGE_MAP[a].name} and ${VILLAGE_MAP[b].name} deteriorated into ${updated.status.replace('_', ' ')} footing.`,
-            });
-          }
-        } else if (updated.status === 'allied' || (beforeStatus === 'hostile' && updated.status === 'strained')) {
-          tensionDelta -= 3;
-          if (a === state.villageId || b === state.villageId) {
-            dispatches.push({
-              priority: 70,
-              tone: 'bond',
-              title: `Diplomatic Thaw: ${VILLAGE_MAP[a].name} & ${VILLAGE_MAP[b].name}`,
-              text: `Envoys from ${VILLAGE_MAP[a].name} and ${VILLAGE_MAP[b].name} eased border hostilities (${updated.status}).`,
-            });
-          }
-        }
-      }
-    }
-  }
-
-  // 4. Strategic Territories border skirmishes
-  for (const terr of worldSim.territories) {
-    if (!terr.contestedBy) continue;
-    const edge = getDiplomacyEdge(worldSim, terr.controller, terr.contestedBy);
-    const edgeScore = edge?.score ?? 0;
-    if (edgeScore < -20) {
-      terr.flashpoint = clamp(terr.flashpoint + rng.int(4, 11), 0, 100);
-    } else if (edgeScore > 20) {
-      terr.flashpoint = clamp(terr.flashpoint - rng.int(4, 9), 0, 100);
-    }
-
-    if (terr.flashpoint >= 88 && rng.chance(0.45)) {
-      const attacker = worldSim.villages[terr.contestedBy];
-      const defender = worldSim.villages[terr.controller];
-      const attackerWins =
-        attacker && defender
-          ? rng.chance(clamp(0.45 + (attacker.military - defender.military) * 0.01, 0.2, 0.8))
-          : rng.chance(0.45);
-      terr.flashpoint = 35;
-      if (attackerWins) {
-        const oldCtrl = terr.controller;
-        terr.controller = terr.contestedBy;
-        terr.contestedBy = oldCtrl;
-        tensionDelta += 5;
-        if (attacker) attacker.treasury = clamp(attacker.treasury + 6, 10, 100);
-        if (defender) defender.morale = clamp(defender.morale - 6, 10, 100);
-        recordWorldHistory(worldSim, {
-          year,
-          layer: 'world',
-          title: `${VILLAGE_MAP[terr.controller].name} Seizes ${terr.name}`,
-          summary: `Border skirmishes flipped control of ${terr.name} from ${VILLAGE_MAP[oldCtrl].name} to ${VILLAGE_MAP[terr.controller].name}.`,
-          villageId: terr.controller,
-          tone: 'war',
-        });
-        dispatches.push({
-          priority: terr.controller === state.villageId || oldCtrl === state.villageId ? 89 : 60,
-          tone: 'war',
-          title: `Territory Shift: ${terr.name}`,
-          text: `${VILLAGE_MAP[terr.controller].name} wrested control of ${terr.name} from ${VILLAGE_MAP[oldCtrl].name} in a sharp border clash.`,
-        });
-      }
-    }
-  }
-
-  return { dispatches, tensionDelta };
-}
-
-function tickVillageOrgLayer(
-  state: GameState,
-  worldSim: WorldSimState,
-  rng: SeededRng,
-): WorldDispatch[] {
-  const dispatches: WorldDispatch[] = [];
-  const year = state.birthYear + state.age;
-
-  for (const vDef of VILLAGES) {
-    const vSim = worldSim.villages[vDef.id];
-    const isPlayerVillage = vDef.id === state.villageId;
-
-    // 1. Daimyo Funding & Politics
-    const vol = vDef.institutions.daimyoVolatility;
-    let fundDelta = rng.int(-3, 3);
-    if (worldSim.economyTrend === 'boom') fundDelta += 3;
-    else if (worldSim.economyTrend === 'slump' || worldSim.economyTrend === 'crisis') fundDelta -= 4;
-    if (rng.chance(vol * 0.28)) {
-      // Suna-style Daimyo austerity squeeze or hawkish windfall
-      const squeeze = vDef.id === 'suna' ? rng.chance(0.7) : rng.chance(0.45);
-      fundDelta += squeeze ? -8 : 7;
-    }
-    vSim.daimyo.funding = clamp(vSim.daimyo.funding + fundDelta, 20, 98);
-    vSim.daimyo.stance =
-      vSim.daimyo.funding >= 78
-        ? 'generous'
-        : vSim.daimyo.funding <= 44
-          ? 'austerity'
-          : vSim.policy === 'expansionist'
-            ? 'hawkish'
-            : 'balanced';
-
-    // Daimyo funding drives Treasury, Academy quality, and Hospital capacity
-    const treasTarget = Math.round((vSim.daimyo.funding + worldSim.economy) / 2);
-    vSim.treasury = clamp(vSim.treasury + Math.sign(treasTarget - vSim.treasury) * 2, 15, 98);
-    if (vSim.treasury < 40) {
-      vSim.academy.quality = clamp(vSim.academy.quality - 1, 30, 98);
-      vSim.hospital.capacity = clamp(vSim.hospital.capacity - 1, 30, 98);
-    } else if (vSim.treasury >= 72) {
-      vSim.academy.quality = clamp(vSim.academy.quality + 1, 30, 98);
-      vSim.hospital.capacity = clamp(vSim.hospital.capacity + 1, 30, 98);
-    }
-
-    // 2. Kage Succession (if Kage seat is vacant)
-    if (vSim.kageNpcId === null) {
-      if (isPlayerVillage && state.specialStatus === 'kage') {
-        vSim.kageNpcId = 'player';
-      } else {
-        const candidates = worldSim.npcs
-          .filter(
-            (n) =>
-              n.identity.alive &&
-              n.identity.villageId === vDef.id &&
-              n.identity.specialStatus !== 'missing_nin' &&
-              n.identity.rank === 'jonin',
-          )
-          .sort((a, b) => b.identity.powerScore - a.identity.powerScore);
-        if (candidates.length > 0) {
-          const newKage = candidates[0];
-          newKage.identity.specialStatus = 'kage';
-          newKage.identity.roleTitle = vDef.kageTitle;
-          vSim.kageNpcId = newKage.identity.id;
-          vSim.stability = clamp(vSim.stability + 6, 10, 100);
-          addNpcMemory(newKage, {
-            year,
-            age: newKage.identity.age,
-            tag: 'promotion',
-            summary: `Acclaimed as the new ${vDef.kageTitle} of ${vDef.name}.`,
-            impact: 9,
-          });
-
-          // New Kage's personality reshapes village policy & Kiri Bloody Mist reform!
-          if (newKage.personality.compassionate >= 62) {
-            vSim.policy = 'diplomatic';
-            if (vDef.id === 'kiri' && vSim.academy.bloodyMistActive) {
-              vSim.academy.bloodyMistActive = false;
-              recordWorldHistory(worldSim, {
-                year,
-                layer: 'village',
-                title: `End of the Bloody Mist in ${vDef.name}`,
-                summary: `New ${vDef.kageTitle} ${newKage.identity.name} abolished lethal academy exams and bloodline purges.`,
-                villageId: vDef.id,
-                npcId: newKage.identity.id,
-                tone: 'milestone',
-              });
-            }
-          } else if (newKage.personality.ambitious >= 70) {
-            vSim.policy = 'expansionist';
-          } else if (newKage.personality.cruel >= 65) {
-            vSim.policy = 'shadow_ops';
-          } else {
-            vSim.policy = 'defensive';
-          }
-
-          recordWorldHistory(worldSim, {
-            year,
-            layer: 'village',
-            title: `${newKage.identity.name} Named ${vDef.kageTitle}`,
-            summary: `Following leadership succession, ${newKage.identity.name} assumed command of ${vDef.name} under a ${vSim.policy} doctrine.`,
-            villageId: vDef.id,
-            npcId: newKage.identity.id,
-            tone: 'milestone',
-          });
-          if (isPlayerVillage || vDef.tier === 'great') {
-            dispatches.push({
-              priority: isPlayerVillage ? 94 : 62,
-              tone: 'milestone',
-              title: `New ${vDef.kageTitle}: ${newKage.identity.name}`,
-              text: `${newKage.identity.name} has been inaugurated as the new ${vDef.kageTitle} of ${vDef.name}, steering the village toward a ${vSim.policy.replace('_', ' ')} policy.`,
-            });
-          }
-        }
-      }
-    }
-
-    // 3. Clan Dynamics & Head Succession
-    for (const cState of vSim.clans) {
-      const cDef = CLAN_MAP[cState.clanId];
-      if (!cDef) continue;
-
-      let loyaltyDrift = rng.int(-2, 2);
-      if (vSim.stability >= 70) loyaltyDrift += 1;
-      if (vSim.daimyo.stance === 'austerity') loyaltyDrift -= 2;
-      if (vSim.academy.bloodyMistActive && cState.clanId === 'yuki') loyaltyDrift -= 4;
-      if (vDef.id === 'konoha' && cState.clanId === 'uchiha' && vSim.shadowOrg.influence >= 70) {
-        loyaltyDrift -= 3;
-      }
-
-      cState.loyalty = clamp(cState.loyalty + loyaltyDrift, 10, 100);
-      cState.power = clamp(cState.power + rng.int(-2, 2), 15, 100);
-      cState.status = updateClanStatus(cState.loyalty, cState.power);
-
-      // Reassign Clan Head if vacant
-      if (!cState.headNpcId || !worldSim.npcs.some((n) => n.identity.id === cState.headNpcId && n.identity.alive)) {
-        const heir = worldSim.npcs.find(
-          (n) =>
-            n.identity.alive &&
-            n.identity.villageId === vDef.id &&
-            n.identity.clanId === cState.clanId &&
-            n.identity.specialStatus !== 'missing_nin',
-        );
-        if (heir) {
-          cState.headNpcId = heir.identity.id;
-          if (heir.identity.specialStatus !== 'kage') {
-            heir.identity.roleTitle = `${cDef.name} Head`;
-          }
-        } else {
-          cState.headNpcId = null;
-        }
-      }
-    }
-
-    // 4. Shadow Org (Root / Hunter-Nin / Cloud Vanguard / Saboteurs) Covert Ops
-    if (vDef.tier === 'great' && rng.chance(0.14)) {
-      if (vSim.shadowOrg.agenda === 'sabotage_rival') {
-        const rivals = GREAT_VILLAGES.filter((g) => g.id !== vDef.id);
-        const target = rng.pick(rivals);
-        const exposed = !rng.chance(vSim.shadowOrg.secrecy / 100);
-        if (exposed) {
-          shiftDiplomacy(worldSim, vDef.id, target.id, -14, year);
-          vSim.shadowOrg.secrecy = clamp(vSim.shadowOrg.secrecy - 4, 25, 95);
-          const kage = worldSim.npcs.find((n) => n.identity.id === worldSim.villages[target.id].kageNpcId);
-          if (kage) {
-            addNpcKnowledge(kage, {
-              id: `know_sab_${vDef.id}_${year}`,
-              topic: 'border_raid',
-              detail: `Caught ${vSim.shadowOrg.name} agents from ${vDef.name} attempting border sabotage.`,
-              secret: false,
-              learnedYear: year,
-            });
-          }
-          if (isPlayerVillage || target.id === state.villageId) {
-            dispatches.push({
-              priority: 76,
-              tone: 'war',
-              title: `Covert Incident: ${vSim.shadowOrg.name}`,
-              text: `${vDef.name}'s ${vSim.shadowOrg.name} was exposed conducting border espionage against ${target.name}, sharply straining diplomatic ties.`,
-            });
-          }
-        }
-      }
-    }
-
-    // 5. Policy Adaptation for Great Villages (unless player is Kage and controls it)
-    if (vDef.tier === 'great' && vSim.kageNpcId !== 'player' && rng.chance(0.12)) {
-      if (vSim.daimyo.stance === 'austerity' && vSim.treasury < 45) {
-        vSim.policy = rng.chance(0.5) ? 'shadow_ops' : 'expansionist';
-      } else if (state.world.truePeace) {
-        vSim.policy = 'diplomatic';
-      }
-    }
-  }
-
-  return dispatches;
-}
 
 /**
  * Orchestrates the complete yearly 3-Layer Autonomous World Simulation tick:
@@ -714,14 +163,17 @@ export function tickAutonomousWorldYear(
 
   const layer1 = tickWorldLayer(state, worldSim, rng);
   const layer2 = tickVillageOrgLayer(state, worldSim, rng);
+  tickVillagePolitics(worldSim, rng);
   const layer3 = tickAutonomousNpcs(state, worldSim, rng);
+  const timelineDispatches = tickLivingTimeline(state, worldSim, rng);
 
   // Sync back any autonomous changes to team members
   if (state.team) {
     syncTeamMembersToWorldNpcs(state, rng);
   }
+  ensureRel6Defaults(state);
 
-  const allDispatches = [...layer1.dispatches, ...layer2, ...layer3];
+  const allDispatches = [...layer1.dispatches, ...layer2, ...layer3, ...timelineDispatches];
   allDispatches.sort((a, b) => b.priority - a.priority);
 
   // Keep Chronicle signal-to-noise clean: max 2 dispatches per year

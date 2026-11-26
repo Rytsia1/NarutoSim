@@ -1,7 +1,17 @@
-import { VILLAGE_MAP } from '../data/villages';
-import { computeCombatProjection } from './powers';
+import { getClansForVillage } from '../data/clans';
+import { GREAT_VILLAGES, VILLAGE_MAP } from '../data/villages';
+import { addNpcMemory, createWorldNpc } from './npc-sim';
+import { clamp, computeCombatProjection } from './powers';
 import type { SeededRng } from './rng';
-import type { ChuninExamStage, GameState, PendingDecision, ShinobiRank } from './types';
+import { recordTimelineEvent } from './timeline';
+import type {
+  ChuninExamStage,
+  ChuninParticipant,
+  ChuninTournamentState,
+  GameState,
+  PendingDecision,
+  ShinobiRank,
+} from './types';
 
 export const RANK_ORDER: Record<ShinobiRank, number> = {
   civilian: 0,
@@ -258,12 +268,20 @@ export function buildChuninExamStage(
 
   // Stage 4: Tower Preliminaries (1v1 Elimination)
   if (stage === 4) {
+    const prelimOpp = state.chuninTournament?.participants.find(
+      (p) => p.npcId === state.chuninTournament?.prelimOpponentId,
+    );
+    const oppDesc = prelimOpp
+      ? `The match board flashes your name opposite ${prelimOpp.name} of ${VILLAGE_MAP[prelimOpp.villageId].name} (Power ${prelimOpp.powerScore}).`
+      : 'The proctor announces sudden 1v1 elimination bouts to narrow the field for the Stadium Finals.';
     return {
       id: `chunin_s4_${state.age}`,
       kind: 'chunin_exam_stage',
       eventId: 'chunin_stage_4',
-      title: 'Chunin Exam (Stage 4 of 6): Tower Preliminary Bouts',
-      body: 'Too many candidates survived the Forest of Death. Beneath a towering carved hand-seal statue inside the Central Tower, the proctor announces sudden 1v1 elimination bouts to narrow the field for the Stadium Finals.',
+      title: prelimOpp
+        ? `Chunin Exam (Stage 4 of 6): Preliminaries vs ${prelimOpp.name}`
+        : 'Chunin Exam (Stage 4 of 6): Tower Preliminary Bouts',
+      body: `Too many candidates survived the Forest of Death. Beneath a towering carved hand-seal statue inside the Central Tower, ${oppDesc}`,
       manual: true,
       meta: { stage: 4 },
       options: [
@@ -352,15 +370,23 @@ export function buildChuninExamStage(
   const rival = state.rivalId
     ? state.team?.members.find((m) => m.id === state.rivalId && m.alive && m.specialStatus !== 'missing_nin')
     : undefined;
-  const opponentLabel = rival ? `your sworn rival ${rival.name}` : 'a heralded prodigy from a rival village';
+  const tourneyFinalist = state.chuninTournament?.participants.find(
+    (p) => p.npcId === state.chuninTournament?.finalsOpponentId,
+  );
+  const finalsOppName = rival?.name ?? tourneyFinalist?.name ?? '';
+  const opponentLabel = rival
+    ? `your sworn rival ${rival.name}`
+    : tourneyFinalist
+      ? `${tourneyFinalist.name} of ${VILLAGE_MAP[tourneyFinalist.villageId].name}`
+      : 'a heralded prodigy from a rival village';
 
   if (finalsRound === 1) {
     return {
       id: `chunin_s6_r1_${state.age}`,
       kind: 'chunin_exam_stage',
       eventId: 'chunin_stage_6_r1',
-      title: rival
-        ? `Chunin Exam (Stage 6 of 6 · Opening): Finals vs ${rival.name}`
+      title: finalsOppName
+        ? `Chunin Exam (Stage 6 of 6 · Opening): Finals vs ${finalsOppName}`
         : 'Chunin Exam (Stage 6 of 6 · Opening): Stadium Finals',
       body: `Cheers shake the packed stadium walls as Kage envoys and Jonin examiners watch from the upper gallery. You step onto the sunlit sand across from ${opponentLabel}. How do you open the championship bout?`,
       manual: true,
@@ -369,7 +395,7 @@ export function buildChuninExamStage(
         finalsRound: 1,
         prepBonus,
         finalsScore: 0,
-        rivalName: rival?.name ?? '',
+        rivalName: finalsOppName,
       },
       options: [
         {
@@ -451,6 +477,295 @@ export function buildChuninExamStage(
       },
     ],
   };
+}
+
+export function initChuninTournament(state: GameState, rng: SeededRng): ChuninTournamentState {
+  const worldSim = state.worldSim;
+  const year = state.birthYear + state.age;
+  const participants: ChuninParticipant[] = [
+    {
+      npcId: 'player',
+      name: state.name,
+      villageId: state.villageId,
+      clanId: state.clanId ?? null,
+      powerScore: computeCombatProjection(state).score,
+      isTeammate: false,
+      isRival: false,
+      status: 'active',
+    },
+  ];
+  const seenIds = new Set<string>(['player']);
+
+  // Include active Genin teammates first
+  if (state.team) {
+    for (const m of state.team.members) {
+      if (m.role !== 'teammate' || !m.alive || m.rank !== 'genin') continue;
+      const linkedNpc = worldSim?.npcs.find((n) => n.identity.linkedTeamMemberId === m.id);
+      const id = linkedNpc?.identity.id ?? m.id;
+      if (seenIds.has(id)) continue;
+      seenIds.add(id);
+      participants.push({
+        npcId: id,
+        name: m.name,
+        villageId: state.villageId,
+        clanId: linkedNpc?.identity.clanId ?? null,
+        powerScore: m.powerScore,
+        isTeammate: true,
+        isRival: m.id === state.rivalId,
+        status: 'active',
+      });
+    }
+  }
+
+  // Pull existing living Genin NPCs from across the world
+  if (worldSim) {
+    const worldGenin = worldSim.npcs.filter(
+      (n) =>
+        n.identity.alive &&
+        n.identity.rank === 'genin' &&
+        n.identity.specialStatus === 'none' &&
+        !seenIds.has(n.identity.id),
+    );
+    for (const g of worldGenin.slice(0, 12)) {
+      seenIds.add(g.identity.id);
+      participants.push({
+        npcId: g.identity.id,
+        name: g.identity.name,
+        villageId: g.identity.villageId,
+        clanId: g.identity.clanId,
+        powerScore: g.identity.powerScore,
+        isTeammate: false,
+        isRival: g.relationships.player?.kind === 'rival',
+        status: 'active',
+      });
+    }
+
+    // Fill up to 14 participants with real foreign Genin candidates
+    const usedNames = new Set(worldSim.npcs.map((n) => n.identity.name));
+    usedNames.add(state.name);
+    while (participants.length < 14) {
+      const vDef = rng.pick(GREAT_VILLAGES);
+      const vClans = getClansForVillage(vDef.id);
+      const clan = vClans.length > 0 && rng.chance(0.6) ? rng.pick(vClans) : null;
+      const foreignGenin = createWorldNpc(
+        worldSim,
+        {
+          villageId: vDef.id,
+          clanId: clan?.id ?? null,
+          age: rng.int(12, 16),
+          rank: 'genin',
+          specialStatus: 'none',
+          roleTitle: 'Chunin Exam Candidate',
+          roleBias: 'peer',
+          powerScore: rng.int(36, 62),
+          birthYear: year,
+        },
+        usedNames,
+        rng,
+      );
+      worldSim.npcs.push(foreignGenin);
+      seenIds.add(foreignGenin.identity.id);
+      participants.push({
+        npcId: foreignGenin.identity.id,
+        name: foreignGenin.identity.name,
+        villageId: foreignGenin.identity.villageId,
+        clanId: foreignGenin.identity.clanId,
+        powerScore: foreignGenin.identity.powerScore,
+        isTeammate: false,
+        isRival: false,
+        status: 'active',
+      });
+    }
+  }
+
+  const hostVillageId = rng.chance(0.65) ? state.villageId : rng.pick(GREAT_VILLAGES).id;
+  const tourney: ChuninTournamentState = {
+    examYear: year,
+    hostVillageId,
+    stage: 1,
+    participants,
+    prelimOpponentId: null,
+    finalsOpponentId: null,
+    casualties: [],
+    promotedNames: [],
+    completed: false,
+  };
+  state.chuninTournament = tourney;
+  return tourney;
+}
+
+export function advanceChuninTournamentStage(
+  state: GameState,
+  completedStage: ChuninExamStage,
+  rng: SeededRng,
+): string[] {
+  const tourney = state.chuninTournament;
+  const worldSim = state.worldSim;
+  if (!tourney || tourney.completed) return [];
+  const year = state.birthYear + state.age;
+  const notes: string[] = [];
+
+  const npcActives = tourney.participants.filter((p) => p.npcId !== 'player' && p.status === 'active');
+
+  if (completedStage === 1) {
+    // Stage 1 Written Cipher eliminates ~25% of NPCs
+    for (const p of npcActives) {
+      if (rng.chance(clamp(0.32 - (p.powerScore - 40) * 0.008, 0.1, 0.45))) {
+        p.status = 'eliminated_s1';
+        p.eliminationNote = 'failed the Written Cipher';
+      }
+    }
+    const left = tourney.participants.filter((p) => p.status === 'active').length;
+    notes.push(`${left} candidates from across the nations advance from the Written Hall to the Forest of Death.`);
+  } else if (completedStage === 2 || completedStage === 3) {
+    // Forest of Death: ~35% eliminated, rare ~6% genuine casualty among non-teammate NPCs!
+    for (const p of npcActives) {
+      if (completedStage === 2 && rng.chance(0.28)) {
+        p.status = 'eliminated_s2';
+        p.eliminationNote = 'lost their Heaven/Earth scroll in the Forest of Death';
+      } else if (completedStage === 3 && !p.isTeammate && rng.chance(0.06) && tourney.casualties.length < 2) {
+        p.status = 'deceased';
+        p.eliminationNote = 'fell in the Forest of Death';
+        tourney.casualties.push(p.name);
+        const npc = worldSim?.npcs.find((n) => n.identity.id === p.npcId);
+        if (npc && npc.identity.alive) {
+          npc.identity.alive = false;
+          npc.identity.deathAge = npc.identity.age;
+          npc.identity.deathCause = 'killed during the Forest of Death Chunin Exam';
+        }
+        notes.push(`Tragedy in the Forest of Death: ${p.name} (${VILLAGE_MAP[p.villageId].name}) did not make it to the Central Tower alive.`);
+      }
+    }
+    // Pick a surviving Preliminaries opponent for Stage 4
+    const survivingOpps = tourney.participants.filter((p) => p.npcId !== 'player' && p.status === 'active');
+    if (survivingOpps.length > 0 && !tourney.prelimOpponentId) {
+      tourney.prelimOpponentId = rng.pick(survivingOpps).npcId;
+    }
+  } else if (completedStage === 4) {
+    // Preliminaries narrow NPCs down to 3-4 finalists
+    const remaining = tourney.participants.filter((p) => p.npcId !== 'player' && p.status === 'active');
+    for (const p of remaining) {
+      if (p.npcId === tourney.prelimOpponentId) {
+        p.status = 'eliminated_s4';
+        p.eliminationNote = `defeated by ${state.name} in the Tower Preliminaries`;
+        continue;
+      }
+      if (rng.chance(0.45)) {
+        p.status = 'eliminated_s4';
+        p.eliminationNote = 'defeated in the Tower Preliminary bouts';
+      } else {
+        p.status = 'finalist';
+      }
+    }
+    const finalists = tourney.participants.filter((p) => p.npcId !== 'player' && (p.status === 'finalist' || p.status === 'active'));
+    if (finalists.length > 0) {
+      const rivalFinalist = finalists.find((f) => f.isRival) ?? finalists[0];
+      tourney.finalsOpponentId = rivalFinalist.npcId;
+      notes.push(`Stadium Finalists announced, including ${finalists.slice(0, 3).map((f) => f.name).join(', ')}.`);
+    }
+  }
+
+  tourney.stage = Math.min(6, completedStage + 1) as ChuninExamStage;
+  if (tourney.casualties.length > 0 && worldSim && completedStage === 3) {
+    recordTimelineEvent(state, worldSim, {
+      category: 'npc_fate',
+      villageIds: [tourney.hostVillageId],
+      truthTitle: `Chunin Exam Forest Casualties (${year})`,
+      truthSummary: `${tourney.casualties.join(' and ')} perished inside the Forest of Death during the ${VILLAGE_MAP[tourney.hostVillageId].name} Chunin Exams.`,
+      rumorTitle: `Whispers of Harsh Forest Losses at the Chunin Exams`,
+      rumorSummary: `Observers whisper that this year's Forest of Death claimed young Genin lives.`,
+      isSecret: false,
+      immediateChannel: 'newspaper',
+      sourceLabel: 'Chunin Exam Bulletin',
+    });
+  }
+  return notes;
+}
+
+export function finalizeChuninTournament(
+  state: GameState,
+  playerPassed: boolean,
+  rng: SeededRng,
+): { promotedNpcs: string[]; failedRivals: string[]; summary: string } {
+  const tourney = state.chuninTournament;
+  const worldSim = state.worldSim;
+  if (!tourney || tourney.completed) {
+    return { promotedNpcs: [], failedRivals: [], summary: '' };
+  }
+  tourney.completed = true;
+  const year = state.birthYear + state.age;
+  const promotedNpcs: string[] = [];
+  const failedRivals: string[] = [];
+
+  const playerP = tourney.participants.find((p) => p.npcId === 'player');
+  if (playerP) {
+    playerP.status = playerPassed ? 'promoted' : 'eliminated_s4';
+  }
+
+  // Independent NPC winners & failures (friends can win even if player failed!)
+  const contenders = tourney.participants.filter(
+    (p) => p.npcId !== 'player' && (p.status === 'active' || p.status === 'finalist'),
+  );
+  for (const c of contenders) {
+    const promoteProb = clamp(0.28 + (c.powerScore - 42) * 0.015, 0.16, 0.72);
+    const won = rng.chance(promoteProb) && promotedNpcs.length < 3;
+    const npc = worldSim?.npcs.find((n) => n.identity.id === c.npcId);
+    if (won) {
+      c.status = 'promoted';
+      promotedNpcs.push(c.name);
+      tourney.promotedNames.push(c.name);
+      if (npc && npc.identity.alive && npc.identity.rank === 'genin') {
+        npc.identity.rank = 'chunin';
+        npc.identity.roleTitle = 'Village Chunin';
+        npc.identity.powerScore = clamp(npc.identity.powerScore + 6, 10, 99);
+        addNpcMemory(npc, {
+          year,
+          age: npc.identity.age,
+          tag: 'exam',
+          summary: `Earned the Chunin flak jacket at the ${VILLAGE_MAP[tourney.hostVillageId].name} Exams!`,
+          impact: 7,
+        });
+      }
+      if (c.isTeammate && state.team) {
+        const tm = state.team.members.find((m) => m.name === c.name && m.alive);
+        if (tm && tm.rank === 'genin') {
+          tm.rank = 'chunin';
+          tm.fateNote = `Promoted to Chunin at age ${tm.age} in the tournament.`;
+        }
+      }
+    } else {
+      if (c.isRival) failedRivals.push(c.name);
+      if (npc && npc.identity.alive) {
+        addNpcMemory(npc, {
+          year,
+          age: npc.identity.age,
+          tag: 'exam',
+          summary: `Fell short of Chunin promotion in the ${year} Exams.`,
+          impact: -4,
+        });
+      }
+    }
+  }
+
+  const allWinners = [...(playerPassed ? [state.name] : []), ...promotedNpcs];
+  const summary =
+    allWinners.length > 0
+      ? `Chunin Exam ${year} concluded: ${allWinners.join(', ')} earned promotion${tourney.casualties.length > 0 ? `; casualties: ${tourney.casualties.join(', ')}` : ''}.`
+      : `Chunin Exam ${year} concluded with zero candidates deemed ready for Chunin command.`;
+
+  if (worldSim) {
+    recordTimelineEvent(state, worldSim, {
+      category: 'npc_fate',
+      villageIds: [tourney.hostVillageId, state.villageId],
+      truthTitle: `${VILLAGE_MAP[tourney.hostVillageId].name} Chunin Exam Results`,
+      truthSummary: summary,
+      isSecret: false,
+      immediateChannel: 'newspaper',
+      sourceLabel: 'Chunin Exam Proctor Board',
+    });
+  }
+
+  return { promotedNpcs, failedRivals, summary };
 }
 
 /**

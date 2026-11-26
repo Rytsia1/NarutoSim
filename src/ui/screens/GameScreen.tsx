@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { CLAN_MAP } from '../../data/clans';
+import type { GovernanceActionId } from '../../data/events-politics';
 import { t } from '../../data/i18n';
 import { NINDO_MAP } from '../../data/nindo';
 import { ORIGIN_MAP } from '../../data/origins';
@@ -14,8 +15,11 @@ import {
   RANK_KANJI,
 } from '../../data/powers';
 import { kageTitle, VILLAGE_MAP } from '../../data/villages';
+import { getSenseiBiasLabel } from '../../sim/academy';
+import { getBranchLabel } from '../../sim/clan-heritage';
 import { canEnterRetirement } from '../../sim/epilogue';
 import { computeCombatProjection, getChakraCap, XP_NEED_FOR_NEXT } from '../../sim/powers';
+import { deriveRelArchetype } from '../../sim/relationships';
 import { getRelStageLabel, getTrustTier } from '../../sim/team';
 import type { FocusId, GameState } from '../../sim/types';
 import { canCallDiplomaticSummit, getTensionLabel, MAX_CRISIS_CLUES } from '../../sim/world';
@@ -35,6 +39,8 @@ interface GameScreenProps {
   onResolve: (optionId: string, freeText?: string) => void;
   onRetire: () => void;
   onCallSummit?: () => void;
+  onInvestigateTimeline?: (eventId: string) => void;
+  onGovernanceAction?: (actionId: GovernanceActionId) => void;
   onOpenSettings: () => void;
   onBackToLobby: () => void;
 }
@@ -54,6 +60,8 @@ export function GameScreen({
   onResolve,
   onRetire,
   onCallSummit,
+  onInvestigateTimeline,
+  onGovernanceAction,
   onOpenSettings,
   onBackToLobby,
 }: GameScreenProps) {
@@ -376,6 +384,70 @@ export function GameScreen({
                     </div>
                   </div>
                 </div>
+                {state.rank === 'academy' && state.academy && (
+                  <div className="disc-item" style={{ marginTop: 12, borderColor: 'var(--accent-gold)' }}>
+                    <div className="disc-head">
+                      <span>Shinobi Academy Report</span>
+                      <span className="status-tag tabular">Class Rank #{state.academy.classRank}/6</span>
+                    </div>
+                    <div className="disc-sub" style={{ marginTop: 4 }}>
+                      Instructor: <strong>{state.academy.senseiName}</strong> ({getSenseiBiasLabel(state.academy.senseiBias)})
+                      {state.academy.favoredBySensei ? ' | Favored' : ''}
+                    </div>
+                    <div className="chip-row tabular" style={{ marginTop: 6 }}>
+                      <span className="chip">Academics {state.academy.academics}%</span>
+                      <span className="chip">Bunshin {state.academy.bunshin}%</span>
+                      <span className="chip">Henge {state.academy.henge}%</span>
+                      <span className="chip">Kawarimi {state.academy.kawarimi}%</span>
+                      <span className="chip">
+                        Sparring {state.academy.sparringWins}W-{state.academy.sparringLosses}L
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {state.clanHeritage && CLAN_MAP[state.clanHeritage.clanId] && (
+                  <div className="disc-item" style={{ marginTop: 10 }}>
+                    <div className="disc-head">
+                      <span>{CLAN_MAP[state.clanHeritage.clanId].name} Heritage</span>
+                      <span className="status-tag">{getBranchLabel(state.clanHeritage.lineageBranch)}</span>
+                    </div>
+                    <div className="chip-row tabular" style={{ marginTop: 6 }}>
+                      <span className="chip">Compat {state.clanHeritage.compatibility}%</span>
+                      <span className="chip">Standing {state.clanHeritage.clanStanding}</span>
+                      <span className="chip">Catalyst {state.clanHeritage.traumaCatalyst}%</span>
+                      {state.clanHeritage.isDesignatedHeir && <span className="chip pos">Heir Candidate</span>}
+                      {state.clanHeritage.cagedBirdSealed && <span className="chip neg">Caged Bird Seal</span>}
+                    </div>
+                    <div className="disc-sub" style={{ marginTop: 4 }}>
+                      <strong>Unlocked Hiden:</strong>{' '}
+                      {state.clanHeritage.unlockedHiden.length > 0
+                        ? state.clanHeritage.unlockedHiden
+                            .map((hId) => CLAN_MAP[state.clanHeritage!.clanId]?.hidenArts.find((a) => a.id === hId)?.name ?? hId)
+                            .join(', ')
+                        : 'None unlocked yet (requires compatibility, standing & training)'}
+                    </div>
+                  </div>
+                )}
+
+                {state.missionConsequences && state.missionConsequences.length > 0 && (
+                  <div className="disc-item" style={{ marginTop: 10, borderColor: 'var(--accent-crimson)' }}>
+                    <div className="disc-head">
+                      <span>Active Mission Fallout ({state.missionConsequences.length})</span>
+                    </div>
+                    <div className="stat-list" style={{ marginTop: 4 }}>
+                      {state.missionConsequences.map((mc) => (
+                        <div key={mc.id} className="disc-sub">
+                          <span className={`chip ${mc.kind === 'comrade_debt' ? 'pos' : 'neg'}`} style={{ marginRight: 6 }}>
+                            {mc.kind.replace('_', ' ')}
+                          </span>
+                          {mc.detail}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {state.nindo && NINDO_MAP[state.nindo] && (
                   <div className="disc-item" style={{ marginTop: 12, borderColor: 'var(--accent-gold)' }}>
                     <div className="disc-head">
@@ -592,6 +664,16 @@ export function GameScreen({
                         {getRelStageLabel(m)}
                         {m.promiseMade ? ' | Oath Kept' : ''}
                       </div>
+                      {m.rel6 && (
+                        <div className="chip-row tabular" style={{ marginTop: 4, marginBottom: 4 }}>
+                          <span className="chip pos">{deriveRelArchetype(m.rel6, m.playerFeelings)}</span>
+                          <span className="chip">Aff {m.rel6.affection}</span>
+                          <span className="chip">Resp {m.rel6.respect}</span>
+                          <span className="chip">Riv {m.rel6.rivalry}</span>
+                          {m.rel6.fear >= 25 && <span className="chip">Fear {m.rel6.fear}</span>}
+                          {m.rel6.resentment >= 25 && <span className="chip neg">Resent {m.rel6.resentment}</span>}
+                        </div>
+                      )}
                       <div className="bar-track">
                         <div className="bar-fill health" style={{ width: `${m.trust}%` }} />
                       </div>
@@ -627,7 +709,13 @@ export function GameScreen({
             </section>
           )}
 
-          {tab === 'world' && <WorldSimulationPanel state={state} />}
+          {tab === 'world' && (
+            <WorldSimulationPanel
+              state={state}
+              onInvestigateTimeline={onInvestigateTimeline}
+              onGovernanceAction={onGovernanceAction}
+            />
+          )}
 
           {tab === 'wars' && (
             <section className="panel">

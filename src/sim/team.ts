@@ -2,6 +2,7 @@ import { DISCIPLINE_MAP } from '../data/powers';
 import { SENSEI_ARCHETYPES, TEAMMATE_ARCHETYPES } from '../data/events-team';
 import { VILLAGE_MAP } from '../data/villages';
 import { clamp } from './powers';
+import { syncKizunaMemberRel6 } from './relationships';
 import type { SeededRng } from './rng';
 import type { GameState, KizunaMember, PendingDecision, TeamState, TraitId } from './types';
 
@@ -104,6 +105,16 @@ export function adjustMemberTrust(
 
   const before = member.trust;
   member.trust = clamp(member.trust + delta, 0, 100);
+  syncKizunaMemberRel6(member, state.rivalId === member.id);
+  if (member.rel6) {
+    member.rel6.trust = member.trust;
+    if (delta > 0) {
+      member.rel6.affection = clamp(member.rel6.affection + Math.ceil(delta * 0.6), 0, 100);
+      member.rel6.respect = clamp(member.rel6.respect + Math.ceil(delta * 0.4), 0, 100);
+    } else if (delta < 0) {
+      member.rel6.resentment = clamp(member.rel6.resentment + Math.ceil(Math.abs(delta) * 0.6), 0, 100);
+    }
+  }
 
   if (unlockFragment && member.fragments < 3 && member.trust >= 40) {
     member.fragments += 1;
@@ -167,42 +178,69 @@ export function formGeninTeam(state: GameState, rng: SeededRng): TeamState {
   sensei.fit = computeLiveFit(state, sensei);
   sensei.trust = clamp(24 + Math.round(sensei.fit * 0.35), 25, 60);
 
-  // Pick 2 distinct teammate archetypes
+  // Pick 2 distinct teammate archetypes, pulling real Academy classmates when available!
   const pool = [...TEAMMATE_ARCHETYPES];
   const arch1 = rng.pick(pool);
   const remaining = pool.filter((a) => a.id !== arch1.id);
   const arch2 = rng.pick(remaining);
 
+  const acadPeers =
+    state.academy && state.worldSim
+      ? state.academy.classmateNpcIds
+          .map((cid) => state.worldSim!.npcs.find((n) => n.identity.id === cid && n.identity.alive))
+          .filter((n): n is NonNullable<typeof n> => Boolean(n))
+      : [];
+
   const teammates: KizunaMember[] = [arch1, arch2].map((arch, index) => {
-    const sex: 'M' | 'F' = index === 0 ? (state.sex === 'M' ? 'F' : 'M') : rng.chance(0.5) ? 'M' : 'F';
+    const peerNpc = acadPeers[index];
+    const sex: 'M' | 'F' =
+      peerNpc?.identity.sex ?? (index === 0 ? (state.sex === 'M' ? 'F' : 'M') : rng.chance(0.5) ? 'M' : 'F');
+    const mateName = peerNpc ? peerNpc.identity.name : generateNpcName(state, rng, sex, usedNames);
     const mate: KizunaMember = {
       id: `mate_${teamNumber}_${index + 1}`,
-      name: generateNpcName(state, rng, sex, usedNames),
+      name: mateName,
       sex,
-      age: Math.max(10, state.age + rng.int(-1, 1)),
+      age: peerNpc?.identity.age ?? Math.max(10, state.age + rng.int(-1, 1)),
       role: 'teammate',
       archetype: arch.label,
       rank: 'genin',
       specialStatus: 'none',
       alive: true,
-      specialty: rng.pick(arch.specialties),
+      specialty: peerNpc?.identity.specialty ?? rng.pick(arch.specialties),
       traits: [...arch.traits],
-      trust: 34,
+      trust: peerNpc?.relationships.player?.trust ?? 34,
       fit: 55,
       relTrack: 'comrades',
       relStage: 0,
       relPoints: 0,
       fragments: 0,
       promiseMade: false,
-      powerScore: rng.int(34, 48),
+      powerScore: Math.max(34, peerNpc?.identity.powerScore ?? rng.int(34, 48)),
       lastUpdateAge: state.age,
-      fateNote: `Genin squadmate in Team ${teamNumber}. ${arch.introLine}`,
+      fateNote: peerNpc
+        ? `Former Academy classmate now assigned to Team ${teamNumber}. ${arch.introLine}`
+        : `Genin squadmate in Team ${teamNumber}. ${arch.introLine}`,
     };
     mate.fit = computeLiveFit(state, mate);
-    mate.trust = clamp(22 + Math.round(mate.fit * 0.35), 22, 58);
+    if (!peerNpc?.relationships.player) {
+      mate.trust = clamp(22 + Math.round(mate.fit * 0.35), 22, 58);
+    }
+    if (peerNpc) {
+      peerNpc.identity.linkedTeamMemberId = mate.id;
+      peerNpc.identity.rank = 'genin';
+      peerNpc.identity.roleTitle = `Team ${teamNumber} Squadmate`;
+      if (peerNpc.relationships.player?.vector) {
+        mate.rel6 = { ...peerNpc.relationships.player.vector };
+      }
+      if (peerNpc.relationships.player?.reciprocal) {
+        mate.playerFeelings = { ...peerNpc.relationships.player.reciprocal };
+      }
+    }
+    syncKizunaMemberRel6(mate, index === 0);
     return mate;
   });
 
+  syncKizunaMemberRel6(sensei, false);
   return {
     number: teamNumber,
     active: true,

@@ -512,6 +512,9 @@ export interface KizunaMember {
   powerScore: number;
   lastUpdateAge: number;
   fateNote: string;
+  /** Relationship Sim 2.0 vectors (mirrored with WorldNpc) */
+  rel6?: RelVector6;
+  playerFeelings?: RelVector6;
 }
 
 export interface TeamState {
@@ -610,6 +613,17 @@ export interface VillageClanState {
   headNpcId: string | null;
 }
 
+export interface VillagePoliticsState {
+  corruption: number; // 0..100
+  factions: {
+    hawks: number; // 0..100
+    doves: number; // 0..100
+    elders: number; // 0..100
+    clans: number; // 0..100
+  };
+  activeDirectives: string[];
+}
+
 export interface VillageSimState {
   villageId: VillageId;
   kageNpcId: string | null; // WorldNpc id or 'player'
@@ -639,6 +653,7 @@ export interface VillageSimState {
     readiness: number; // 0..100
   };
   clans: VillageClanState[];
+  politics?: VillagePoliticsState;
   treasury: number; // 0..100
   military: number; // 0..100
   morale: number; // 0..100
@@ -686,13 +701,26 @@ export type NpcRelationKind =
   | 'enemy'
   | 'ally';
 
+export interface RelVector6 {
+  trust: number; // 0..100
+  affection: number; // 0..100
+  respect: number; // 0..100
+  fear: number; // 0..100
+  rivalry: number; // 0..100
+  resentment: number; // 0..100
+}
+
 export interface NpcRelationship {
   targetId: string; // WorldNpc id or 'player'
   targetName: string;
   kind: NpcRelationKind;
-  affinity: number; // -100..100
-  trust: number; // 0..100
-  grudge: number; // 0..100
+  affinity: number; // -100..100 (legacy compatible)
+  trust: number; // 0..100 (legacy compatible)
+  grudge: number; // 0..100 (legacy compatible)
+  /** Relationship Sim 2.0: 6-axis how THIS NPC feels about target */
+  vector?: RelVector6;
+  /** Relationship Sim 2.0: 6-axis how target (e.g. Player) feels about this NPC */
+  reciprocal?: RelVector6;
 }
 
 export type NpcMemoryTag =
@@ -802,6 +830,166 @@ export interface WorldHistoryEntry {
   tone: 'normal' | 'milestone' | 'danger' | 'bond' | 'war' | 'crisis';
 }
 
+export type DiscoveryChannel =
+  | 'hidden'
+  | 'rumor'
+  | 'newspaper'
+  | 'mission_report'
+  | 'npc_talk'
+  | 'anbu_dossier';
+
+export type TimelineCategory =
+  | 'diplomacy'
+  | 'military'
+  | 'economy'
+  | 'clan'
+  | 'npc_fate'
+  | 'covert'
+  | 'disaster';
+
+export interface TimelineEvent {
+  id: string;
+  year: number;
+  eraYear: number;
+  category: TimelineCategory;
+  villageIds: VillageId[];
+  npcIds: string[];
+  truthTitle: string;
+  truthSummary: string;
+  rumorTitle: string;
+  rumorSummary: string;
+  isSecret: boolean;
+  knownByPlayer: boolean;
+  playerKnowsTruth: boolean;
+  discoveryChannel: DiscoveryChannel;
+  discoveredYear?: number;
+  sourceLabel?: string;
+}
+
+export type SenseiBias = 'clan_heirs' | 'top_scorers' | 'underdogs' | 'strict_drill';
+
+export interface AcademyState {
+  enrolledAge: number;
+  senseiNpcId: string;
+  senseiName: string;
+  senseiBias: SenseiBias;
+  classmateNpcIds: string[];
+  academics: number; // 0..100
+  bunshin: number; // 0..100
+  henge: number; // 0..100
+  kawarimi: number; // 0..100
+  sparringWins: number;
+  sparringLosses: number;
+  classRank: number; // 1..6
+  favoredBySensei: boolean;
+  bullyNpcId: string | null;
+  usedAcademyEvents: string[];
+}
+
+export type ChuninParticipantStatus =
+  | 'active'
+  | 'eliminated_s1'
+  | 'eliminated_s2'
+  | 'eliminated_s4'
+  | 'finalist'
+  | 'promoted'
+  | 'deceased';
+
+export interface ChuninParticipant {
+  npcId: string; // 'player' or WorldNpc id
+  name: string;
+  villageId: VillageId;
+  clanId: string | null;
+  powerScore: number;
+  isTeammate: boolean;
+  isRival: boolean;
+  status: ChuninParticipantStatus;
+  eliminationNote?: string;
+}
+
+export interface ChuninTournamentState {
+  examYear: number;
+  hostVillageId: VillageId;
+  stage: ChuninExamStage;
+  participants: ChuninParticipant[];
+  prelimOpponentId: string | null;
+  finalsOpponentId: string | null;
+  casualties: string[];
+  promotedNames: string[];
+  completed: boolean;
+}
+
+export type LineageBranch =
+  | 'main_heir'
+  | 'main_cadets'
+  | 'branch_house'
+  | 'distant_blood'
+  | 'mixed_blood';
+
+export interface ClanHeritageState {
+  clanId: string;
+  lineageBranch: LineageBranch;
+  compatibility: number; // 0..100
+  familyExpectation: number; // 0..100
+  traumaCatalyst: number; // 0..100
+  unlockedHiden: string[];
+  hidenMastery: Record<string, 1 | 2 | 3>;
+  clanStanding: number; // 0..100
+  isDesignatedHeir: boolean;
+  cagedBirdSealed: boolean;
+  obligationsCompleted: number;
+  internalFactionTension: number; // 0..100
+  lastClanEventAge: number;
+}
+
+export type MissionApproachId =
+  | 'negotiate'
+  | 'disguise'
+  | 'infiltrate'
+  | 'gather_intel'
+  | 'trap'
+  | 'combat'
+  | 'retreat'
+  | 'save_comrades';
+
+export type MissionOutcomeTier = 'success' | 'partial_success' | 'failure';
+
+export interface GeneratedMission {
+  id: string;
+  rank: 'D' | 'C' | 'B' | 'A' | 'S';
+  title: string;
+  objective: string;
+  location: string;
+  client: string;
+  threat: string;
+  threatNpcId?: string;
+  constraint: string;
+  squadLabel: string;
+  hiddenComplicationId: string;
+  hiddenComplicationTitle: string;
+  hiddenComplicationDetail: string;
+  complicationRevealed: boolean;
+  difficulty: number;
+  ryoReward: number;
+  xpReward: number;
+  stage: 1 | 2 | 3;
+  approachScore: number;
+  constraintIntact: boolean;
+  chosenApproach?: MissionApproachId;
+}
+
+export interface MissionConsequence {
+  id: string;
+  createdAge: number;
+  expiresAge: number;
+  kind: 'vendetta' | 'reputation_hit' | 'diplomatic_scandal' | 'comrade_debt' | 'intel_edge';
+  title: string;
+  detail: string;
+  npcId?: string;
+  villageId?: VillageId;
+  resolved: boolean;
+}
+
 export interface WorldSimState {
   economy: number; // 0..100
   economyTrend: EconomyTrend;
@@ -811,6 +999,7 @@ export interface WorldSimState {
   villages: Record<VillageId, VillageSimState>;
   npcs: WorldNpc[];
   history: WorldHistoryEntry[];
+  timeline?: TimelineEvent[];
   nextNpcSeq: number;
   lastEmergentAge: number;
 }
@@ -850,6 +1039,7 @@ export interface DecisionOption {
 export type DecisionKind =
   | 'focus_initial'
   | 'academy_choice'
+  | 'academy_event'
   | 'graduation_exam'
   | 'bell_test'
   | 'nindo_choice'
@@ -861,12 +1051,15 @@ export type DecisionKind =
   | 'bloodline_event'
   | 'discipline_advance'
   | 'clan_legacy'
+  | 'clan_politics'
   | 'life_event'
   | 'growth_event'
   | 'team_event'
   | 'mission_board'
+  | 'mission_stage'
   | 'mission_event'
   | 'world_emergent'
+  | 'politics_event'
   | 'crisis_whisper'
   | 'war_prelude'
   | 'war_day'
@@ -989,6 +1182,13 @@ export interface GameState {
 
   family: FamilyMember[];
   team: TeamState | null;
+  academy?: AcademyState | null;
+  chuninTournament?: ChuninTournamentState | null;
+  clanHeritage?: ClanHeritageState | null;
+  activeMission?: GeneratedMission | null;
+  missionConsequences?: MissionConsequence[];
+  lastGovernanceAge?: number;
+  lastPoliticsAge?: number;
   permanentPartner?: PermanentPartnerRecord | null;
   summonContract?: SummonContractState | null;
   nindo?: NindoId;

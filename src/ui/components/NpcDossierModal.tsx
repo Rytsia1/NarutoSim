@@ -8,12 +8,42 @@ import {
   getPrimaryPersonalityTags,
   getScheduleLabel,
 } from '../../sim/npc-sim';
-import type { WorldNpc } from '../../sim/types';
+import { deriveRelArchetype, getReciprocalVector, getRelVector } from '../../sim/relationships';
+import type { RelVector6, WorldNpc } from '../../sim/types';
 
 interface NpcDossierModalProps {
   npc: WorldNpc | null;
   onClose: () => void;
   onSelectNpcId?: (npcId: string) => void;
+}
+
+function RelVectorBars({ title, vec }: { title: string; vec: RelVector6 }) {
+  const axes: { label: string; val: number; barClass?: string }[] = [
+    { label: 'Trust', val: vec.trust, barClass: 'health' },
+    { label: 'Affection', val: vec.affection, barClass: 'health' },
+    { label: 'Respect', val: vec.respect, barClass: 'chakra' },
+    { label: 'Fear', val: vec.fear },
+    { label: 'Rivalry', val: vec.rivalry },
+    { label: 'Resentment', val: vec.resentment, barClass: 'tension' },
+  ];
+  return (
+    <div className="disc-item" style={{ padding: '8px 10px' }}>
+      <div className="disc-sub" style={{ fontWeight: 600, marginBottom: 4 }}>
+        {title}
+      </div>
+      <div className="stat-list tabular">
+        {axes.map((ax) => (
+          <div key={ax.label} className="stat-row">
+            <span>{ax.label}</span>
+            <div className="bar-track">
+              <div className={`bar-fill ${ax.barClass ?? ''}`} style={{ width: `${ax.val}%` }} />
+            </div>
+            <span>{ax.val}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 export function NpcDossierModal({ npc, onClose, onSelectNpcId }: NpcDossierModalProps) {
@@ -34,6 +64,11 @@ export function NpcDossierModal({ npc, onClose, onSelectNpcId }: NpcDossierModal
   const clan = identity.clanId ? CLAN_MAP[identity.clanId] : null;
   const primaryTags = getPrimaryPersonalityTags(personality);
   const relList = Object.values(relationships);
+  const playerRel = relationships.player;
+  const npcToPlayerVec = playerRel ? getRelVector(playerRel) : null;
+  const playerToNpcVec = playerRel ? getReciprocalVector(playerRel) : null;
+  const playerArchetype =
+    npcToPlayerVec && playerToNpcVec ? deriveRelArchetype(npcToPlayerVec, playerToNpcVec) : null;
   const newestMemories = [...memory].reverse();
 
   const personalityRows: { label: string; value: number }[] = [
@@ -147,34 +182,49 @@ export function NpcDossierModal({ npc, onClose, onSelectNpcId }: NpcDossierModal
           </section>
         </div>
 
-        {/* 5. RELATIONSHIPS */}
+        {/* 5. RELATIONSHIP 2.0 (BIDIRECTIONAL 6-AXIS BOND WITH PLAYER) */}
+        {npcToPlayerVec && playerToNpcVec && (
+          <section className="disc-item" style={{ marginTop: 10, borderColor: 'var(--accent-gold)' }}>
+            <div className="disc-head" style={{ marginBottom: 6 }}>
+              <span>Bidirectional Bond (Relationship 2.0)</span>
+              <span className="status-tag">{playerArchetype}</span>
+            </div>
+            <div className="npc-dossier-grid">
+              <RelVectorBars title={`${identity.name} -> You`} vec={npcToPlayerVec} />
+              <RelVectorBars title={`You -> ${identity.name}`} vec={playerToNpcVec} />
+            </div>
+          </section>
+        )}
+
+        {/* ALL NPC NETWORK RELATIONSHIPS */}
         <section className="disc-item" style={{ marginTop: 10 }}>
           <div className="disc-head">
-            <span>Relationships ({relList.length})</span>
+            <span>All Relationships ({relList.length})</span>
           </div>
           {relList.length === 0 ? (
             <div className="disc-sub">No prominent recorded ties yet.</div>
           ) : (
             <div className="chip-row" style={{ marginTop: 6 }}>
               {relList.map((rel) => {
+                const vec = getRelVector(rel);
+                const arch = deriveRelArchetype(vec);
                 const clickable = rel.targetId !== 'player' && Boolean(onSelectNpcId);
                 return clickable ? (
                   <button
                     key={rel.targetId}
                     type="button"
-                    className={`chip chip-btn ${rel.kind === 'enemy' ? 'neg' : rel.kind === 'spouse' || rel.kind === 'friend' || rel.kind === 'mentor' ? 'pos' : ''}`}
+                    className={`chip chip-btn ${rel.kind === 'enemy' || vec.resentment >= 60 ? 'neg' : rel.kind === 'spouse' || rel.kind === 'friend' || rel.kind === 'mentor' ? 'pos' : ''}`}
                     onClick={() => onSelectNpcId?.(rel.targetId)}
-                    title={`Trust ${rel.trust} | Affinity ${rel.affinity} | Grudge ${rel.grudge}`}
+                    title={`Trust ${vec.trust} | Aff ${vec.affection} | Resp ${vec.respect} | Fear ${vec.fear} | Riv ${vec.rivalry} | Resent ${vec.resentment}`}
                   >
-                    {rel.targetName} ({rel.kind}, Trust {rel.trust})
+                    {rel.targetName} ({rel.kind}: {arch})
                   </button>
                 ) : (
                   <span
                     key={rel.targetId}
-                    className={`chip ${rel.kind === 'enemy' ? 'neg' : rel.trust >= 60 ? 'pos' : ''}`}
-                    title={`Trust ${rel.trust} | Affinity ${rel.affinity} | Grudge ${rel.grudge}`}
+                    className={`chip ${rel.kind === 'enemy' || vec.resentment >= 60 ? 'neg' : vec.trust >= 60 ? 'pos' : ''}`}
                   >
-                    {rel.targetName} ({rel.kind}, Trust {rel.trust})
+                    {rel.targetName} ({rel.kind}: {arch})
                   </span>
                 );
               })}

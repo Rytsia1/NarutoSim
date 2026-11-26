@@ -3,6 +3,7 @@ import { BLOODLINE_MAP, DISCIPLINE_MAP, ELEMENT_NAMES } from '../data/powers';
 import { ARCHETYPE_AVG, ELEMENT_BEATS, ROSTER_MAP } from '../data/roster';
 import { getSummonPowerTier, SUMMON_CLAN_MAP } from '../data/summons';
 import { modRel } from './ai';
+import { getUnlockedHidenCombatBonus } from './clan-heritage';
 import { recordWarFact } from './narrative';
 import { applyResolvePartnerReaction, syncPartnerBackToState } from './partner';
 import { clamp, computeCombatProjection } from './powers';
@@ -1241,8 +1242,9 @@ export function resolveBattleRound(
   const { power: pBase, topFactor } = computePlayerRoundPower(state, war, enemy, battle);
   const eBase = computeEnemyRoundPower(war, enemy, battle);
 
-  // Narrowed noise U(-14, 14) per side (GDD Ch. 14 R4!)
-  const pRoll = pBase + rng.int(-14, 14);
+  // Narrowed noise U(-14, 14) per side (GDD Ch. 14 R4!) + unlocked Clan Hiden Secret Art bonus
+  const hidenBonus = getUnlockedHidenCombatBonus(state);
+  const pRoll = pBase + hidenBonus + rng.int(-14, 14);
   const eRoll = eBase + rng.int(-14, 14);
   const diff = pRoll - eRoll;
 
