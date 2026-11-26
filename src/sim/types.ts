@@ -94,8 +94,6 @@ export interface CustomBuildConfig {
 
 export type SummonClanId = 'toad' | 'snake' | 'slug' | 'hound' | 'hawk' | 'ape';
 
-export type OdActionId = 'od_summon' | 'od_heal' | 'od_ward' | 'od_clone';
-
 export type PartnerTrustTier = 'distrust' | 'steady' | 'trusted' | 'bond';
 
 export interface WarPartnerState {
@@ -267,6 +265,24 @@ export interface UltimateDef {
   desc: string;
 }
 
+export type NpcOfficialRank = 'genin' | 'chunin' | 'tokubetsu_jonin' | 'jonin' | 'kage';
+export type ThreatClass = 'D' | 'C' | 'B' | 'A' | 'S';
+export type CombatTier =
+  | 'academy'
+  | 'genin'
+  | 'chunin'
+  | 'jonin'
+  | 'elite_jonin'
+  | 'kage_class'
+  | 'legendary';
+export type PowerGapLabel =
+  | 'Overwhelming'
+  | 'Major disadvantage'
+  | 'Disadvantage'
+  | 'Competitive'
+  | 'Advantage'
+  | 'Dominant';
+
 export interface WarCompetitor {
   id: string;
   rosterId: string;
@@ -276,6 +292,9 @@ export interface WarCompetitor {
   archetype: CombatArchetype;
   tactic: NpcTactic;
   element: ChakraElement;
+  officialRank: NpcOfficialRank;
+  formerShinobi?: boolean;
+  threatClass: ThreatClass;
   ranks: [number, number, number, number, number]; // [tai, spd, sta, chk, ins]
   skills: { name: string; tag: SkillTag; rank: number }[];
   ultimate: UltimateDef;
@@ -375,9 +394,6 @@ export interface ActiveBattleState {
   usedNindoResolve?: boolean;
   partnerIntercepted?: boolean;
   resolveBoostThisRound: boolean;
-  od: number;
-  odMax: number;
-  odUsedCount: number;
   rounds: BattleRoundSummary[];
 }
 
@@ -1285,6 +1301,7 @@ export interface GameState {
   leaningAnnounced: Record<LeaningKey, number>;
 
   disciplines: DisciplineProgress[];
+  jutsuMastery?: Record<string, number>;
   bloodline: BloodlineState | null;
   hasClanLegacy: boolean;
   legacyScar: boolean;

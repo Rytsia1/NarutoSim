@@ -71,7 +71,6 @@ import type {
   GameState,
   LeaningKey,
   NindoId,
-  OdActionId,
   PendingDecision,
   ScenarioConfig,
   StatDeltaChip,
@@ -81,6 +80,7 @@ import type {
 import {
   BIJUU_LIST,
   buildWarPreludeDecision,
+  GENIN_DRAFT_CHANCE,
   MAX_CRISIS_CLUES,
   rollSeededCrisis,
   tickWorldTension,
@@ -499,6 +499,7 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
     },
 
     disciplines: startDisc ? [startDisc] : [],
+    jutsuMastery: {},
     bloodline,
     hasClanLegacy: false,
     legacyScar: false,
@@ -1238,7 +1239,9 @@ export function advanceYear(state: GameState): void {
     if (worldTick.isCrisisWar) {
       state.world.crisisStage = 2;
     }
-    nextDecision = buildWarPreludeDecision(state, worldTick.isCrisisWar);
+    const geninDeployed =
+      state.rank === 'genin' && (worldTick.isCrisisWar || rng.chance(GENIN_DRAFT_CHANCE));
+    nextDecision = buildWarPreludeDecision(state, worldTick.isCrisisWar, geninDeployed);
   }
 
   // Priority 5: Academy Graduation Exam
@@ -1401,7 +1404,6 @@ export function resolvePendingDecision(
   state: GameState,
   optionId: string,
   freeText?: string,
-  odAction?: OdActionId,
 ): void {
   const decision = state.pending;
   if (!decision) return;
@@ -1426,7 +1428,7 @@ export function resolvePendingDecision(
       decision.kind === 'war_conviction_duel') &&
     state.war
   ) {
-    handleWarDecision(state, optionId, rng, odAction);
+    handleWarDecision(state, optionId, rng);
     state.rng = rng.snapshot();
     return;
   }
@@ -1439,7 +1441,6 @@ export function resolvePendingDecision(
       decision,
       optionId,
       freeText,
-      odAction,
       rng,
       bus: defaultDomainBus,
     });
@@ -2736,8 +2737,55 @@ export function resolvePendingDecision(
     case 'war_prelude': {
       const isCrisisWar = Boolean(decision.meta?.isCrisisWar);
       const warNum = Number(decision.meta?.warNum ?? state.world.eraNumber);
+      const isGeninHomeFront = state.rank === 'genin' && decision.meta?.geninDeployed === false;
 
-      if (state.rank === 'civilian') {
+      if (state.rank === 'civilian' || isGeninHomeFront) {
+        if (isGeninHomeFront) {
+          const raidDeath = optionId === 'home_patrols' && rng.chance(0.04);
+          if (raidDeath) {
+            killCharacter(state, `killed repelling an enemy border raid during Great Shinobi War #${warNum}`);
+            break;
+          }
+          if (optionId === 'home_patrols') {
+            state.stats.will += 4;
+            state.stats.health -= 4;
+          } else {
+            state.stats.bonds += 5;
+            state.stats.intel += 3;
+          }
+          clampStats(state);
+          if (state.stats.health <= 0) {
+            killCharacter(state, `exhaustion during perimeter watch in Great Shinobi War #${warNum}`);
+            break;
+          }
+          state.warHistory.push({
+            warNumber: warNum,
+            ageAtStart: state.age,
+            rankAtStart: state.rank,
+            isCrisisWar: false,
+            crisisId: 'none',
+            outcome: 'survived',
+            title: `Home Front Watch of War #${warNum}`,
+            fieldPromoted: false,
+            summary:
+              optionId === 'home_patrols'
+                ? 'Held outer village patrol lines while senior shinobi fought at the front.'
+                : 'Ran medical and supply relays between the village hospital and gates.',
+          });
+          state.world.warsSurvived += 1;
+          state.world.eraNumber += 1;
+          state.world.lastWarAge = state.age;
+          state.world.tension = rng.int(10, 22);
+          state.world.omenActive = false;
+          pushLog(
+            state,
+            'war',
+            `Great Shinobi War #${warNum} ends along the frontier. Held back on home-front duty as a Genin, you helped keep the village standing until the veterans returned.`,
+            { title: `War #${warNum} Home Front Duty`, deltas: diffStats(before, state.stats) },
+          );
+          break;
+        }
+
         const died = optionId === 'aid_wounded' && rng.chance(0.14);
         if (died) {
           killCharacter(state, `caught in crossfire during Great Shinobi War #${warNum}`);
@@ -2757,7 +2805,7 @@ export function resolvePendingDecision(
         state.warHistory.push({
           warNumber: warNum,
           ageAtStart: state.age,
-          rankAtStart: 'civilian',
+          rankAtStart: state.rank,
           isCrisisWar: false,
           crisisId: 'none',
           outcome: 'survived',
@@ -2831,11 +2879,16 @@ export function resolvePendingDecision(
       const approach: 'front' | 'flank' = optionId === 'deploy_front' ? 'front' : 'flank';
       state.phase = 'war';
       state.war = initWarState(state, rng, isCrisisWar, approach);
+      const deployTitle = isCrisisWar
+        ? `Endgame Crisis War #${warNum} (14 Days)`
+        : state.rank === 'genin'
+          ? 'Emergency Genin Draft'
+          : `Great Shinobi War #${warNum} (14 Days)`;
       pushLog(
         state,
         isCrisisWar ? 'crisis' : 'war',
         `You march into ${isCrisisWar ? 'the Endgame Crisis War' : `Great Shinobi War #${warNum}`} via the ${approach === 'front' ? 'contested front' : 'reconnaissance flank'}. ${state.war.enemies.length} rival shinobi operate across the 14-day sector.`,
-        { title: isCrisisWar ? `Endgame Crisis War #${warNum} (14 Days)` : `Great Shinobi War #${warNum} (14 Days)` },
+        { title: deployTitle },
       );
       queueWarStart(state.war);
       break;

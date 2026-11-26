@@ -8,7 +8,6 @@ import type {
   GameState,
   LifeRecord,
   MetaState,
-  OdActionId,
   ScenarioConfig,
 } from '../../sim/types';
 import { soundEngine } from '../audio/soundEngine';
@@ -284,9 +283,9 @@ export function useShinobiSim() {
     setView('playing');
   }, [savedLife]);
 
-  const resolve = useCallback((optionId: string, freeText?: string, odAction?: OdActionId) => {
+  const resolve = useCallback((optionId: string, freeText?: string) => {
     soundEngine.playSfx('click', simRef.current!.getState().speed);
-    simRef.current!.resolve(optionId, freeText, odAction);
+    simRef.current!.resolve(optionId, freeText);
   }, []);
 
   const setSpeed = useCallback((sp: 1 | 2 | 4 | 8) => {

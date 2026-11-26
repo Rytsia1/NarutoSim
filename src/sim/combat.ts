@@ -1,4 +1,11 @@
-import { formatHandSeals, pickPlayerJutsu } from '../data/jutsu';
+import {
+  formatHandSeals,
+  getJutsuBasePower,
+  getJutsuMasteryInfo,
+  getKnownJutsu,
+  getNextTierLockedJutsu,
+  type JutsuDefinition,
+} from '../data/jutsu';
 import { BLOODLINE_MAP, DISCIPLINE_MAP, ELEMENT_NAMES } from '../data/powers';
 import { ARCHETYPE_AVG, ELEMENT_BEATS, ROSTER_MAP } from '../data/roster';
 import { getSummonPowerTier, SUMMON_CLAN_MAP } from '../data/summons';
@@ -12,14 +19,37 @@ import type {
   ActiveBattleState,
   BattleRoundSummary,
   ChakraElement,
+  CombatTier,
   GameState,
-  OdActionId,
+  NpcOfficialRank,
   PendingDecision,
+  PowerGapLabel,
   SkillTag,
   UltimateScope,
   WarCompetitor,
   WarState,
 } from './types';
+
+export const POWER_PER_RANK = 20;
+export const MAX_EXCHANGE_DAMAGE = 40;
+
+export const COMBAT_TIER_LABELS: Record<CombatTier, string> = {
+  academy: 'Academy',
+  genin: 'Genin',
+  chunin: 'Chunin',
+  jonin: 'Jonin',
+  elite_jonin: 'Elite Jonin',
+  kage_class: 'Kage-Class',
+  legendary: 'Legendary',
+};
+
+export const OFFICIAL_RANK_LABELS: Record<NpcOfficialRank, string> = {
+  genin: 'Genin',
+  chunin: 'Chunin',
+  tokubetsu_jonin: 'Tokubetsu Jonin',
+  jonin: 'Jonin',
+  kage: 'Kage',
+};
 
 export interface PlayerUltimateInfo {
   name: string;
@@ -27,6 +57,43 @@ export interface PlayerUltimateInfo {
   cost: number;
   element: ChakraElement;
   scope: UltimateScope;
+  jutsuId?: string;
+}
+
+export function getCombatRating(ranks: readonly [number, number, number, number, number]): number {
+  return (ranks[0] + ranks[1] + ranks[2] + ranks[3] + ranks[4]) / 5;
+}
+
+export function getCombatTier(ranks: readonly [number, number, number, number, number]): CombatTier {
+  const cr = getCombatRating(ranks);
+  if (cr < 1.8) return 'academy';
+  if (cr < 2.6) return 'genin';
+  if (cr < 3.4) return 'chunin';
+  if (cr < 4.2) return 'jonin';
+  if (cr < 4.8) return 'elite_jonin';
+  if (cr < 5.5) return 'kage_class';
+  return 'legendary';
+}
+
+export function getPowerGapRead(
+  state: GameState,
+  enemy: WarCompetitor,
+  resolveBoost = false,
+): { label: PowerGapLabel; gap: number; isEstimate: boolean } {
+  const isEstimate = enemy.intel < 80;
+  const pCR = getCombatRating(getPlayerRanks(state, resolveBoost));
+  const eCR = getCombatRating(getDisplayEnemyRanks(enemy));
+  const gap = Number((pCR - eCR).toFixed(2));
+
+  let label: PowerGapLabel = 'Competitive';
+  if (gap <= -1.5) label = 'Overwhelming';
+  else if (gap <= -0.85) label = 'Major disadvantage';
+  else if (gap <= -0.35) label = 'Disadvantage';
+  else if (gap < 0.35) label = 'Competitive';
+  else if (gap < 0.95) label = 'Advantage';
+  else label = 'Dominant';
+
+  return { label, gap, isEstimate };
 }
 
 export function getElementMultiplier(
@@ -50,38 +117,43 @@ export function getElementMultiplier(
   return { mult: 1.0, clashBonus: 0, label: null };
 }
 
-export function getPlayerSignatureUltimate(state: GameState): PlayerUltimateInfo {
-  const best = [...state.disciplines].sort((a, b) => b.level - a.level || b.xp - a.xp)[0];
-  if (best) {
-    const def = DISCIPLINE_MAP[best.id];
-    const elem = def?.element ?? state.element;
-    if (best.level === 4 && def?.secretArtName) {
-      return {
-        name: def.secretArtName,
-        rankVal: 5.2,
-        cost: 30,
-        element: elem,
-        scope: 'fortress',
-      };
-    }
-    if (best.level === 3 && def) {
-      return {
-        name: `Master ${def.name} Burst`,
-        rankVal: 4.5,
-        cost: 27,
-        element: elem,
-        scope: 'squad',
-      };
-    }
-    if (def) {
-      return {
-        name: `${def.name} Overdrive`,
-        rankVal: 3.6 + best.level * 0.35,
-        cost: 24,
-        element: elem,
-        scope: 'single',
-      };
-    }
+/**
+ * Returns the player's true signature clash art ONLY when unlocked via:
+ * - Tier-4 discipline secretArtName,
+ * - a known DB clash jutsu, or
+ * - an awakened Bloodline Secret Release.
+ * Generic fallback ultimates ("Overdrive", "Burst", "Great Gale Surge") are removed.
+ */
+export function getPlayerSignatureUltimate(state: GameState): PlayerUltimateInfo | null {
+  const bestLv4 = [...state.disciplines]
+    .filter((d) => d.level === 4 && DISCIPLINE_MAP[d.id]?.secretArtName)
+    .sort((a, b) => b.xp - a.xp)[0];
+  if (bestLv4) {
+    const def = DISCIPLINE_MAP[bestLv4.id]!;
+    const knownClash = getKnownJutsu(state).find(
+      (j) => j.role === 'clash' && j.requires.disciplineId === bestLv4.id,
+    );
+    return {
+      name: def.secretArtName!,
+      rankVal: 5.2,
+      cost: knownClash?.chakraCost ?? 36,
+      element: def.element ?? state.element,
+      scope: 'fortress',
+      jutsuId: knownClash?.id,
+    };
+  }
+
+  const clashJutsu = getKnownJutsu(state).find((j) => j.role === 'clash');
+  if (clashJutsu) {
+    const isS = clashJutsu.rank === 'S';
+    return {
+      name: clashJutsu.name,
+      rankVal: isS ? 5.2 : 4.5,
+      cost: clashJutsu.chakraCost,
+      element: clashJutsu.element ?? state.element,
+      scope: isS ? 'fortress' : 'squad',
+      jutsuId: clashJutsu.id,
+    };
   }
 
   if (state.bloodline && state.bloodline.stage !== 'latent') {
@@ -89,23 +161,42 @@ export function getPlayerSignatureUltimate(state: GameState): PlayerUltimateInfo
     return {
       name: `${bDef?.name ?? 'Bloodline'} Secret Release`,
       rankVal: 4.0 + state.bloodline.grade * 0.25,
-      cost: 26,
+      cost: 30,
       element: state.element,
       scope: 'squad',
+      jutsuId: `bloodline_secret_${state.bloodline.id}`,
     };
   }
 
-  return {
-    name: `${ELEMENT_NAMES[state.element]} Release: Great Gale Surge`,
-    rankVal: 3.5,
-    cost: 22,
-    element: state.element,
-    scope: 'single',
-  };
+  return null;
+}
+
+export function getEffectiveJutsuCost(
+  state: GameState,
+  jutsu: JutsuDefinition,
+  war?: WarState | null,
+): number {
+  if (jutsu.chakraCost <= 0) return 0;
+  const uses = state.jutsuMastery?.[jutsu.id] ?? 0;
+  const { costMult } = getJutsuMasteryInfo(uses);
+  const chkRank = computeCombatProjection(state).chk;
+  const controlMult = 1.1 - 0.04 * chkRank;
+  let cost = Math.max(1, Math.round(jutsu.chakraCost * costMult * controlMult));
+
+  const activeWar = war ?? state.war;
+  if (jutsu.role === 'clash' && activeWar?.partner?.active && activeWar.partner.trust >= 60) {
+    cost = Math.max(1, Math.round(cost * 0.85));
+  }
+  return cost;
 }
 
 export function getEffectiveUltimateCost(state: GameState, war?: WarState | null): number {
   const ult = getPlayerSignatureUltimate(state);
+  if (!ult) return 0;
+  if (ult.jutsuId) {
+    const known = getKnownJutsu(state).find((j) => j.id === ult.jutsuId);
+    if (known) return getEffectiveJutsuCost(state, known, war);
+  }
   const activeWar = war ?? state.war;
   if (activeWar?.partner?.active && activeWar.partner.trust >= 60) {
     return Math.round(ult.cost * 0.85);
@@ -113,10 +204,13 @@ export function getEffectiveUltimateCost(state: GameState, war?: WarState | null
   return ult.cost;
 }
 
+/**
+ * Asymmetric base power formula (Phase 3):
+ * Removes the flat +78 constant and drops HP floor to 35% so rank gaps and wounds truly matter.
+ */
 export function unitBasePower(ranks: [number, number, number, number, number], hp: number): number {
-  const [tai, spd, sta, chk, ins] = ranks;
-  const raw = 78 + tai * 1.7 + (spd + sta + chk) * 1.4 + ins * 1.9;
-  return raw * (0.55 + 0.45 * (clamp(hp, 0, 100) / 100));
+  const cr = getCombatRating(ranks);
+  return POWER_PER_RANK * cr * (0.35 + 0.65 * (clamp(hp, 0, 100) / 100));
 }
 
 export function skillSum(skills: { tag: SkillTag; rank: number }[], tag: SkillTag): number {
@@ -176,6 +270,7 @@ export function computeStanceMultiplier(
   enemySkills: { tag: SkillTag; rank: number }[],
   skillsKnown: boolean,
   actionId: BattleAttackStyle,
+  attackElement?: ChakraElement,
 ): { mult: number; elemLabel: string | null } {
   if (actionId === 'taijutsu') {
     const mult = clamp(1 + (pRanks[0] - enemyRanks[2]) * 0.08 + (pRanks[1] - enemyRanks[1]) * 0.02, 0.65, 1.55);
@@ -188,7 +283,8 @@ export function computeStanceMultiplier(
     return { mult, elemLabel: null };
   }
   if (actionId === 'ninjutsu') {
-    const elemInfo = enemyElement ? getElementMultiplier(state.element, enemyElement) : { mult: 1.0, label: null };
+    const elem = attackElement ?? state.element;
+    const elemInfo = enemyElement ? getElementMultiplier(elem, enemyElement) : { mult: 1.0, label: null };
     const mr = skillsKnown ? 1 - Math.min(0.35, skillSum(enemySkills, 'resist') * 0.04) : 1.0;
     const mult = clamp(1 + (pRanks[3] - enemyRanks[3]) * 0.05, 0.75, 1.35) * elemInfo.mult * mr;
     return { mult, elemLabel: elemInfo.label };
@@ -211,14 +307,15 @@ export function computeRetreatChance(
 }
 
 /**
- * Computes a fair matchup preview for the 3 core battle styles using ONLY
- * known enemy intel (`getDisplayEnemyRanks`) so hidden enemy stats are never leaked.
+ * Computes a fair matchup preview using ONLY known enemy intel (`getDisplayEnemyRanks`)
+ * so hidden enemy stats are never leaked.
  */
 export function estimateBattleActionOdds(
   state: GameState,
   enemy: WarCompetitor,
   actionId: BattleAttackStyle,
   resolveBoost = false,
+  attackElement?: ChakraElement,
 ): BattleOddsEstimate {
   const isEstimate = enemy.intel < 80;
   const pRanks = getPlayerRanks(state, resolveBoost);
@@ -232,6 +329,7 @@ export function estimateBattleActionOdds(
     enemy.skills,
     enemy.skillsRevealed,
     actionId,
+    attackElement,
   );
 
   const suffix = isEstimate ? ' (est.)' : '';
@@ -280,8 +378,9 @@ export function computePlayerRoundPower(
     terms.push({ label: `Camp Fortification (+${fortBonus})`, val: fortBonus });
   }
 
+  // Ambush Initiative strengthened (Phase 3): +18 Round 1, +9 Round 2 (~1 full rank swing)
   if (battle.isAmbush && battle.round <= 2) {
-    const amb = battle.round === 1 ? 10 : 5;
+    const amb = battle.round === 1 ? 18 : 9;
     total += amb;
     terms.push({ label: `Ambush Initiative (+${amb})`, val: amb });
   }
@@ -321,13 +420,13 @@ export function computePlayerRoundPower(
     const pSkillMod =
       war.partner.trust >= 60
         ? Math.min(
-          2,
-          Math.round(
-            skillSum(war.partner.skills, 'power') * 0.22 +
-            (battle.isDefense ? skillSum(war.partner.skills, 'fort') * 0.22 : 0) +
-            (enemy.hp < 75 ? skillSum(war.partner.skills, 'slayer') * 0.22 : 0),
-          ),
-        )
+            2,
+            Math.round(
+              skillSum(war.partner.skills, 'power') * 0.22 +
+                (battle.isDefense ? skillSum(war.partner.skills, 'fort') * 0.22 : 0) +
+                (enemy.hp < 75 ? skillSum(war.partner.skills, 'slayer') * 0.22 : 0),
+            ),
+          )
         : 0;
     const partnerTotal = pTrustMod + pSkillMod;
     total += partnerTotal;
@@ -349,14 +448,6 @@ export function computePlayerRoundPower(
   } else if (war.cp < 12) {
     total -= 8;
     terms.push({ label: 'Low Chakra (-8)', val: 8 });
-  }
-
-  // Modest underdog compression so lower-rank shinobi can still survive/upset tactically
-  const enemyBase = unitBasePower(enemy.ranks, enemy.hp);
-  if (base < enemyBase - 8) {
-    const underdog = Math.min(11, Math.round((enemyBase - base) * 0.28));
-    total += underdog;
-    terms.push({ label: `Underdog Grit (+${underdog})`, val: underdog });
   }
 
   if (battle.enemyFieldRounds > 0) {
@@ -403,151 +494,143 @@ export function npcUltimateChance(enemy: WarCompetitor, playerHp: number, isFina
   return clamp(p, 0, 0.75);
 }
 
-export interface OdActionOption {
-  id: OdActionId;
-  label: string;
-  desc: string;
-  cost: number;
-  disabled: boolean;
-  disabledReason?: string;
-}
-
-export function getAvailableOdActions(state: GameState): OdActionOption[] {
+/**
+ * Heuristic auto-jutsu picker used by Auto-Play and as the foundation for future NPC jutsu AI.
+ */
+export function pickAutoJutsu(state: GameState, rng?: SeededRng): string {
   const war = state.war;
   const battle = war?.activeBattle;
-  if (!war || !battle) return [];
+  if (!war || !battle) return 'jutsu:basic_strike';
+  const enemy = war.enemies.find((e) => e.id === battle.enemyId);
+  const known = getKnownJutsu(state);
 
-  const list: OdActionOption[] = [];
-  const od = battle.od;
+  const affordable = known.filter((j) => war.cp >= getEffectiveJutsuCost(state, j, war));
 
-  if (state.summonContract) {
-    const clan = SUMMON_CLAN_MAP[state.summonContract.clanId];
-    const tier = getSummonPowerTier(state);
-    const summonName = clan.tierNames[tier.tierIndex];
-    list.push({
-      id: 'od_summon',
-      label: `Kuchiyose: ${summonName}`,
-      desc: clan.odEffectDesc,
-      cost: 24,
-      disabled: od < 24,
-      disabledReason: od < 24 ? 'Requires 24 Od' : undefined,
-    });
+  // 1. Heal when wounded and medical jutsu is affordable
+  if (war.hp < 55) {
+    const healJutsu = affordable.find((j) => j.role === 'heal');
+    if (healJutsu) return `jutsu:${healJutsu.id}`;
   }
 
-  const hasMedical = state.disciplines.some((d) => d.id === 'medical');
-  if (hasMedical) {
-    const healDisabled = od < 18 || (war.hp >= 95 && (!war.partner?.active || war.partner.hp >= 95));
-    list.push({
-      id: 'od_heal',
-      label: 'Mystical Palm',
-      desc: 'Restore +12 HP (+6 Partner HP) alongside your attack.',
-      cost: 18,
-      disabled: healDisabled,
-      disabledReason: od < 18 ? 'Requires 18 Od' : 'HP already full',
-    });
+  // 2. Raise defense on Round 1 (50% chance) if not already warded
+  if (battle.round === 1 && battle.playerWardRounds === 0) {
+    const defJutsu = affordable.find((j) => j.role === 'defense');
+    if (defJutsu && (rng ? rng.chance(0.5) : false)) {
+      return `jutsu:${defJutsu.id}`;
+    }
   }
 
-  const hasWard = state.disciplines.some((d) => d.id === 'barrier' || d.id === 'earth_release' || d.id === 'fuinjutsu');
-  if (hasWard) {
-    list.push({
-      id: 'od_ward',
-      label: 'Sealing Ward',
-      desc: 'Raise a quick defensive barrier (-35% incoming damage this round).',
-      cost: 16,
-      disabled: od < 16 || battle.playerWardRounds > 0,
-      disabledReason: od < 16 ? 'Requires 16 Od' : 'Ward already active',
-    });
+  // 3. Clash jutsu when enemy is weakened or on the Final Night
+  if (enemy && (enemy.hp <= 55 || battle.isFinal)) {
+    const clashJutsu = affordable.find((j) => j.role === 'clash');
+    if (clashJutsu) return `jutsu:${clashJutsu.id}`;
   }
 
-  const hasClone = state.disciplines.some((d) => d.id === 'shadow_clone' || d.id === 'genjutsu');
-  if (hasClone) {
-    list.push({
-      id: 'od_clone',
-      label: 'Shadow Clone',
-      desc: 'Instant decoy (+22% dodge on enemy counter this round).',
-      cost: 16,
-      disabled: od < 16 || battle.playerCloneEvade,
-      disabledReason: od < 16 ? 'Requires 16 Od' : 'Clone already active',
-    });
+  // 4. Best affordable attack by expected damage per chakra
+  const attacks = affordable.filter(
+    (j) => j.role === 'damage' || j.role === 'multi_hit' || j.role === 'pierce' || j.role === 'control',
+  );
+  if (attacks.length > 0 && enemy) {
+    const pRanks = getPlayerRanks(state, battle.resolveBoostThisRound);
+    const eRanks = getDisplayEnemyRanks(enemy);
+    let best = attacks[0];
+    let bestScore = -1;
+
+    for (const j of attacks) {
+      const style: BattleAttackStyle = j.style === 'support' ? 'taijutsu' : j.style;
+      const { mult } = computeStanceMultiplier(
+        state,
+        pRanks,
+        eRanks,
+        enemy.intel >= 60 ? enemy.element : null,
+        enemy.skills,
+        enemy.skillsRevealed,
+        style,
+        j.element,
+      );
+      const uses = state.jutsuMastery?.[j.id] ?? 0;
+      const mastery = getJutsuMasteryInfo(uses);
+      const effCost = getEffectiveJutsuCost(state, j, war);
+      const expectedPower = getJutsuBasePower(j) * mastery.powerMult * mult;
+      const wallBonus = battle.enemyWallRounds > 0 && j.effect.pierceWall ? 1.25 : 1.0;
+      const score = (expectedPower * wallBonus) / Math.max(4, effCost * 0.35 + 4);
+      if (score > bestScore) {
+        bestScore = score;
+        best = j;
+      }
+    }
+    return `jutsu:${best.id}`;
   }
 
-  return list;
+  return 'jutsu:basic_strike';
+}
+
+function pickBestOffensiveJutsuForResolve(state: GameState, war: WarState): JutsuDefinition {
+  const known = getKnownJutsu(state);
+  const clash = known.find((j) => j.role === 'clash' && war.cp >= getEffectiveJutsuCost(state, j, war));
+  if (clash) return clash;
+  const attacks = known
+    .filter(
+      (j) =>
+        (j.role === 'damage' || j.role === 'multi_hit' || j.role === 'pierce' || j.role === 'control') &&
+        war.cp >= getEffectiveJutsuCost(state, j, war),
+    )
+    .sort((a, b) => getJutsuBasePower(b) - getJutsuBasePower(a));
+  return attacks[0] ?? known[0];
 }
 
 export function buildBattleRoundDecision(state: GameState): PendingDecision {
   const war = state.war!;
   const battle = war.activeBattle!;
   const enemy = war.enemies.find((e) => e.id === battle.enemyId)!;
-  const ult = getPlayerSignatureUltimate(state);
-  const ultCost = getEffectiveUltimateCost(state, war);
 
-  const enemyLabel = enemy.intel >= 80 ? `${enemy.name} (${enemy.epithet})` : `Unknown ${enemy.archetype.toUpperCase()}`;
+  const enemyLabel =
+    enemy.intel >= 80
+      ? `${enemy.name} (${enemy.epithet})`
+      : `Unknown ${enemy.archetype.toUpperCase()}`;
   const elemHint =
-    enemy.intel >= 60
-      ? `Element: ${ELEMENT_NAMES[enemy.element]}`
-      : 'Element: Unknown';
-  const elemMatch = enemy.intel >= 60 ? getElementMultiplier(state.element, enemy.element).label : null;
+    enemy.intel >= 60 ? `Element: ${ELEMENT_NAMES[enemy.element]}` : 'Element: Unknown';
+  const gapRead = getPowerGapRead(state, enemy, battle.resolveBoostThisRound);
 
   const canBloodline =
     state.bloodline !== null &&
     state.bloodline.stage !== 'latent' &&
     battle.bloodlineActiveRounds === 0;
 
-  const hasKenjutsu = hasKenjutsuDiscipline(state);
-  const kenLevel = getKenjutsuLevel(state);
+  const knownJutsu = getKnownJutsu(state);
+  const lockedNext = getNextTierLockedJutsu(state);
+  const autoPickId = pickAutoJutsu(state);
 
-  const options: PendingDecision['options'] = [
-    {
-      id: 'taijutsu',
-      label: 'Taijutsu Strike (Head-On, 0 CP)',
-      sublabel: 'Tests TAI against enemy Stamina. Reliable when conserving Chakra.',
-      statHints: ['TAI', 'STA'],
-      autoEligible: true,
-    },
-    ...(hasKenjutsu
-      ? [
-        {
-          id: 'kenjutsu',
-          label: `Kenjutsu Slash (Tier ${kenLevel}, 4 CP)`,
-          sublabel: 'Tests SPD & TAI vs enemy SPD. Pierces Guard Walls and shaves enemy Fort.',
-          statHints: ['SPD', 'TAI'],
-          disabled: war.cp < 4,
-          disabledReason: 'Requires 4 CP',
-          autoEligible: war.cp >= 4,
-        },
-      ]
-      : []),
-    {
-      id: 'ninjutsu',
-      label: `${ELEMENT_NAMES[state.element]} Ninjutsu (8 CP)`,
-      sublabel: elemMatch ? `Elemental read: ${elemMatch}` : 'Scales with Chakra and elemental nature matchups.',
-      statHints: ['CHK', ELEMENT_NAMES[state.element]],
-      disabled: war.cp < 8,
-      disabledReason: 'Requires 8 CP',
-      autoEligible: war.cp >= 8,
-    },
-    {
-      id: 'genjutsu',
-      label: 'Genjutsu / Tactical Feint (6 CP)',
-      sublabel: 'Tests Insight & Will; success weakens the enemy for 2 rounds.',
-      statHints: ['INS', 'Will'],
-      disabled: war.cp < 6,
-      disabledReason: 'Requires 6 CP',
-      autoEligible: war.cp >= 6,
-    },
-    {
-      id: 'ultimate',
-      label: `Unleash Ultimate: ${ult.name} (${ultCost} CP)`,
-      sublabel:
-        ultCost < ult.cost
-          ? `Partner synergy cuts CP cost by 15%! Simultaneous enemy Ultimate triggers a Jutsu Clash.`
-          : 'Massive strike. If enemy fires their Ultimate simultaneously, triggers a Jutsu Clash!',
-      statHints: ['Ultimate', `${ultCost} CP`],
-      disabled: war.cp < ultCost,
-      disabledReason: `Requires ${ultCost} CP`,
-      autoEligible: war.cp >= ultCost && (enemy.hp <= 55 || battle.isFinal),
-    },
-  ];
+  const options: PendingDecision['options'] = [];
+
+  for (const jutsu of knownJutsu) {
+    const effCost = getEffectiveJutsuCost(state, jutsu, war);
+    const uses = state.jutsuMastery?.[jutsu.id] ?? 0;
+    const mastery = getJutsuMasteryInfo(uses);
+    const disabled = war.cp < effCost;
+    const isAutoAttack = `jutsu:${jutsu.id}` === autoPickId;
+
+    options.push({
+      id: `jutsu:${jutsu.id}`,
+      label: `${jutsu.name} (${jutsu.rank}-Rank, ${effCost} CP)`,
+      sublabel: `${jutsu.description} [${mastery.label} ${mastery.uses}]`,
+      statHints: [jutsu.role, `${effCost} CP`],
+      disabled,
+      disabledReason: disabled ? `Requires ${effCost} CP` : undefined,
+      autoEligible: !disabled && isAutoAttack,
+    });
+  }
+
+  for (const item of lockedNext) {
+    options.push({
+      id: `locked_jutsu:${item.jutsu.id}`,
+      label: `${item.jutsu.name} (${item.jutsu.rank}-Rank, Locked)`,
+      sublabel: item.requirementLabel,
+      disabled: true,
+      disabledReason: item.requirementLabel,
+      autoEligible: false,
+    });
+  }
 
   if (canBloodline && state.bloodline) {
     const bDef = BLOODLINE_MAP[state.bloodline.id];
@@ -577,7 +660,7 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
     options.push({
       id: 'partner_free_surpass',
       label: `Unbreakable Bond: Free Surpass Limits (${war.partner.name})`,
-      sublabel: '+3 Ranks & Ultimate x1.3 at 0 Resolve cost (once per war when HP < 35).',
+      sublabel: '+3 Ranks & Clash x1.3 at 0 Resolve cost (once per war when HP < 35).',
       statHints: ['Resolve', 'Bonds'],
       autoEligible: true,
     });
@@ -587,7 +670,7 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
   if (war.resolves > 0) {
     options.push({
       id: 'resolve_boost',
-      label: `Limit Break: Surpass Limits! (+3 Ranks & Ultimate x1.3 | ${war.resolves} left)`,
+      label: `Limit Break: Surpass Limits! (+3 Ranks & Clash x1.3 | ${war.resolves} left)`,
       sublabel: 'Pushes past physical limits this round (+6 Body Strain).',
       statHints: ['Resolve'],
       autoEligible: battle.isFinal && war.hp < 45,
@@ -607,7 +690,7 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
         label: `Limit Break: Body Flicker Escape (Guaranteed Retreat | ${war.resolves} left)`,
         sublabel: '100% safe withdrawal (+3 Body Strain).',
         statHints: ['Resolve'],
-        autoEligible: war.hp <= 22,
+        autoEligible: war.hp <= 22 || gapRead.label === 'Overwhelming',
       });
     }
   }
@@ -618,7 +701,7 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
       label: 'Shunshin Retreat (Attempt Escape)',
       sublabel: 'Escape chance scales with Speed. Failure risks 14 to 24 parting damage.',
       statHints: ['SPD'],
-      autoEligible: war.hp <= 30,
+      autoEligible: war.hp <= 30 || gapRead.label === 'Overwhelming',
     });
   }
 
@@ -630,7 +713,7 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
     kind: 'war_battle_round',
     eventId: 'war_battle_round',
     title: `Round ${battle.round}/${battle.isFinal ? 'FINAL' : battle.maxRounds}: vs ${enemyLabel}`,
-    body: `Your HP ${war.hp}/100, CP ${war.cp}/100 | Enemy HP ${enemy.hp}/100 (${elemHint}, Intel ${enemy.intel}%).${prevNote}`,
+    body: `Threat ${enemy.threatClass} | Matchup: ${gapRead.label}${gapRead.isEstimate ? ' (est.)' : ''} | Your HP ${war.hp}/100, CP ${war.cp}/100 | Enemy HP ${enemy.hp}/100 (${elemHint}, Intel ${enemy.intel}%).${prevNote}`,
     manual: battle.isFinal,
     options,
   };
@@ -647,134 +730,80 @@ interface PreRoundCounters {
   field: boolean;
 }
 
-function applyCompanionOdAction(
+function resolveSummonSupportJutsu(
   state: GameState,
   war: WarState,
   enemy: WarCompetitor,
   battle: ActiveBattleState,
-  odAction: OdActionId | undefined,
+  jutsu: JutsuDefinition,
+  masteryPowerMult: number,
+  preCounters: PreRoundCounters,
   rng: SeededRng,
-): {
-  prefix: string;
-  bonusEnemyDmg: number;
-  appliedWard: boolean;
-  expireWardThisRound: boolean;
-  appliedBuff: boolean;
-  appliedDebuff: boolean;
-} {
-  if (!odAction) {
-    return {
-      prefix: '',
-      bonusEnemyDmg: 0,
-      appliedWard: false,
-      expireWardThisRound: false,
-      appliedBuff: false,
-      appliedDebuff: false,
-    };
-  }
-  const available = getAvailableOdActions(state).find((a) => a.id === odAction && !a.disabled);
-  if (!available) {
-    return {
-      prefix: '',
-      bonusEnemyDmg: 0,
-      appliedWard: false,
-      expireWardThisRound: false,
-      appliedBuff: false,
-      appliedDebuff: false,
-    };
-  }
+): { playerAction: string; whyLine: string; narrative: string; bonusEnemyDmg: number; enemyChip: number } {
+  const contract = state.summonContract;
+  if (contract) {
+    contract.summonUses += 1;
+    const clan = SUMMON_CLAN_MAP[contract.clanId];
+    const tier = getSummonPowerTier(state);
+    const summonName = clan.tierNames[tier.tierIndex];
+    const rawDmg = Math.round(rng.int(6, 11) * tier.mult * masteryPowerMult);
+    const dmg = Math.min(Math.max(0, enemy.hp - 1), rawDmg);
+    enemy.hp = Math.max(1, enemy.hp - dmg);
 
-  battle.od = Math.max(0, battle.od - available.cost);
-  battle.odUsedCount += 1;
+    let extraNote = '';
+    let enemyChip = rng.int(2, 6);
 
-  if (odAction === 'od_heal') {
-    war.hp = clamp(war.hp + 10, 1, 100);
-    if (war.partner?.active) {
-      war.partner.hp = clamp(war.partner.hp + 5, 1, war.partner.maxHp);
+    if (clan.id === 'toad') {
+      battle.playerBuffRounds = Math.max(battle.playerBuffRounds, 2);
+      preCounters.buff = false;
+      extraNote = ', granting +8 attack momentum';
+    } else if (clan.id === 'snake') {
+      battle.enemyDebuffRounds = Math.max(battle.enemyDebuffRounds, 2);
+      preCounters.debuff = false;
+      extraNote = ', venom disrupts the enemy for 2 rounds';
+    } else if (clan.id === 'slug') {
+      war.hp = clamp(war.hp + 16, 1, 100);
+      if (war.partner?.active) war.partner.hp = clamp(war.partner.hp + 12, 1, war.partner.maxHp);
+      extraNote = ', restoring +16 HP (+12 Partner HP)';
+    } else if (clan.id === 'hound') {
+      enemy.intel = clamp(enemy.intel + 20, 0, 100);
+      if (enemy.intel >= 90) enemy.skillsRevealed = true;
+      battle.enemyDebuffRounds = Math.max(battle.enemyDebuffRounds, 1);
+      preCounters.debuff = false;
+      extraNote = ', +20 Intel and pinned flank';
+    } else if (clan.id === 'hawk') {
+      battle.playerCloneEvade = true;
+      enemyChip = rng.int(0, 3);
+      extraNote = ', aerial evasion';
+    } else if (clan.id === 'ape') {
+      battle.playerWardRounds = Math.max(battle.playerWardRounds, 2);
+      preCounters.ward = false;
+      enemyChip = Math.round(enemyChip * 0.65);
+      extraNote = ', adamantine defensive guard';
     }
+
+    const sealStr = jutsu.seals.length > 0 ? `${formatHandSeals(jutsu.seals)}: ` : '';
     return {
-      prefix: '[Od: Mystical Palm +10 HP] ',
-      bonusEnemyDmg: 0,
-      appliedWard: false,
-      expireWardThisRound: false,
-      appliedBuff: false,
-      appliedDebuff: false,
+      playerAction: `Kuchiyose: ${summonName}`,
+      whyLine: `Key Factor: Kuchiyose Blood Contract (${clan.name}) dealt ${dmg} dmg`,
+      narrative: `${sealStr}Kuchiyose: ${summonName} erupts from a cloud of white smoke, dealing ${dmg} damage${extraNote}!`,
+      bonusEnemyDmg: dmg,
+      enemyChip,
     };
   }
 
-  if (odAction === 'od_ward') {
-    battle.playerWardRounds = 1;
-    return {
-      prefix: '[Od: Sealing Ward raised] ',
-      bonusEnemyDmg: 0,
-      appliedWard: false,
-      expireWardThisRound: true,
-      appliedBuff: false,
-      appliedDebuff: false,
-    };
-  }
-
-  if (odAction === 'od_clone') {
-    battle.playerCloneEvade = true;
-    return {
-      prefix: '[Od: Shadow Clone decoy] ',
-      bonusEnemyDmg: 0,
-      appliedWard: false,
-      expireWardThisRound: false,
-      appliedBuff: false,
-      appliedDebuff: false,
-    };
-  }
-
-  // od_summon: Kuchiyose Blood Contract!
-  const contract = state.summonContract!;
-  contract.summonUses += 1;
-  const clan = SUMMON_CLAN_MAP[contract.clanId];
-  const tier = getSummonPowerTier(state);
-  const summonName = clan.tierNames[tier.tierIndex];
-  const rawDmg = Math.round(rng.int(4, 7) * tier.mult);
+  // Generic summoning support if player learned Summoning discipline without a blood contract yet
+  const rawDmg = Math.round(rng.int(5, 9) * masteryPowerMult);
   const dmg = Math.min(Math.max(0, enemy.hp - 1), rawDmg);
   enemy.hp = Math.max(1, enemy.hp - dmg);
-
-  let extraNote = '';
-  let appliedWard = false;
-  let appliedBuff = false;
-  let appliedDebuff = false;
-
-  if (clan.id === 'toad') {
-    battle.playerBuffRounds = Math.max(battle.playerBuffRounds, 1);
-    appliedBuff = true;
-    extraNote = ', +8 attack momentum';
-  } else if (clan.id === 'snake') {
-    battle.enemyDebuffRounds = Math.max(battle.enemyDebuffRounds, 2);
-    appliedDebuff = true;
-    extraNote = ', venom disrupts enemy';
-  } else if (clan.id === 'slug') {
-    war.hp = clamp(war.hp + 12, 1, 100);
-    if (war.partner?.active) war.partner.hp = clamp(war.partner.hp + 12, 1, war.partner.maxHp);
-    extraNote = ', +12 HP healed';
-  } else if (clan.id === 'hound') {
-    enemy.intel = clamp(enemy.intel + 18, 0, 100);
-    if (enemy.intel >= 90) enemy.skillsRevealed = true;
-    battle.enemyDebuffRounds = Math.max(battle.enemyDebuffRounds, 1);
-    appliedDebuff = true;
-    extraNote = ', +18 Intel & pinned flank';
-  } else if (clan.id === 'hawk') {
-    battle.playerCloneEvade = true;
-    extraNote = ', aerial evasion';
-  } else if (clan.id === 'ape') {
-    battle.playerWardRounds = Math.max(battle.playerWardRounds, 1);
-    appliedWard = true;
-    extraNote = ', adamantine guard';
-  }
-
+  battle.playerBuffRounds = Math.max(battle.playerBuffRounds, 1);
+  preCounters.buff = false;
   return {
-    prefix: `[Kuchiyose: ${summonName} deals ${dmg} dmg${extraNote}] `,
+    playerAction: jutsu.name,
+    whyLine: `Key Factor: Summoning beast disrupted enemy (${dmg} dmg, +8 next attack)`,
+    narrative: `${formatHandSeals(jutsu.seals)}: ${jutsu.name}! A summoned scout beast lunges through smoke for ${dmg} damage, creating an opening.`,
     bonusEnemyDmg: dmg,
-    appliedWard,
-    expireWardThisRound: false,
-    appliedBuff,
-    appliedDebuff,
+    enemyChip: rng.int(3, 7),
   };
 }
 
@@ -782,13 +811,11 @@ export function resolveBattleRound(
   state: GameState,
   optionId: string,
   rng: SeededRng,
-  odAction?: OdActionId,
 ): { status: BattleResolutionStatus; summary: BattleRoundSummary } {
   const war = state.war!;
   const battle = war.activeBattle!;
   const enemy = war.enemies.find((e) => e.id === battle.enemyId)!;
-  const ult = getPlayerSignatureUltimate(state);
-  const ultCost = getEffectiveUltimateCost(state, war);
+  if (!state.jutsuMastery) state.jutsuMastery = {};
 
   // Snapshot which counters were already active BEFORE this round's actions,
   // so newly applied buffs/debuffs never lose a turn on the same round!
@@ -860,7 +887,8 @@ export function resolveBattleRound(
     war.partner.freeSurpassUsed = true;
     battle.resolveBoostThisRound = true;
     resolvePartnerNote = ` ${war.partner.name} pours chakra into your back in an Unbreakable Bond surge!`;
-    optionId = war.cp >= ultCost ? 'ultimate' : 'taijutsu';
+    const bestJ = pickBestOffensiveJutsuForResolve(state, war);
+    optionId = `jutsu:${bestJ.id}`;
   } else if (optionId === 'resolve_boost' && war.resolves > 0) {
     war.resolves -= 1;
     battle.resolveBoostThisRound = true;
@@ -875,8 +903,8 @@ export function resolveBattleRound(
       targetName: enemy.name,
       detail: 'Unleashed Limit Break: Surpass Limits',
     });
-    // Immediately execute an empowered strike this round!
-    optionId = war.cp >= ultCost ? 'ultimate' : 'taijutsu';
+    const bestJ = pickBestOffensiveJutsuForResolve(state, war);
+    optionId = `jutsu:${bestJ.id}`;
   }
 
   // Compute pRanks AFTER resolve_boost has been applied!
@@ -939,14 +967,8 @@ export function resolveBattleRound(
     }
   }
 
-  // Support / Bloodline / Weakness actions (enemy still gets a contested pressure roll)
-  if (
-    optionId === 'bloodline' ||
-    optionId === 'support_heal' ||
-    optionId === 'support_ward' ||
-    optionId === 'support_clone' ||
-    optionId === 'exploit_weakness'
-  ) {
+  // Non-jutsu tactical setup actions (bloodline & exploit_weakness)
+  if (optionId === 'bloodline' || optionId === 'exploit_weakness') {
     let playerAction = 'Tactical Preparation';
     let whyLine = 'Key Factor: Tactical setup';
     let narrative = '';
@@ -962,28 +984,6 @@ export function resolveBattleRound(
       playerAction = `Activate ${bDef?.name ?? 'Bloodline'}`;
       whyLine = `Key Factor: Bloodline active for 2 rounds (-${strain} HP strain)`;
       narrative = `${bDef?.name ?? 'Your Kekkei Genkai'} flares to life, sharpening every motion as you deflect the enemy's probe.`;
-    } else if (optionId === 'support_heal') {
-      war.cp = Math.max(0, war.cp - 12);
-      war.hp = clamp(war.hp + 20, 0, 100);
-      enemyChip = rng.int(4, 9);
-      playerAction = 'Mystical Palm Heal (+20 HP)';
-      whyLine = 'Key Factor: Field triage restored 20 HP mid-fight';
-      narrative = 'Green medical chakra knits torn tissue back together while you pivot clear of a full strike.';
-    } else if (optionId === 'support_ward') {
-      war.cp = Math.max(0, war.cp - 10);
-      battle.playerWardRounds = 2;
-      enemyChip = Math.round(enemyChip * 0.65);
-      playerAction = 'Defensive Barrier Ward';
-      whyLine = 'Key Factor: Barrier reduces incoming damage by 35% for 2 rounds';
-      narrative = 'Sealing ink erupts into a shimmering chakra ward that blunts the incoming blow.';
-    } else if (optionId === 'support_clone') {
-      war.cp = Math.max(0, war.cp - 10);
-      battle.playerCloneEvade = true;
-      battle.playerBuffRounds = Math.max(battle.playerBuffRounds, 1);
-      enemyChip = rng.int(0, 4);
-      playerAction = 'Shadow Clone Feint';
-      whyLine = 'Key Factor: Clone decoy absorbed enemy momentum (+8 next attack)';
-      narrative = 'A Shadow Clone bursts into smoke on impact, opening an angle for your next counter.';
     } else if (optionId === 'exploit_weakness') {
       const ok = rng.chance(clamp(0.32 + state.stats.intel / 200 + (enemy.intel >= 80 ? 0.12 : 0), 0.35, 0.85));
       if (ok) {
@@ -1016,27 +1016,113 @@ export function resolveBattleRound(
     return resolveNonCombatLethalCheck(state, war, battle, summary, preCounters, rng);
   }
 
-  // Execute Optional Companion Od Action alongside main attacks (K3: does not replace attack)
-  const isMainAttack =
-    optionId === 'taijutsu' ||
-    optionId === 'kenjutsu' ||
-    optionId === 'ninjutsu' ||
-    optionId === 'genjutsu' ||
-    optionId === 'ultimate';
-  const odRes = isMainAttack
-    ? applyCompanionOdAction(state, war, enemy, battle, odAction, rng)
-    : {
-        prefix: '',
-        bonusEnemyDmg: 0,
-        appliedWard: false,
-        expireWardThisRound: false,
-        appliedBuff: false,
-        appliedDebuff: false,
-      };
-  if (odRes.appliedWard) preCounters.ward = false;
-  if (odRes.expireWardThisRound) preCounters.ward = true;
-  if (odRes.appliedBuff) preCounters.buff = false;
-  if (odRes.appliedDebuff) preCounters.debuff = false;
+  // === INDIVIDUAL JUTSU RESOLUTION (jutsu:<id>) ===
+  if (!optionId.startsWith('jutsu:')) {
+    throw new Error(`Invalid battle action id: ${optionId}`);
+  }
+  const jutsuId = optionId.slice('jutsu:'.length);
+  const knownJutsu = getKnownJutsu(state);
+  const chosenJutsu = knownJutsu.find((j) => j.id === jutsuId);
+  if (!chosenJutsu) {
+    throw new Error(`Unknown or unlearned jutsu cannot be executed: ${jutsuId}`);
+  }
+
+  const effCost = getEffectiveJutsuCost(state, chosenJutsu, war);
+  if (war.cp < effCost) {
+    throw new Error(`Insufficient CP (${war.cp} < ${effCost}) for jutsu: ${chosenJutsu.id}`);
+  }
+
+  // Read current mastery BEFORE incrementing, then increment usage counter
+  const usesBefore = state.jutsuMastery[chosenJutsu.id] ?? 0;
+  const mastery = getJutsuMasteryInfo(usesBefore);
+  state.jutsuMastery[chosenJutsu.id] = usesBefore + 1;
+
+  // Pay unified Chakra cost
+  war.cp = Math.max(0, war.cp - effCost);
+
+  const sealPrefix =
+    chosenJutsu.seals.length > 0
+      ? `${formatHandSeals(chosenJutsu.seals)}: ${chosenJutsu.name}! `
+      : `${chosenJutsu.name}! `;
+
+  // === DATA-DRIVEN SUPPORT JUTSU ROUTE (heal | defense | evasion | summon) ===
+  if (
+    chosenJutsu.role === 'heal' ||
+    chosenJutsu.role === 'defense' ||
+    chosenJutsu.role === 'evasion' ||
+    chosenJutsu.role === 'summon'
+  ) {
+    let playerAction = chosenJutsu.name;
+    let whyLine = `Key Factor: ${chosenJutsu.name} (${mastery.label})`;
+    let narrative = '';
+    let enemyChip = rng.int(4, 10);
+    let enemyDmgTaken = 0;
+
+    if (chosenJutsu.role === 'heal') {
+      const healAmt = Math.round((chosenJutsu.effect.heal ?? 15) * mastery.powerMult);
+      war.hp = clamp(war.hp + healAmt, 0, 100);
+      if (war.partner?.active) {
+        war.partner.hp = clamp(war.partner.hp + Math.round(healAmt * 0.5), 1, war.partner.maxHp);
+      }
+      enemyChip = rng.int(3, 8);
+      playerAction = `${chosenJutsu.name} (+${healAmt} HP)`;
+      whyLine = `Key Factor: Medical chakra restored ${healAmt} HP mid-fight (-${effCost} CP)`;
+      narrative = `${sealPrefix}Green medical chakra knits torn tissue back together (+${healAmt} HP) while you pivot clear of a direct blow.`;
+    } else if (chosenJutsu.role === 'defense') {
+      const rounds = chosenJutsu.effect.wardRounds ?? 2;
+      battle.playerWardRounds = Math.max(battle.playerWardRounds, rounds);
+      preCounters.ward = false;
+      enemyChip = Math.round(enemyChip * 0.65);
+      whyLine = `Key Factor: Defensive barrier cuts incoming damage by 35% for ${rounds} rounds (-${effCost} CP)`;
+      narrative = `${sealPrefix}A fortified barrier erupts in front of you, blunting the enemy's follow-up pressure.`;
+    } else if (chosenJutsu.role === 'evasion') {
+      battle.playerCloneEvade = true;
+      if (chosenJutsu.id === 'kage_bunshin') {
+        battle.playerBuffRounds = Math.max(battle.playerBuffRounds, 1);
+        preCounters.buff = false;
+        enemyChip = rng.int(0, 4);
+        whyLine = `Key Factor: Solid Shadow Clone decoy (+22% dodge, +8 next attack, -${effCost} CP)`;
+        narrative = `${sealPrefix}A solid Shadow Clone intercepts the rush and bursts into smoke, opening a sharp counter angle.`;
+      } else {
+        enemyChip = rng.int(1, 5);
+        whyLine = `Key Factor: Evasion decoy primed (+22% dodge & +15% retreat chance, -${effCost} CP)`;
+        narrative = `${sealPrefix}You slip away in a sudden blur, leaving a decoy to soak the enemy's probe.`;
+      }
+    } else {
+      const sumRes = resolveSummonSupportJutsu(
+        state,
+        war,
+        enemy,
+        battle,
+        chosenJutsu,
+        mastery.powerMult,
+        preCounters,
+        rng,
+      );
+      playerAction = sumRes.playerAction;
+      whyLine = sumRes.whyLine;
+      narrative = sumRes.narrative;
+      enemyDmgTaken = sumRes.bonusEnemyDmg;
+      enemyChip = sumRes.enemyChip;
+    }
+
+    war.hp = Math.max(0, war.hp - enemyChip);
+    battle.resolveBoostThisRound = false;
+    const summary: BattleRoundSummary = {
+      round: battle.round,
+      playerAction,
+      jutsuName: chosenJutsu.name,
+      seals: [...chosenJutsu.seals],
+      enemyAction: 'Pressuring strike',
+      outcome: 'support',
+      playerDmgTaken: enemyChip,
+      enemyDmgTaken,
+      whyLine,
+      narrative,
+    };
+    battle.rounds.push(summary);
+    return resolveNonCombatLethalCheck(state, war, battle, summary, preCounters, rng);
+  }
 
   // Decide whether Enemy fires Ultimate this round
   const enemyUsesUlt = rng.chance(npcUltimateChance(enemy, war.hp, battle.isFinal));
@@ -1047,49 +1133,44 @@ export function resolveBattleRound(
     if (enemy.intel >= 90) enemy.skillsRevealed = true;
   }
 
-  const playerUsesUlt = optionId === 'ultimate' && war.cp >= ultCost;
-  if (playerUsesUlt) {
-    war.cp = Math.max(0, war.cp - ultCost);
-    war.exposure = clamp(war.exposure + (ult.scope === 'fortress' ? 10 : 6), 0, 100);
-  } else if (optionId === 'kenjutsu') {
-    war.cp = Math.max(0, war.cp - 4);
-  } else if (optionId === 'ninjutsu') {
-    war.cp = Math.max(0, war.cp - 8);
-  } else if (optionId === 'genjutsu') {
-    war.cp = Math.max(0, war.cp - 6);
+  const playerUsesClash = chosenJutsu.role === 'clash';
+  const clashRankVal = chosenJutsu.rank === 'S' ? 5.2 : 4.5;
+  const clashElement = chosenJutsu.element ?? state.element;
+  if (playerUsesClash) {
+    war.exposure = clamp(war.exposure + (chosenJutsu.rank === 'S' ? 10 : 6), 0, 100);
   }
 
   const memForBoost =
     battle.resolveBoostThisRound && state.memories && state.memories.length > 0
       ? state.memories[state.memories.length - 1]
       : null;
-  const baseBoostTag = battle.resolveBoostThisRound
+  const boostTag = battle.resolveBoostThisRound
     ? `Limit Break: ${memForBoost ? `Memory flashes back (Age ${memForBoost.age}): "${memForBoost.text}" ` : ''}${resolvePartnerNote ? `${resolvePartnerNote.trim()} ` : ''}`
     : resolvePartnerNote
       ? `${resolvePartnerNote.trim()} `
       : '';
-  const boostTag = `${odRes.prefix}${baseBoostTag}`;
 
-  // === JUTSU CLASH (Both sides fire Ultimates on the same round!) ===
-  if (playerUsesUlt && enemyUsesUlt) {
-    const elemInfo = getElementMultiplier(ult.element, enemy.element);
+  // === JUTSU CLASH (Both sides fire Clash/Ultimate on the same round!) ===
+  if (playerUsesClash && enemyUsesUlt) {
+    const elemInfo = getElementMultiplier(clashElement, enemy.element);
     const partnerClashBonus = war.partner?.active && war.partner.trust >= 80 ? 4 : 0;
     const pCV =
-      ult.rankVal * 8 +
+      clashRankVal * 8 * mastery.powerMult +
       pRanks[3] * 3 +
       (battle.resolveBoostThisRound ? 15 : 0) +
       (enemy.intel >= 80 ? 6 : 0) +
       partnerClashBonus +
       elemInfo.clashBonus +
       rng.int(-10, 10);
-    const eCV =
-      enemy.ultimate.rankVal * 8 +
-      enemy.ranks[3] * 3 +
-      rng.int(-10, 10);
+    const eCV = enemy.ultimate.rankVal * 8 + enemy.ranks[3] * 3 + rng.int(-10, 10);
 
     const diff = pCV - eCV;
-    const basePlayerUltDmg = Math.round((10 + ult.rankVal * 4.5) * (battle.resolveBoostThisRound ? 1.3 : 1) * elemInfo.mult);
-    const baseEnemyUltDmg = Math.round((10 + enemy.ultimate.rankVal * 4.5) * (battle.playerWardRounds > 0 ? 0.65 : 1));
+    const basePlayerUltDmg = Math.round(
+      (10 + clashRankVal * 4.5) * mastery.powerMult * (battle.resolveBoostThisRound ? 1.3 : 1) * elemInfo.mult,
+    );
+    const baseEnemyUltDmg = Math.round(
+      (10 + enemy.ultimate.rankVal * 4.5) * (battle.playerWardRounds > 0 ? 0.65 : 1),
+    );
 
     let pTaken = 0;
     let eTaken = 0;
@@ -1099,24 +1180,24 @@ export function resolveBattleRound(
 
     if (diff >= 8) {
       const pierceFactor = clamp(0.65 + (diff - 8) * 0.022, 0.65, 1.0);
-      eTaken = Math.max(8, Math.round(basePlayerUltDmg * pierceFactor));
+      eTaken = clamp(Math.round(basePlayerUltDmg * pierceFactor), 8, MAX_EXCHANGE_DAMAGE);
       pTaken = Math.max(3, Math.round(baseEnemyUltDmg * 0.15));
       outcome = 'clash_win';
       whyLine = `JUTSU CLASH WON (+${Math.round(diff)} CV)${elemInfo.label ? ` · ${elemInfo.label}` : ''}`;
-      narrative = `${boostTag}JUTSU CLASH! Your ${ult.name} tears clean through ${enemy.ultimate.name}, dealing ${eTaken} damage!`;
+      narrative = `${boostTag}JUTSU CLASH! Your ${chosenJutsu.name} tears clean through ${enemy.ultimate.name}, dealing ${eTaken} damage!`;
     } else if (diff <= -8) {
       const pierceFactor = clamp(0.65 + (-diff - 8) * 0.022, 0.65, 1.0);
-      pTaken = Math.max(8, Math.round(baseEnemyUltDmg * pierceFactor));
+      pTaken = clamp(Math.round(baseEnemyUltDmg * pierceFactor), 8, MAX_EXCHANGE_DAMAGE);
       eTaken = Math.max(3, Math.round(basePlayerUltDmg * 0.15));
       outcome = 'clash_lose';
       whyLine = `JUTSU CLASH LOST (${Math.round(diff)} CV)${elemInfo.label ? ` · ${elemInfo.label}` : ''}`;
-      narrative = `${boostTag}JUTSU CLASH! ${enemy.ultimate.name} overpowers your ${ult.name}, slamming you for ${pTaken} damage!`;
+      narrative = `${boostTag}JUTSU CLASH! ${enemy.ultimate.name} overpowers your ${chosenJutsu.name}, slamming you for ${pTaken} damage!`;
     } else {
       pTaken = Math.max(4, Math.round(baseEnemyUltDmg * 0.3));
       eTaken = Math.max(4, Math.round(basePlayerUltDmg * 0.3));
       outcome = 'clash_cancel';
       whyLine = `JUTSU CLASH SCATTERED (Δ${Math.round(diff)} CV) · Both techniques cancelled out`;
-      narrative = `${boostTag}JUTSU CLASH! ${ult.name} and ${enemy.ultimate.name} detonate midair in blinding shockwaves!`;
+      narrative = `${boostTag}JUTSU CLASH! ${chosenJutsu.name} and ${enemy.ultimate.name} detonate midair in blinding shockwaves!`;
     }
 
     war.hp = Math.max(0, war.hp - pTaken);
@@ -1130,16 +1211,18 @@ export function resolveBattleRound(
       actorName: state.name,
       targetId: enemy.id,
       targetName: enemy.name,
-      detail: `${ult.name} clashed with ${enemy.ultimate.name}`,
+      detail: `${chosenJutsu.name} clashed with ${enemy.ultimate.name}`,
     });
 
     const summary: BattleRoundSummary = {
       round: battle.round,
-      playerAction: `Ultimate: ${ult.name}`,
+      playerAction: chosenJutsu.name,
+      jutsuName: chosenJutsu.name,
+      seals: [...chosenJutsu.seals],
       enemyAction: `Ultimate: ${enemy.ultimate.name}`,
       outcome,
       playerDmgTaken: pTaken,
-      enemyDmgTaken: eTaken + odRes.bonusEnemyDmg,
+      enemyDmgTaken: eTaken,
       whyLine,
       narrative,
     };
@@ -1147,13 +1230,21 @@ export function resolveBattleRound(
     return finalizeCombatOutcomes(state, war, enemy, battle, summary, preCounters, rng);
   }
 
-  // === Single-Side Ultimate ===
-  if (playerUsesUlt && !enemyUsesUlt) {
-    const elemInfo = getElementMultiplier(ult.element, enemy.element);
+  // === Single-Side Player Clash Jutsu ===
+  if (playerUsesClash && !enemyUsesUlt) {
+    const elemInfo = getElementMultiplier(clashElement, enemy.element);
     const mrMit = 1 - Math.min(0.35, skillSum(enemy.skills, 'resist') * 0.04 + skillSum(enemy.skills, 'evade') * 0.02);
-    const dmg = Math.max(
+    const dmg = clamp(
+      Math.round(
+        (12 + clashRankVal * 5.2) *
+          mastery.powerMult *
+          (battle.resolveBoostThisRound ? 1.3 : 1) *
+          elemInfo.mult *
+          mrMit *
+          rng.float(0.9, 1.1),
+      ),
       12,
-      Math.round((12 + ult.rankVal * 5.2) * (battle.resolveBoostThisRound ? 1.3 : 1) * elemInfo.mult * mrMit * rng.float(0.9, 1.1)),
+      MAX_EXCHANGE_DAMAGE,
     );
     const chip = rng.int(2, 6);
     enemy.hp = Math.max(0, enemy.hp - dmg);
@@ -1162,19 +1253,22 @@ export function resolveBattleRound(
 
     const summary: BattleRoundSummary = {
       round: battle.round,
-      playerAction: `Ultimate: ${ult.name}`,
+      playerAction: chosenJutsu.name,
+      jutsuName: chosenJutsu.name,
+      seals: [...chosenJutsu.seals],
       enemyAction: 'Desperate guard',
       outcome: 'win',
       playerDmgTaken: chip,
-      enemyDmgTaken: dmg + odRes.bonusEnemyDmg,
-      whyLine: `Key Factor: Uncontested Ultimate${elemInfo.label ? ` · ${elemInfo.label}` : ''}`,
-      narrative: `${boostTag}You unleash ${ult.name}, tearing through their guard for ${dmg} damage!`,
+      enemyDmgTaken: dmg,
+      whyLine: `Key Factor: Uncontested ${chosenJutsu.rank}-Rank Clash Jutsu${elemInfo.label ? ` · ${elemInfo.label}` : ''}`,
+      narrative: `${boostTag}${sealPrefix}Tears straight through their guard for ${dmg} damage!`,
     };
     battle.rounds.push(summary);
     return finalizeCombatOutcomes(state, war, enemy, battle, summary, preCounters, rng);
   }
 
-  if (enemyUsesUlt && !playerUsesUlt) {
+  // === Single-Side Enemy Ultimate ===
+  if (enemyUsesUlt && !playerUsesClash) {
     let pTaken = 0;
     let narrative = '';
     const wardMult =
@@ -1199,9 +1293,10 @@ export function resolveBattleRound(
       narrative = `${enemy.name} surges with ${enemy.ultimate.name}, bolstering defense and terrain control (${pTaken} damage)!`;
     } else {
       const elemInfo = getElementMultiplier(enemy.element, state.element);
-      pTaken = Math.max(
-        10,
+      pTaken = clamp(
         Math.round((11 + enemy.ultimate.rankVal * 4.8) * elemInfo.mult * wardMult * rng.float(0.88, 1.12)),
+        10,
+        MAX_EXCHANGE_DAMAGE,
       );
       narrative = `${enemy.name} unleashes ${enemy.ultimate.name}, blasting through your guard for ${pTaken} damage!`;
     }
@@ -1213,20 +1308,15 @@ export function resolveBattleRound(
 
     const summary: BattleRoundSummary = {
       round: battle.round,
-      playerAction:
-        optionId === 'kenjutsu'
-          ? 'Kenjutsu Slash'
-          : optionId === 'ninjutsu'
-            ? 'Elemental Ninjutsu'
-            : optionId === 'genjutsu'
-              ? 'Genjutsu Feint'
-              : 'Taijutsu Strike',
+      playerAction: chosenJutsu.name,
+      jutsuName: chosenJutsu.name,
+      seals: [...chosenJutsu.seals],
       enemyAction: `Ultimate: ${enemy.ultimate.name}`,
       outcome: 'lose',
       playerDmgTaken: pTaken,
-      enemyDmgTaken: counterChip + odRes.bonusEnemyDmg,
+      enemyDmgTaken: counterChip,
       whyLine: `Key Factor: Enemy fired ${enemy.ultimate.name} uncontested`,
-      narrative: `${odRes.prefix}${narrative}`,
+      narrative,
     };
     if (war.partner?.active && pTaken > 0) {
       const splash = Math.max(3, Math.round(pTaken * 0.35));
@@ -1238,24 +1328,16 @@ export function resolveBattleRound(
     return finalizeCombatOutcomes(state, war, enemy, battle, summary, preCounters, rng);
   }
 
-  // === Standard Tactical Exchange (Taijutsu / Ninjutsu / Genjutsu) ===
+  // === STANDARD TACTICAL EXCHANGE (Individual Jutsu Mechanics, Phase 3 & 6) ===
   const { power: pBase, topFactor } = computePlayerRoundPower(state, war, enemy, battle);
   const eBase = computeEnemyRoundPower(war, enemy, battle);
 
-  // Narrowed noise U(-14, 14) per side (GDD Ch. 14 R4!) + unlocked Clan Hiden Secret Art bonus
   const hidenBonus = getUnlockedHidenCombatBonus(state);
   const pRoll = pBase + hidenBonus + rng.int(-14, 14);
   const eRoll = eBase + rng.int(-14, 14);
   const diff = pRoll - eRoll;
 
-  const styleKey: BattleAttackStyle =
-    optionId === 'kenjutsu'
-      ? 'kenjutsu'
-      : optionId === 'ninjutsu'
-        ? 'ninjutsu'
-        : optionId === 'genjutsu'
-          ? 'genjutsu'
-          : 'taijutsu';
+  const styleKey: BattleAttackStyle = chosenJutsu.style === 'support' ? 'taijutsu' : chosenJutsu.style;
   const { mult: stanceMult, elemLabel } = computeStanceMultiplier(
     state,
     pRanks,
@@ -1264,23 +1346,20 @@ export function resolveBattleRound(
     enemy.skills,
     true,
     styleKey,
+    chosenJutsu.element,
   );
-
-  const pickedJutsu = pickPlayerJutsu(state, styleKey, battle.rounds.length);
-  const sealPrefix = pickedJutsu.seals.length > 0
-    ? `${formatHandSeals(pickedJutsu.seals)}: ${pickedJutsu.name}! `
-    : `${pickedJutsu.name}! `;
+  const jutsuPower = getJutsuBasePower(chosenJutsu);
+  const attackMult = stanceMult * jutsuPower * mastery.powerMult;
 
   let stanceReason = '';
-  const playerActionLabel = pickedJutsu.name;
   if (styleKey === 'taijutsu') {
-    stanceReason = `Taijutsu (TAI ${pRanks[0].toFixed(1)} vs STA ${enemy.ranks[2].toFixed(1)})`;
+    stanceReason = `${chosenJutsu.name} (TAI ${pRanks[0].toFixed(1)} vs STA ${enemy.ranks[2].toFixed(1)})`;
   } else if (styleKey === 'kenjutsu') {
-    stanceReason = `Kenjutsu (SPD/TAI vs SPD ${enemy.ranks[1].toFixed(1)} · Wall Pierce)`;
+    stanceReason = `${chosenJutsu.name} (SPD/TAI vs SPD ${enemy.ranks[1].toFixed(1)})`;
   } else if (styleKey === 'ninjutsu') {
-    stanceReason = elemLabel ?? `Ninjutsu (CHK ${pRanks[3].toFixed(1)} vs CHK ${enemy.ranks[3].toFixed(1)})`;
+    stanceReason = elemLabel ?? `${chosenJutsu.name} (CHK ${pRanks[3].toFixed(1)} vs CHK ${enemy.ranks[3].toFixed(1)})`;
   } else {
-    stanceReason = `Genjutsu (INS ${pRanks[4].toFixed(1)} vs INS ${enemy.ranks[4].toFixed(1)})`;
+    stanceReason = `${chosenJutsu.name} (INS ${pRanks[4].toFixed(1)} vs INS ${enemy.ranks[4].toFixed(1)})`;
   }
 
   let pTaken = 0;
@@ -1296,50 +1375,65 @@ export function resolveBattleRound(
     whyLine = `Key Factor: Even clash (Δ${Math.round(diff)}) · ${stanceReason}`;
     narrative = `${boostTag}${sealPrefix}Sparks and chakra collide evenly: both shinobi trade glancing wounds (${eTaken} dealt, ${pTaken} taken).`;
   } else {
-    // Reversal check (instinct/luck)
+    // Phase 3 Reversal scaling: only occurs between near-peer fighters!
     let playerWins = diff > 0;
+    const playerCR = getCombatRating(pRanks);
+    const enemyCR = getCombatRating(enemy.ranks);
+    const winnerCR = playerWins ? playerCR : enemyCR;
+    const loserCR = playerWins ? enemyCR : playerCR;
+    const crGap = Math.max(0, winnerCR - loserCR);
+    const reversalScale = clamp(1 - crGap / 2, 0, 1);
     const loserIns = playerWins ? enemy.ranks[4] : pRanks[4];
-    const reversal = rng.chance(0.06 + (loserIns * 0.08) / 6);
+    const reversal = rng.chance((0.06 + (loserIns * 0.08) / 6) * reversalScale);
     if (reversal) playerWins = !playerWins;
 
     if (playerWins) {
-      const dodgeP = clamp(0.05 + (enemy.ranks[1] - pRanks[1]) * 0.012 + skillSum(enemy.skills, 'evade') * 0.02, 0.03, 0.22);
-      if (rng.chance(styleKey === 'ninjutsu' ? dodgeP * 0.5 : dodgeP)) {
+      const baseDodge = clamp(
+        0.05 + (enemy.ranks[1] - pRanks[1]) * 0.012 + skillSum(enemy.skills, 'evade') * 0.02,
+        0.03,
+        0.24,
+      );
+      const dodgeMult = chosenJutsu.effect.dodgeMult ?? (styleKey === 'ninjutsu' ? 0.85 : 1.0);
+      if (rng.chance(baseDodge * dodgeMult)) {
         eTaken = rng.int(2, 5);
         pTaken = rng.int(1, 3);
         outcome = 'win';
         whyLine = `Key Factor: Enemy evaded brunt of attack · ${stanceReason}`;
         narrative = `${boostTag}${sealPrefix}Your strike nearly connects cleanly, grazing them for ${eTaken} damage as they twist clear.`;
       } else {
-        // Lava Release (yoton) and Kenjutsu blades cleave straight through enemy Guard Walls!
-        const wallPierced = battle.enemyWallRounds > 0 && (styleKey === 'kenjutsu' || activeBloodlineId === 'yoton');
+        const wallPierced =
+          battle.enemyWallRounds > 0 &&
+          (Boolean(chosenJutsu.effect.pierceWall) || activeBloodlineId === 'yoton');
         const wallMult = battle.enemyWallRounds > 0 && !wallPierced ? 0.65 : 1;
-        const gentleFistActive = styleKey === 'taijutsu' && state.disciplines.some((d) => d.id === 'gentle_fist');
-        const kenLv = styleKey === 'kenjutsu' ? getKenjutsuLevel(state) : 0;
-        const razorBonus = styleKey === 'kenjutsu' ? (kenLv >= 3 ? 5 : 3) : 0;
-        eTaken = Math.max(5, Math.round((7 + Math.abs(diff) * 0.34) * stanceMult * wallMult) + razorBonus);
+        eTaken = clamp(
+          Math.round((7 + Math.abs(diff) * 0.34) * attackMult * wallMult),
+          5,
+          MAX_EXCHANGE_DAMAGE,
+        );
         pTaken = rng.int(1, 5);
         outcome = 'win';
-        if (styleKey === 'genjutsu') {
-          battle.enemyDebuffRounds = 2;
+
+        const effectNotes: string[] = [];
+        if (chosenJutsu.effect.debuffRounds) {
+          battle.enemyDebuffRounds = Math.max(battle.enemyDebuffRounds, chosenJutsu.effect.debuffRounds);
+          preCounters.debuff = false;
+          effectNotes.push(`disrupts foe (${chosenJutsu.effect.debuffRounds}r)`);
         }
-        if (gentleFistActive) {
-          enemy.cp = Math.max(0, enemy.cp - 10);
+        if (chosenJutsu.effect.cpDrain) {
+          enemy.cp = Math.max(0, enemy.cp - chosenJutsu.effect.cpDrain);
+          effectNotes.push(`drains -${chosenJutsu.effect.cpDrain} Enemy CP`);
         }
-        if (styleKey === 'kenjutsu') {
-          enemy.fort = Math.max(0, enemy.fort - 4);
+        if (chosenJutsu.effect.fortShave) {
+          enemy.fort = Math.max(0, enemy.fort - chosenJutsu.effect.fortShave);
+          effectNotes.push(`shaves -${chosenJutsu.effect.fortShave} Enemy Fort`);
         }
+        if (wallPierced) {
+          effectNotes.push('cleaves straight through their Guard Wall');
+        }
+
         whyLine = `Key Factor: ${reversal ? 'Instinct Reversal! ' : ''}${stanceReason} · ${topFactor}`;
-        narrative = `${boostTag}${sealPrefix}Breaks their guard for ${eTaken} damage${styleKey === 'genjutsu'
-          ? ' and rattles their focus!'
-          : gentleFistActive
-            ? ' and strikes their chakra tenketsu (-10 Enemy CP)!'
-            : styleKey === 'kenjutsu'
-              ? wallPierced
-                ? ', cleaving clean through their Guard Wall (-4 Enemy Fort)!'
-                : ' with a razor chakra-blade draw (-4 Enemy Fort)!'
-              : '!'
-          }`;
+        const suffix = effectNotes.length > 0 ? ` (${effectNotes.join(', ')})!` : '!';
+        narrative = `${boostTag}${sealPrefix}Breaks their guard for ${eTaken} damage${suffix}`;
       }
     } else {
       const bloodlineDodge =
@@ -1365,16 +1459,36 @@ export function resolveBattleRound(
         const wardMult =
           (battle.playerWardRounds > 0 ? 0.65 : 1) *
           (activeBloodlineId === 'jiton' || activeBloodlineId === 'shikotsumyaku' ? 0.82 : 1);
-        pTaken = Math.max(5, Math.round((7 + Math.abs(diff) * 0.32) * wardMult));
+        let rawPTaken = Math.round((7 + Math.abs(diff) * 0.32) * wardMult);
+
+        // Self-risk penalty on exchange loss (Chidori tunnel-vision bypassed by Sharingan/Byakugan/Sensory/Debuff!)
+        let riskNote = '';
+        if (chosenJutsu.effect.selfRisk) {
+          const chidoriProtected =
+            chosenJutsu.id === 'chidori' &&
+            (activeBloodlineId === 'sharingan' ||
+              activeBloodlineId === 'byakugan' ||
+              state.disciplines.some((d) => d.id === 'sensory') ||
+              battle.enemyDebuffRounds > 0);
+          if (!chidoriProtected) {
+            rawPTaken += chosenJutsu.effect.selfRisk;
+            riskNote =
+              chosenJutsu.id === 'chidori'
+                ? ' Tunnel-vision leaves you open to a brutal counter!'
+                : ' Recoil strain amplifies the counterblow!';
+          }
+        }
+
+        pTaken = clamp(rawPTaken, 5, MAX_EXCHANGE_DAMAGE);
         eTaken = rng.int(1, 5);
         outcome = 'lose';
         whyLine = `Key Factor: ${reversal ? 'Enemy Reversal! ' : ''}Enemy outpaced round (+${Math.round(Math.abs(diff))} power)`;
-        narrative = `${sealPrefix}Your opponent reads the opening and lands a clean counter for ${pTaken} damage!`;
+        narrative = `${sealPrefix}Your opponent reads the opening and lands a clean counter for ${pTaken} damage!${riskNote}`;
       }
     }
   }
 
-  // Wire unused roster clash (Round 1) & win lines deterministically without touching RNG
+  // Wire roster clash (Round 1) & win lines deterministically without touching RNG
   const rosterDef = ROSTER_MAP[enemy.rosterId];
   if (rosterDef) {
     if (battle.round === 1 && rosterDef.lines.clash) {
@@ -1391,15 +1505,15 @@ export function resolveBattleRound(
 
   const summary: BattleRoundSummary = {
     round: battle.round,
-    playerAction: playerActionLabel,
-    jutsuName: pickedJutsu.name,
-    seals: [...pickedJutsu.seals],
+    playerAction: chosenJutsu.name,
+    jutsuName: chosenJutsu.name,
+    seals: [...chosenJutsu.seals],
     enemyAction: 'Combat exchange',
     outcome,
     playerDmgTaken: pTaken,
-    enemyDmgTaken: eTaken + odRes.bonusEnemyDmg,
+    enemyDmgTaken: eTaken,
     whyLine,
-    narrative: odRes.prefix && !narrative.startsWith(odRes.prefix) ? `${odRes.prefix}${narrative}` : narrative,
+    narrative,
   };
   battle.rounds.push(summary);
   return finalizeCombatOutcomes(state, war, enemy, battle, summary, preCounters, rng);
@@ -1415,9 +1529,8 @@ function checkNindoResolve(
   if (war.hp <= 0 || war.hp >= 25) return;
   battle.usedNindoResolve = true;
   war.hp = clamp(war.hp + 12, 1, 100);
-  const mem = state.memories && state.memories.length > 0
-    ? state.memories[state.memories.length - 1]
-    : null;
+  const mem =
+    state.memories && state.memories.length > 0 ? state.memories[state.memories.length - 1] : null;
   const flashText = mem ? ` Memory flashes back (Age ${mem.age}): "${mem.text}"` : '';
   summary.narrative += ` NINDO RESOLVE! Remembering your ninja way pulls you back from the brink (+12 HP)!${flashText}`;
 }

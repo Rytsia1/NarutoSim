@@ -395,6 +395,9 @@ export function applyResolvePartnerReaction(
           archetype: partner.archetype,
           tactic: 'hunter',
           element: partner.element,
+          officialRank: 'chunin',
+          formerShinobi: true,
+          threatClass: 'A',
           ranks: [3.8, 4.0, 3.6, 3.8, 3.7],
           skills: partner.skills.map((s) => ({ ...s })),
           ultimate: {

@@ -19,10 +19,11 @@ export function ensureWarClockDefaults(war: WarState): void {
   if (typeof war.npcExtraRaidPressure !== 'number') war.npcExtraRaidPressure = 0;
   if (!Array.isArray(war.usedPartnerScenes)) war.usedPartnerScenes = [];
   if (war.partner === undefined) war.partner = null;
-  if (war.activeBattle) {
-    if (typeof war.activeBattle.odMax !== 'number') war.activeBattle.odMax = 24;
-    if (typeof war.activeBattle.od !== 'number') war.activeBattle.od = war.activeBattle.odMax;
-    if (typeof war.activeBattle.odUsedCount !== 'number') war.activeBattle.odUsedCount = 0;
+  if (Array.isArray(war.enemies)) {
+    for (const e of war.enemies) {
+      if (!e.officialRank) e.officialRank = e.archetype === 'rogue_s' ? 'jonin' : 'tokubetsu_jonin';
+      if (!e.threatClass) e.threatClass = e.archetype === 'rogue_s' ? 'S' : 'B';
+    }
   }
 }
 

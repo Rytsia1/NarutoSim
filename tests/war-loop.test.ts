@@ -97,7 +97,7 @@ describe('14-Day Autonomous Shinobi Warfront', () => {
     flushWarUntilDecision(state, new SeededRng(43));
     resolvePendingDecision(state, 'night_raid');
     resolvePendingDecision(state, state.war.enemies[0].id);
-    resolvePendingDecision(state, 'taijutsu');
+    resolvePendingDecision(state, 'jutsu:basic_strike');
 
     // War should conclude cleanly back to life loop (unless enemy survived once at 12 HP)
     let guard = 0;

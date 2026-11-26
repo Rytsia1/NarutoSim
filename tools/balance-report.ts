@@ -48,7 +48,7 @@ for (const rank of ['genin', 'chunin', 'jonin'] as const) {
       ];
     }
 
-    st.pending = buildWarPreludeDecision(st, false);
+    st.pending = buildWarPreludeDecision(st, false, true);
     sim.resolve('deploy_front');
 
     let guard = 0;

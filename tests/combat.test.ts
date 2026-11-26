@@ -22,10 +22,10 @@ describe('Solo Tactical Combat & Jutsu Clash Engine', () => {
     expect(getElementMultiplier('fire', 'earth').mult).toBe(1.0);
   });
 
-  it('scales combat power down to 55% as HP approaches 0', () => {
+  it('scales combat power down to 35% as HP approaches 0', () => {
     const full = unitBasePower([4, 4, 4, 4, 4], 100);
     const low = unitBasePower([4, 4, 4, 4, 4], 0);
-    expect(low / full).toBeCloseTo(0.55, 2);
+    expect(low / full).toBeCloseTo(0.35, 2);
   });
 
   it('produces 1-line tactical Why breakdown on every round and honors 3x Resolve tokens', () => {
@@ -36,6 +36,11 @@ describe('Solo Tactical Combat & Jutsu Clash Engine', () => {
     state.stats.health = 85;
     state.stats.intel = 65;
     state.stats.will = 65;
+    state.element = 'fire';
+    state.disciplines = [
+      { id: 'fire_release', level: 1, xp: 4, lastLevelAge: 16, quality: 1, isMain: true, declinedUntilAge: 0 },
+      { id: 'genjutsu', level: 1, xp: 4, lastLevelAge: 17, quality: 1, isMain: false, declinedUntilAge: 0 },
+    ];
     state.bloodline = { id: 'sharingan', grade: 3, stage: 'ctrl1', lastEventAge: 16, declined: false };
 
     const rng = new SeededRng(999);
@@ -43,10 +48,10 @@ describe('Solo Tactical Combat & Jutsu Clash Engine', () => {
     startWarBattle(state, state.war.enemies[0].id, { isFinal: false, isAmbush: true, isDefense: false });
 
     const menu = buildBattleRoundDecision(state);
-    expect(menu.options.some((o) => o.id === 'taijutsu')).toBe(true);
-    expect(menu.options.some((o) => o.id === 'ninjutsu')).toBe(true);
-    expect(menu.options.some((o) => o.id === 'genjutsu')).toBe(true);
-    expect(menu.options.some((o) => o.id === 'ultimate')).toBe(true);
+    expect(menu.options.some((o) => o.id === 'jutsu:basic_strike')).toBe(true);
+    expect(menu.options.some((o) => o.id === 'jutsu:gokakyu')).toBe(true);
+    expect(menu.options.some((o) => o.id === 'jutsu:magen_narakumi')).toBe(true);
+    expect(menu.options.some((o) => o.id === 'jutsu:bloodline_secret_sharingan')).toBe(true);
     expect(menu.options.some((o) => o.id === 'bloodline')).toBe(true);
     expect(menu.options.some((o) => o.id === 'resolve_boost')).toBe(true);
     expect(menu.options.some((o) => o.id === 'resolve_flee')).toBe(true);
@@ -69,7 +74,8 @@ describe('Solo Tactical Combat & Jutsu Clash Engine', () => {
       { id: 'fire_release', level: 4, xp: 50, lastLevelAge: 22, quality: 1.2, isMain: true, declinedUntilAge: 0 },
     ];
     const ult = getPlayerSignatureUltimate(state);
-    expect(ult.name).toBe('Katon: Goka Mekkyaku');
-    expect(ult.rankVal).toBeGreaterThanOrEqual(5);
+    expect(ult).not.toBeNull();
+    expect(ult!.name).toBe('Katon: Goka Mekkyaku');
+    expect(ult!.rankVal).toBeGreaterThanOrEqual(5);
   });
 });

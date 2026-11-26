@@ -1,6 +1,7 @@
 import { getPlayerRanks, getPlayerSignatureUltimate } from './combat';
 import { addLeaning, clampStats, pushLog } from './life';
 import { recordWarFact } from './narrative';
+import { getJutsuBasePower, getKnownJutsu } from '../data/jutsu';
 import { clamp } from './powers';
 import type { SeededRng } from './rng';
 import type {
@@ -156,11 +157,33 @@ export function advanceCrisisPhase(state: GameState, war: WarState, rng: SeededR
   }
 }
 
+function getCrisisSignatureStrike(state: GameState): {
+  name: string;
+  cost: number;
+  rankVal: number;
+  scope: 'single' | 'squad' | 'fortress' | 'battlefield';
+} {
+  const ult = getPlayerSignatureUltimate(state);
+  if (ult) return ult;
+  const best = [...getKnownJutsu(state)]
+    .filter((j) => j.role !== 'heal' && j.role !== 'defense' && j.role !== 'evasion')
+    .sort((a, b) => getJutsuBasePower(b) - getJutsuBasePower(a))[0];
+  if (best) {
+    return {
+      name: best.name,
+      cost: Math.max(12, best.chakraCost),
+      rankVal: best.rank === 'S' ? 5.2 : best.rank === 'A' ? 4.5 : best.rank === 'B' ? 4.0 : 3.5,
+      scope: best.role === 'multi_hit' || best.role === 'clash' ? 'squad' : 'single',
+    };
+  }
+  return { name: 'All-Out Chakra Surge', cost: 18, rankVal: 3.4, scope: 'single' };
+}
+
 export function buildCrisisBossDecision(state: GameState): PendingDecision {
   const war = state.war!;
   const c = war.crisis!;
   syncCrisisCoalitionAllies(war);
-  const ult = getPlayerSignatureUltimate(state);
+  const ult = getCrisisSignatureStrike(state);
   const hasMokutonOrSeal =
     (state.bloodline?.id === 'mokuton' && state.bloodline.stage !== 'latent') ||
     state.disciplines.some((d) => d.id === 'fuinjutsu' && d.level >= 3);
@@ -276,7 +299,7 @@ export function resolveCrisisBossTurn(
 ): 'continue' | 'boss_down' | 'retreated' | 'player_dead' {
   const war = state.war!;
   const c = war.crisis!;
-  const ult = getPlayerSignatureUltimate(state);
+  const ult = getCrisisSignatureStrike(state);
   const ranks = getPlayerRanks(state, optionId === 'boss_resolve');
 
   if (optionId === 'boss_fall_back') {
@@ -492,7 +515,7 @@ export function buildConvictionBeatDecision(state: GameState): PendingDecision {
 export function buildConvictionDuelDecision(state: GameState): PendingDecision {
   const war = state.war!;
   const conv = war.conviction!;
-  const ult = getPlayerSignatureUltimate(state);
+  const ult = getCrisisSignatureStrike(state);
 
   return {
     id: `conv_duel_${conv.round}`,
@@ -589,7 +612,7 @@ export function resolveConvictionDuelRound(
 ): 'continue' | 'player_won' | 'opponent_won' | 'opponent_won_dead' | 'turned_away' {
   const war = state.war!;
   const conv = war.conviction!;
-  const ult = getPlayerSignatureUltimate(state);
+  const ult = getCrisisSignatureStrike(state);
 
   if (optionId === 'duel_sheathe') {
     conv.endingKey = 'conv_turned_away';

@@ -1,8 +1,10 @@
 import type {
   ChakraElement,
   CombatArchetype,
+  NpcOfficialRank,
   NpcTactic,
   SkillTag,
+  ThreatClass,
   TraitId,
   UltimateDef,
   VillageId,
@@ -16,6 +18,9 @@ export interface RosterShinobiDef {
   archetype: CombatArchetype;
   tactic: NpcTactic;
   element: ChakraElement;
+  officialRank: NpcOfficialRank;
+  formerShinobi?: boolean;
+  threatClass: ThreatClass;
   ranks: [number, number, number, number, number]; // [tai, spd, sta, chk, ins] on 1..6 scale
   traits: TraitId[];
   skills: { name: string; tag: SkillTag; rank: number }[];
@@ -77,6 +82,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'vanguard',
     tactic: 'reckless',
     element: 'water',
+    officialRank: 'jonin',
+    threatClass: 'A',
     ranks: [4.6, 3.8, 4.1, 3.4, 3.1],
     traits: ['ambition', 'freedom'],
     skills: [
@@ -108,6 +115,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'vanguard',
     tactic: 'proud',
     element: 'earth',
+    officialRank: 'jonin',
+    threatClass: 'A',
     ranks: [4.4, 4.2, 3.9, 3.1, 3.6],
     traits: ['honor', 'loyalty'],
     skills: [
@@ -139,6 +148,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'vanguard',
     tactic: 'defensive',
     element: 'wind',
+    officialRank: 'tokubetsu_jonin',
+    threatClass: 'B',
     ranks: [3.9, 4.1, 3.5, 3.4, 3.8],
     traits: ['honor', 'compassion'],
     skills: [
@@ -172,6 +183,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'marksman',
     tactic: 'cunning',
     element: 'wind',
+    officialRank: 'jonin',
+    threatClass: 'A',
     ranks: [2.7, 3.8, 3.0, 4.4, 4.3],
     traits: ['loyalty', 'ambition'],
     skills: [
@@ -203,6 +216,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'marksman',
     tactic: 'hunter',
     element: 'earth',
+    officialRank: 'tokubetsu_jonin',
+    threatClass: 'B',
     ranks: [2.9, 3.7, 3.1, 4.0, 4.5],
     traits: ['ambition', 'freedom'],
     skills: [
@@ -234,6 +249,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'marksman',
     tactic: 'defensive',
     element: 'fire',
+    officialRank: 'tokubetsu_jonin',
+    threatClass: 'B',
     ranks: [2.8, 4.0, 2.9, 3.9, 4.2],
     traits: ['compassion', 'loyalty'],
     skills: [
@@ -267,6 +284,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'striker',
     tactic: 'reckless',
     element: 'lightning',
+    officialRank: 'jonin',
+    threatClass: 'A',
     ranks: [4.2, 4.9, 3.6, 3.9, 3.3],
     traits: ['honor', 'ambition'],
     skills: [
@@ -298,6 +317,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'striker',
     tactic: 'hunter',
     element: 'water',
+    officialRank: 'tokubetsu_jonin',
+    threatClass: 'B',
     ranks: [3.7, 4.5, 3.2, 4.0, 3.6],
     traits: ['freedom', 'loyalty'],
     skills: [
@@ -329,6 +350,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'striker',
     tactic: 'cunning',
     element: 'lightning',
+    officialRank: 'jonin',
+    threatClass: 'A',
     ranks: [3.8, 4.7, 3.3, 3.9, 4.2],
     traits: ['loyalty', 'honor'],
     skills: [
@@ -362,6 +385,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'skirmisher',
     tactic: 'cunning',
     element: 'water',
+    officialRank: 'tokubetsu_jonin',
+    threatClass: 'B',
     ranks: [3.2, 4.3, 3.2, 3.7, 4.0],
     traits: ['freedom', 'ambition'],
     skills: [
@@ -393,6 +418,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'skirmisher',
     tactic: 'defensive',
     element: 'wind',
+    officialRank: 'tokubetsu_jonin',
+    threatClass: 'B',
     ranks: [3.1, 4.5, 3.3, 3.6, 3.9],
     traits: ['loyalty', 'compassion'],
     skills: [
@@ -424,6 +451,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'skirmisher',
     tactic: 'defensive',
     element: 'lightning',
+    officialRank: 'tokubetsu_jonin',
+    threatClass: 'B',
     ranks: [3.5, 4.4, 3.4, 3.5, 3.9],
     traits: ['loyalty', 'freedom'],
     skills: [
@@ -457,6 +486,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'artificer',
     tactic: 'cunning',
     element: 'earth',
+    officialRank: 'jonin',
+    threatClass: 'A',
     ranks: [2.5, 3.1, 3.1, 4.5, 4.6],
     traits: ['ambition', 'loyalty'],
     skills: [
@@ -488,6 +519,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'artificer',
     tactic: 'defensive',
     element: 'water',
+    officialRank: 'jonin',
+    threatClass: 'A',
     ranks: [2.8, 3.0, 4.1, 4.8, 4.4],
     traits: ['compassion', 'honor'],
     skills: [
@@ -519,6 +552,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'artificer',
     tactic: 'reckless',
     element: 'earth',
+    officialRank: 'jonin',
+    threatClass: 'A',
     ranks: [2.6, 3.4, 3.2, 4.7, 4.2],
     traits: ['freedom', 'ambition'],
     skills: [
@@ -552,6 +587,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'infiltrator',
     tactic: 'hunter',
     element: 'water',
+    officialRank: 'jonin',
+    threatClass: 'A',
     ranks: [3.3, 4.6, 2.8, 3.5, 4.5],
     traits: ['loyalty', 'honor'],
     skills: [
@@ -583,6 +620,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'infiltrator',
     tactic: 'cunning',
     element: 'wind',
+    officialRank: 'tokubetsu_jonin',
+    threatClass: 'B',
     ranks: [2.6, 3.9, 2.7, 4.2, 4.8],
     traits: ['freedom', 'ambition'],
     skills: [
@@ -614,6 +653,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'infiltrator',
     tactic: 'defensive',
     element: 'fire',
+    officialRank: 'tokubetsu_jonin',
+    threatClass: 'B',
     ranks: [3.4, 4.1, 3.5, 3.4, 4.6],
     traits: ['loyalty', 'honor'],
     skills: [
@@ -647,6 +688,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'juggernaut',
     tactic: 'proud',
     element: 'earth',
+    officialRank: 'jonin',
+    threatClass: 'A',
     ranks: [4.9, 2.7, 5.0, 4.0, 2.8],
     traits: ['honor', 'loyalty'],
     skills: [
@@ -678,6 +721,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'juggernaut',
     tactic: 'defensive',
     element: 'fire',
+    officialRank: 'jonin',
+    threatClass: 'A',
     ranks: [4.8, 3.0, 4.7, 3.5, 2.9],
     traits: ['compassion', 'loyalty'],
     skills: [
@@ -709,6 +754,8 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'juggernaut',
     tactic: 'reckless',
     element: 'water',
+    officialRank: 'jonin',
+    threatClass: 'A',
     ranks: [4.6, 3.3, 4.8, 4.4, 2.7],
     traits: ['ambition', 'freedom'],
     skills: [
@@ -742,6 +789,9 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'rogue_s',
     tactic: 'cunning',
     element: 'wind',
+    officialRank: 'jonin',
+    formerShinobi: true,
+    threatClass: 'S',
     ranks: [4.5, 4.7, 4.4, 5.2, 5.0],
     traits: ['ambition', 'freedom'],
     skills: [
@@ -773,6 +823,9 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'rogue_s',
     tactic: 'defensive',
     element: 'fire',
+    officialRank: 'jonin',
+    formerShinobi: true,
+    threatClass: 'S',
     ranks: [4.3, 4.9, 4.0, 5.0, 5.4],
     traits: ['loyalty', 'honor'],
     skills: [
@@ -804,6 +857,9 @@ export const ROSTER: readonly RosterShinobiDef[] = [
     archetype: 'rogue_s',
     tactic: 'hunter',
     element: 'lightning',
+    officialRank: 'jonin',
+    formerShinobi: true,
+    threatClass: 'S',
     ranks: [4.4, 5.5, 4.3, 4.8, 5.1],
     traits: ['honor', 'compassion'],
     skills: [

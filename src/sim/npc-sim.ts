@@ -1514,10 +1514,35 @@ export function tickAutonomousNpcs(
   }
 
   // Cap archived dead NPCs so save JSON stays lean over 80+ year lives
-  const deadNpcs = worldSim.npcs.filter((n) => !n.identity.alive && !n.identity.linkedTeamMemberId && !n.relationships.player);
-  if (deadNpcs.length > 18) {
-    const toRemove = new Set(deadNpcs.slice(0, deadNpcs.length - 18).map((n) => n.identity.id));
+  const deadUnlinked = worldSim.npcs.filter(
+    (n) => !n.identity.alive && !n.identity.linkedTeamMemberId && !n.relationships.player,
+  );
+  if (deadUnlinked.length > 16) {
+    const toRemove = new Set(deadUnlinked.slice(0, deadUnlinked.length - 16).map((n) => n.identity.id));
     worldSim.npcs = worldSim.npcs.filter((n) => !toRemove.has(n.identity.id));
+  }
+  if (worldSim.npcs.length > 60) {
+    const deadExcess = worldSim.npcs.filter((n) => !n.identity.alive && !n.identity.linkedTeamMemberId);
+    const dropCount = Math.min(deadExcess.length, worldSim.npcs.length - 60);
+    if (dropCount > 0) {
+      const toRemove = new Set(deadExcess.slice(0, dropCount).map((n) => n.identity.id));
+      worldSim.npcs = worldSim.npcs.filter((n) => !toRemove.has(n.identity.id));
+    }
+  }
+  if (worldSim.npcs.length > 68) {
+    const distantL2 = worldSim.npcs.filter(
+      (n) =>
+        n.identity.alive &&
+        n.cognition?.lodTier === 'L2' &&
+        !n.identity.linkedTeamMemberId &&
+        !n.relationships.player &&
+        n.identity.specialStatus !== 'kage',
+    );
+    const dropCount = Math.min(distantL2.length, worldSim.npcs.length - 64);
+    if (dropCount > 0) {
+      const toRemove = new Set(distantL2.slice(0, dropCount).map((n) => n.identity.id));
+      worldSim.npcs = worldSim.npcs.filter((n) => !toRemove.has(n.identity.id));
+    }
   }
 
   return dispatches;

@@ -104,13 +104,13 @@ describe('Full Codebase Audit Regressions', () => {
     startWarBattle(state, enemy.id, { isFinal: false, isAmbush: true, isDefense: false });
     const battle = war.activeBattle!;
 
-    // Cast support_clone -> must still have playerBuffRounds = 1 and playerCloneEvade = true AFTER Round 1 ends!
-    resolveBattleRound(state, 'support_clone', rng);
+    // Cast Kage Bunshin -> must still have playerBuffRounds = 1 and playerCloneEvade = true AFTER Round 1 ends!
+    resolveBattleRound(state, 'jutsu:kage_bunshin', rng);
     expect(battle.playerBuffRounds).toBe(1);
     expect(battle.playerCloneEvade).toBe(true);
 
-    // Cast support_ward -> must still have playerWardRounds = 2 AFTER Round 2 ends!
-    resolveBattleRound(state, 'support_ward', rng);
+    // Cast Fuin Ward -> must still have playerWardRounds = 2 AFTER Round 2 ends!
+    resolveBattleRound(state, 'jutsu:fuin_ward', rng);
     expect(battle.playerWardRounds).toBe(2);
 
     // Cast resolve_boost -> must reset resolveBoostThisRound back to false after round resolves!

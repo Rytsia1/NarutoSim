@@ -66,7 +66,6 @@ import type {
   CrisisId,
   GameState,
   LeaningKey,
-  OdActionId,
   PendingDecision,
   StatKey,
   WarCompetitor,
@@ -161,16 +160,9 @@ const BASE_ARCHETYPES: readonly CombatArchetype[] = [
 
 function createCompetitorFromRoster(
   def: RosterShinobiDef,
-  scaleMult: number,
   index: number,
 ): WarCompetitor {
-  const scaled = def.ranks.map((r) => clamp(Number((r * scaleMult).toFixed(1)), 1.2, 6.0)) as [
-    number,
-    number,
-    number,
-    number,
-    number,
-  ];
+  const ranks = [...def.ranks] as [number, number, number, number, number];
   const persona = buildShinobiPersona(def.tactic, def.traits, def.archetype);
   return {
     id: `en_${index}_${def.id}`,
@@ -181,12 +173,12 @@ function createCompetitorFromRoster(
     archetype: def.archetype,
     tactic: def.tactic,
     element: def.element,
-    ranks: scaled,
-    skills: def.skills.map((s) => ({ ...s, rank: Math.max(1, Math.round(s.rank * scaleMult)) })),
-    ultimate: {
-      ...def.ultimate,
-      rankVal: clamp(Number((def.ultimate.rankVal * scaleMult).toFixed(1)), 2.5, 5.8),
-    },
+    officialRank: def.officialRank,
+    formerShinobi: def.formerShinobi,
+    threatClass: def.threatClass,
+    ranks,
+    skills: def.skills.map((s) => ({ ...s })),
+    ultimate: { ...def.ultimate },
     motive: def.motive,
     originHint: def.originHint,
     persona,
@@ -210,6 +202,7 @@ function createCompetitorFromRoster(
 
 /**
  * Initializes a full 14-day autonomous Shinobi Warfront (uniform 14 days at all ranks).
+ * Every roster shinobi spawns at full unscaled strength regardless of player rank.
  */
 export function initWarState(
   state: GameState,
@@ -217,14 +210,6 @@ export function initWarState(
   isCrisisWar: boolean,
   approach: 'front' | 'flank',
 ): WarState {
-  const scaleMult = isCrisisWar
-    ? 1.0
-    : state.rank === 'genin'
-      ? 0.62
-      : state.rank === 'chunin'
-        ? 0.78
-        : 0.94;
-
   const fallenSet = new Set(state.fallenRosterIds);
   const partner = selectWarPartner(state, rng, new Set());
   const excludedRoster = new Set<string>(fallenSet);
@@ -236,13 +221,13 @@ export function initWarState(
 
   BASE_ARCHETYPES.forEach((arch, idx) => {
     if (fatedDef && fatedDef.archetype === arch) {
-      enemies.push(createCompetitorFromRoster(fatedDef, scaleMult, idx + 1));
+      enemies.push(createCompetitorFromRoster(fatedDef, idx + 1));
       return;
     }
     const alivePool = ROSTER.filter((r) => r.archetype === arch && !excludedRoster.has(r.id));
     const fallbackPool = ROSTER.filter((r) => r.archetype === arch && r.id !== partner.rosterId);
     const chosen = rng.pick(alivePool.length > 0 ? alivePool : fallbackPool.length > 0 ? fallbackPool : ROSTER.filter((r) => r.archetype === arch));
-    enemies.push(createCompetitorFromRoster(chosen, scaleMult, idx + 1));
+    enemies.push(createCompetitorFromRoster(chosen, idx + 1));
   });
 
   // Special S-Rank slot: Fated Thread S-Rank operative, ex-teammate missing_nin (prioritizing Rival!), or 15% S-Rank operative
@@ -253,15 +238,12 @@ export function initWarState(
     rogueRival ??
     state.team?.members.find((m) => m.role === 'teammate' && m.alive && m.specialStatus === 'missing_nin');
   if (fatedDef && fatedDef.archetype === 'rogue_s') {
-    const comp = createCompetitorFromRoster(fatedDef, isCrisisWar ? 1.0 : scaleMult, 8);
+    const comp = createCompetitorFromRoster(fatedDef, 8);
     if (isCrisisWar && state.world.crisisClues > 0) {
       addEnemyIntel(comp, Math.min(80, state.world.crisisClues * 16));
     }
     enemies.push(comp);
   } else if (rogueMate && rng.chance(0.55)) {
-    const scaledMateRanks = [4.2, 4.4, 3.9, 4.3, 4.2].map((r) =>
-      clamp(Number((r * scaleMult).toFixed(1)), 1.5, 6.0),
-    ) as [number, number, number, number, number];
     enemies.push({
       id: `en_rogue_${rogueMate.id}`,
       rosterId: `ex_mate_${rogueMate.id}`,
@@ -271,16 +253,19 @@ export function initWarState(
       archetype: 'rogue_s',
       tactic: 'hunter',
       element: state.element,
-      ranks: scaledMateRanks,
+      officialRank: 'chunin',
+      formerShinobi: true,
+      threatClass: 'A',
+      ranks: [4.2, 4.4, 3.9, 4.3, 4.2],
       skills: [
-        { name: 'Familiar Footwork', tag: 'insight', rank: Math.max(1, Math.round(4 * scaleMult)) },
-        { name: 'Rogue Resolve', tag: 'power', rank: Math.max(1, Math.round(3 * scaleMult)) },
+        { name: 'Familiar Footwork', tag: 'insight', rank: 4 },
+        { name: 'Rogue Resolve', tag: 'power', rank: 3 },
       ],
       ultimate: {
         name: 'Severed Bond Flash',
         role: 'attack',
         scope: 'single',
-        rankVal: clamp(Number((4.8 * scaleMult).toFixed(1)), 2.8, 5.8),
+        rankVal: 4.8,
         cost: 28,
         desc: 'A bitter high-speed strike forged after abandoning the village.',
       },
@@ -307,7 +292,7 @@ export function initWarState(
     const sPool = ROSTER.filter((r) => r.archetype === 'rogue_s' && !fallenSet.has(r.id));
     const fallbackS = ROSTER.filter((r) => r.archetype === 'rogue_s');
     const chosenS = rng.pick(sPool.length > 0 ? sPool : fallbackS);
-    const comp = createCompetitorFromRoster(chosenS, isCrisisWar ? 1.0 : scaleMult, 8);
+    const comp = createCompetitorFromRoster(chosenS, 8);
     if (isCrisisWar && state.world.crisisClues > 0) {
       addEnemyIntel(comp, Math.min(80, state.world.crisisClues * 16));
     }
@@ -334,6 +319,14 @@ export function initWarState(
           epithet: `Sworn Rival of ${v.name}`,
           villageId: state.villageId,
           element: v.dominantElement,
+          officialRank:
+            loyalRival.rank === 'jonin'
+              ? 'jonin'
+              : loyalRival.rank === 'chunin'
+                ? 'chunin'
+                : 'genin',
+          formerShinobi: false,
+          threatClass: base.threatClass,
           tactic: 'proud',
           persona: buildShinobiPersona('proud', loyalRival.traits, base.archetype),
           motive: `Fight beside ${state.name} for ${v.name} and settle your rivalry alive.`,
@@ -349,7 +342,7 @@ export function initWarState(
         );
         if (sameVillageRoster.length > 0) {
           const picked = sameVillageRoster[Math.abs(state.rng.seed) % sameVillageRoster.length];
-          enemies[swapIdx] = createCompetitorFromRoster(picked, scaleMult, swapIdx + 1);
+          enemies[swapIdx] = createCompetitorFromRoster(picked, swapIdx + 1);
         } else {
           const v = VILLAGE_MAP[state.villageId];
           const first = v.maleNames[Math.abs(state.rng.seed) % v.maleNames.length];
@@ -363,6 +356,9 @@ export function initWarState(
             epithet: `${v.name} Vanguard`,
             villageId: state.villageId,
             element: v.dominantElement,
+            officialRank: 'chunin',
+            formerShinobi: false,
+            threatClass: 'B',
             tactic: 'defensive',
             persona: buildShinobiPersona('defensive', ['loyalty', 'honor'], base.archetype),
             motive: `Defend ${v.name} alongside fellow village shinobi.`,
@@ -1190,8 +1186,6 @@ export function startWarBattle(
   war.beatClock = 0;
   war.statusText = opts.isFinal ? 'Final Night Duel in progress...' : `In solo combat (Round 1)...`;
 
-  const battleOdMax = Math.max(14, Math.round(computeCombatProjection(state).battleChakraPool * 0.42));
-
   war.activeBattle = {
     enemyId,
     round: 1,
@@ -1214,9 +1208,6 @@ export function startWarBattle(
     usedDesperation: false,
     usedNindoResolve: false,
     resolveBoostThisRound: false,
-    od: battleOdMax,
-    odMax: battleOdMax,
-    odUsedCount: 0,
     rounds: [],
   };
 
@@ -1926,7 +1917,6 @@ export function handleWarDecision(
   state: GameState,
   optionId: string,
   rng: SeededRng,
-  odAction?: OdActionId,
 ): void {
   const decision = state.pending!;
   const war = state.war!;
@@ -2870,7 +2860,7 @@ export function handleWarDecision(
   if (decision.kind === 'war_battle_round') {
     const battle = war.activeBattle!;
     const enemy = war.enemies.find((e) => e.id === battle.enemyId)!;
-    const { status, summary } = resolveBattleRound(state, optionId, rng, odAction);
+    const { status, summary } = resolveBattleRound(state, optionId, rng);
 
     pushLog(
       state,

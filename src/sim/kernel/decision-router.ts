@@ -2,7 +2,6 @@ import type { SeededRng } from '../rng';
 import type {
   DecisionKind,
   GameState,
-  OdActionId,
   PendingDecision,
 } from '../types';
 import type { DomainEventBus } from './event-queue';
@@ -12,7 +11,6 @@ export interface DecisionContext {
   decision: PendingDecision;
   optionId: string;
   freeText?: string;
-  odAction?: OdActionId;
   rng: SeededRng;
   bus: DomainEventBus;
 }

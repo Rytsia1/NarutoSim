@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { pickPlayerJutsu } from '../src/data/jutsu';
-import { buildBattleRoundDecision, resolveBattleRound } from '../src/sim/combat';
+import { JUTSU_MAP } from '../src/data/jutsu';
+import { buildBattleRoundDecision, getEffectiveJutsuCost, resolveBattleRound } from '../src/sim/combat';
 import { ShinobiSim } from '../src/sim/engine';
 import {
   buildKageSuccessionDecision,
@@ -139,11 +139,11 @@ describe('Extended Chunin Exam, Reducible World Tension, Kenjutsu & Kage Offer A
     enemy.fort = 20;
     startWarBattle(state, enemy.id, { isFinal: false, isAmbush: true, isDefense: false });
 
-    // Without kenjutsu discipline: kenjutsu attack option MUST NOT appear!
+    // Without kenjutsu discipline: kenjutsu jutsu options MUST NOT appear!
     const menuWithout = buildBattleRoundDecision(state);
-    expect(menuWithout.options.some((o) => o.id === 'kenjutsu')).toBe(false);
+    expect(menuWithout.options.some((o) => o.id === 'jutsu:iai_slash' || o.id === 'jutsu:mikazuki_no_mai')).toBe(false);
 
-    // After learning kenjutsu discipline (Tier 3): kenjutsu option appears, costs 4 CP, uses Tier 3 sword art!
+    // After learning kenjutsu discipline (Tier 3): Iai Slash and Mikazuki no Mai appear!
     state.disciplines.push({
       id: 'kenjutsu',
       level: 3,
@@ -154,14 +154,15 @@ describe('Extended Chunin Exam, Reducible World Tension, Kenjutsu & Kage Offer A
       declinedUntilAge: 0,
     });
     const menuWith = buildBattleRoundDecision(state);
-    expect(menuWith.options.some((o) => o.id === 'kenjutsu')).toBe(true);
-    expect(pickPlayerJutsu(state, 'kenjutsu', 0).name).toBe('Kumo-Ryu: Mikazukigiri');
+    expect(menuWith.options.some((o) => o.id === 'jutsu:iai_slash')).toBe(true);
+    expect(menuWith.options.some((o) => o.id === 'jutsu:mikazuki_no_mai')).toBe(true);
 
     const cpBefore = state.war.cp;
+    const expectedCost = getEffectiveJutsuCost(state, JUTSU_MAP.mikazuki_no_mai, state.war);
     state.war.activeBattle!.enemyWallRounds = 2;
-    const res = resolveBattleRound(state, 'kenjutsu', new SeededRng(999));
-    expect(state.war.cp).toBe(cpBefore - 4);
-    expect(res.summary.jutsuName).toBe('Kumo-Ryu: Mikazukigiri');
+    const res = resolveBattleRound(state, 'jutsu:mikazuki_no_mai', new SeededRng(999));
+    expect(state.war.cp).toBe(cpBefore - expectedCost);
+    expect(res.summary.jutsuName).toBe('Konoha-Ryu: Mikazuki no Mai');
   });
 
   it('supports the 2-beat Kage Offer & First Decree arc (war hero / legend triggers, comrade endorsement, and peace decree)', () => {

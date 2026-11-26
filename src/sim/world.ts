@@ -5,6 +5,7 @@ import type { CrisisId, GameState, PendingDecision, ScenarioConfig } from './typ
 import { applyPlayerActionToWorldSim } from './world-sim';
 
 export const MAX_CRISIS_CLUES = 5;
+export const GENIN_DRAFT_CHANCE = 0.1;
 
 export const BIJUU_LIST: readonly string[] = [
   'Shukaku (One-Tail)',
@@ -228,7 +229,11 @@ export function tickWorldTension(state: GameState, rng: SeededRng): TensionTickR
   };
 }
 
-export function buildWarPreludeDecision(state: GameState, isCrisisWar: boolean): PendingDecision {
+export function buildWarPreludeDecision(
+  state: GameState,
+  isCrisisWar: boolean,
+  geninDeployed = true,
+): PendingDecision {
   const warNum = state.world.eraNumber;
   const rankLabel = state.rank.toUpperCase();
   const bijuu = getWorldBijuuName(state);
@@ -245,7 +250,7 @@ export function buildWarPreludeDecision(state: GameState, isCrisisWar: boolean):
       title: `Great Shinobi War #${warNum} Reaches the Border`,
       body: 'Smoke rises along the outer trade road as rival shinobi skirmishers clash outside the village gates. As a civilian, every choice is about survival.',
       manual: true,
-      meta: { isCrisisWar: false, warNum },
+      meta: { isCrisisWar: false, warNum, geninDeployed: false },
       options: [
         {
           id: 'evacuate',
@@ -263,9 +268,39 @@ export function buildWarPreludeDecision(state: GameState, isCrisisWar: boolean):
     };
   }
 
+  if (state.rank === 'genin' && !isCrisisWar && !geninDeployed) {
+    return {
+      id: `war_pre_${warNum}_${state.age}`,
+      kind: 'war_prelude',
+      eventId: 'war_prelude_genin_home',
+      title: `Great Shinobi War #${warNum}: Home Front Orders (Genin)`,
+      body: 'War drums roll through the village as Chunin and Jonin divisions march to the contested frontier. Command holds Genin squads back inside the village perimeter to keep supply lines, triage tents, and outer watchtowers standing.',
+      manual: true,
+      meta: { isCrisisWar: false, warNum, geninDeployed: false },
+      options: [
+        {
+          id: 'home_patrols',
+          label: 'Reinforce village patrols along the outer perimeter',
+          sublabel: '+Will, minor Health wear, small (~4%) risk of a sudden border raid.',
+          statHints: ['Will', 'Health'],
+          autoEligible: true,
+        },
+        {
+          id: 'home_relays',
+          label: 'Run supply and medical relays between the hospital and gates',
+          sublabel: 'Safer home-front duty (+Bonds, +Intel).',
+          statHints: ['Bonds', 'Intel'],
+          autoEligible: true,
+        },
+      ],
+    };
+  }
+
   const title = isCrisisWar
     ? `War #${warNum} Escalates: ${crisisTitle}`
-    : `Great Shinobi War #${warNum} Mobilization (${rankLabel})`;
+    : state.rank === 'genin'
+      ? `Emergency Genin Draft: Great Shinobi War #${warNum}`
+      : `Great Shinobi War #${warNum} Mobilization (${rankLabel})`;
 
   let body = '';
   if (isCrisisWar) {
@@ -275,8 +310,8 @@ export function buildWarPreludeDecision(state: GameState, isCrisisWar: boolean):
         : `Every border skirmish was bait. Akatsuki and their masked leader have stepped out of the Amegakure rain to seize the Five Great Nations from the shadows. Clues gathered: ${state.world.crisisClues}/${MAX_CRISIS_CLUES}.`;
   } else if (state.rank === 'genin') {
     body = state.team?.active
-      ? `Emergency mobilization drums echo at dawn. Even Genin cells are being rushed to hold secondary supply passes. Team ${state.team.number} is ordered to deploy immediately. Surviving rival Chunin and Jonin will take everything you have.`
-      : 'Emergency draft notices post across the square. Even as an independent Genin, you are ordered to the contested frontier.';
+      ? `Rare emergency draft bells ring across the village square. Heavy frontline losses force command to rush Team ${state.team.number} toward the contested sector. Every rival shinobi out there fights at full Jonin or elite strength: surviving will demand stealth, retreat, and teamwork.`
+      : 'A rare emergency draft notice calls your name. Frontline casualties are severe, and even Genin are being rushed to the contested sector against full-strength enemy shinobi. Survival comes before glory.';
   } else if (state.rank === 'jonin') {
     body = 'As a Jonin, you are assigned directly to the decisive 14-day contested sector. Enemy hunter teams already know your face and threat tier.';
   } else {
@@ -290,7 +325,7 @@ export function buildWarPreludeDecision(state: GameState, isCrisisWar: boolean):
     title,
     body,
     manual: true,
-    meta: { isCrisisWar, warNum },
+    meta: { isCrisisWar, warNum, geninDeployed: state.rank === 'genin' ? true : false },
     options: [
       {
         id: 'deploy_front',

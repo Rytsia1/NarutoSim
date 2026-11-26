@@ -1,13 +1,13 @@
 import type { GovernanceActionId } from '../data/events-politics';
 import { kageTitle, VILLAGE_MAP } from '../data/villages';
 import { NINDO_MAP } from '../data/nindo';
-import { getAvailableOdActions } from './combat';
+import { pickAutoJutsu } from './combat';
 import { canEnterRetirement } from './epilogue';
 import { advanceYear, createNewLife, finalizeLifeRecord, pushLog, resolvePendingDecision } from './life';
 import { canRunGovernanceAction, runGovernanceAction } from './politics';
 import { SeededRng } from './rng';
 import { investigateTimelineEvent } from './timeline';
-import type { FocusId, GameState, LifeRecord, OdActionId, ScenarioConfig } from './types';
+import type { FocusId, GameState, LifeRecord, ScenarioConfig } from './types';
 import { canCallDiplomaticSummit, runDiplomaticSummit } from './world';
 import { migrateGameState } from './kernel/bootstrap';
 import {
@@ -262,11 +262,11 @@ export class ShinobiSim {
     this.notify(true);
   }
 
-  resolve(optionId: string, freeText?: string, odAction?: OdActionId): void {
+  resolve(optionId: string, freeText?: string): void {
     if (!this.state.pending) return;
     const valid = this.state.pending.options.find((o) => o.id === optionId && !o.disabled);
     if (!valid) return;
-    resolvePendingDecision(this.state, optionId, freeText, odAction);
+    resolvePendingDecision(this.state, optionId, freeText);
     this.notify(true);
   }
 
@@ -279,11 +279,42 @@ export class ShinobiSim {
     if (!pending) return false;
     if (pending.manual && !forceManual) return false;
 
+    const rng = new SeededRng(this.state.rng.seed, this.state.rng.state);
+
+    if (pending.kind === 'war_battle_round' && this.state.war && this.state.war.activeBattle) {
+      const war = this.state.war;
+      const battle = war.activeBattle!;
+      const freeSurpass = pending.options.find((o) => o.id === 'partner_free_surpass' && !o.disabled);
+      const resolveFlee = pending.options.find((o) => o.id === 'resolve_flee' && !o.disabled && o.autoEligible);
+      const retreatOpt = pending.options.find((o) => o.id === 'retreat' && !o.disabled && o.autoEligible);
+      const resolveCp = pending.options.find((o) => o.id === 'resolve_cp' && !o.disabled && o.autoEligible);
+      const resolveBoost = pending.options.find((o) => o.id === 'resolve_boost' && !o.disabled && o.autoEligible);
+
+      let chosenId: string;
+      if (freeSurpass) {
+        chosenId = freeSurpass.id;
+      } else if (resolveFlee && war.hp <= 22) {
+        chosenId = resolveFlee.id;
+      } else if (retreatOpt && war.hp <= 30 && !battle.isFinal) {
+        chosenId = retreatOpt.id;
+      } else if (resolveCp && war.cp < 12) {
+        chosenId = resolveCp.id;
+      } else if (resolveBoost && battle.isFinal && war.hp < 45) {
+        chosenId = resolveBoost.id;
+      } else {
+        const autoJutsu = pickAutoJutsu(this.state, rng);
+        const validJutsu = pending.options.find((o) => o.id === autoJutsu && !o.disabled);
+        chosenId = validJutsu ? validJutsu.id : (pending.options.find((o) => !o.disabled)?.id ?? 'jutsu:basic_strike');
+      }
+      this.state.rng = rng.snapshot();
+      this.resolve(chosenId);
+      return true;
+    }
+
     const eligible = pending.options.filter((o) => !o.disabled && o.autoEligible);
     const pool = eligible.length > 0 ? eligible : pending.options.filter((o) => !o.disabled);
     if (pool.length === 0) return false;
 
-    const rng = new SeededRng(this.state.rng.seed, this.state.rng.state);
     const nindoDef = this.state.nindo ? NINDO_MAP[this.state.nindo] : null;
     const weighted = pool.map((opt) => {
       let weight = 1;
@@ -308,32 +339,8 @@ export class ShinobiSim {
     });
 
     const picked = rng.weighted(weighted);
-    let chosenOd: OdActionId | undefined;
-    if (
-      pending.kind === 'war_battle_round' &&
-      this.state.war?.activeBattle &&
-      (picked.id === 'taijutsu' ||
-        picked.id === 'kenjutsu' ||
-        picked.id === 'ninjutsu' ||
-        picked.id === 'genjutsu' ||
-        picked.id === 'ultimate')
-    ) {
-      const odOpts = getAvailableOdActions(this.state).filter((a) => !a.disabled);
-      const war = this.state.war;
-      const battle = war.activeBattle!;
-      if (odOpts.length > 0 && battle.odUsedCount < 2) {
-        const healOpt = odOpts.find((a) => a.id === 'od_heal');
-        const summonOpt = odOpts.find((a) => a.id === 'od_summon');
-        const wardOpt = odOpts.find((a) => a.id === 'od_ward');
-        const cloneOpt = odOpts.find((a) => a.id === 'od_clone');
-        if (healOpt && war.hp < 55) chosenOd = 'od_heal';
-        else if (summonOpt && rng.chance(0.55)) chosenOd = 'od_summon';
-        else if (wardOpt && battle.round === 1 && rng.chance(0.5)) chosenOd = 'od_ward';
-        else if (cloneOpt && rng.chance(0.35)) chosenOd = 'od_clone';
-      }
-    }
     this.state.rng = rng.snapshot();
-    this.resolve(picked.id, undefined, chosenOd);
+    this.resolve(picked.id);
     return true;
   }
 

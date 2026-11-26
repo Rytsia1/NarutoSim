@@ -9,7 +9,7 @@ import { getMastermindDivisor } from '../../sim/crises';
 import { detectWarArcs } from '../../sim/narrative';
 import { getPartnerRelStageLabel, getPartnerTrustTier } from '../../sim/partner';
 import { rankValueToGrade } from '../../sim/powers';
-import type { GameState, OdActionId } from '../../sim/types';
+import type { GameState } from '../../sim/types';
 import { getLivingEnemies } from '../../sim/war';
 import { BattleDialog } from '../components/BattleDialog';
 import { DecisionDialog } from '../components/DecisionDialog';
@@ -37,7 +37,7 @@ interface WarScreenProps {
   onTogglePause: () => void;
   onToggleAuto: () => void;
   onSkipWarBeat: () => void;
-  onResolve: (optionId: string, freeText?: string, odAction?: OdActionId) => void;
+  onResolve: (optionId: string, freeText?: string) => void;
   onOpenSettings: () => void;
   onBackToLobby: () => void;
 }
@@ -625,7 +625,7 @@ export function WarScreen({
           minimized={battleMinimized}
           shortcutsBlocked={shortcutsBlocked}
           onMinimizedChange={onBattleMinimizedChange}
-          onResolve={(optionId, odAction) => onResolve(optionId, undefined, odAction)}
+          onResolve={(optionId) => onResolve(optionId)}
         />
       ) : (
         <DecisionDialog

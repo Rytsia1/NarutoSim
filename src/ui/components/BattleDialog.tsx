@@ -1,23 +1,32 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { t } from '../../data/i18n';
-import { pickPlayerJutsu, ZODIAC_SEAL_KANJI } from '../../data/jutsu';
+import {
+  getJutsuMasteryInfo,
+  getKnownJutsu,
+  getNextTierLockedJutsu,
+  ZODIAC_SEAL_KANJI,
+  type JutsuDefinition,
+} from '../../data/jutsu';
 import { BLOODLINE_MAP, ELEMENT_KANJI, ELEMENT_NAMES } from '../../data/powers';
 import { ARCHETYPE_LABELS } from '../../data/roster';
 import { VILLAGE_MAP } from '../../data/villages';
 import {
+  COMBAT_TIER_LABELS,
   estimateBattleActionOdds,
   estimateRetreatChance,
-  getAvailableOdActions,
-  getEffectiveUltimateCost,
-  getElementMultiplier,
+  getCombatTier,
+  getDisplayEnemyRanks,
+  getEffectiveJutsuCost,
   getHealthConditionLabel,
-  getKenjutsuLevel,
   getPlayerRanks,
   getPlayerSignatureUltimate,
+  getPowerGapRead,
+  OFFICIAL_RANK_LABELS,
+  type BattleAttackStyle,
 } from '../../sim/combat';
 import { getPartnerTrustTier } from '../../sim/partner';
 import { rankValueToGrade } from '../../sim/powers';
-import type { GameState, OdActionId, PendingDecision, WarCompetitor } from '../../sim/types';
+import type { GameState, PendingDecision, PowerGapLabel, WarCompetitor } from '../../sim/types';
 
 interface BattleDialogProps {
   state: GameState;
@@ -25,8 +34,10 @@ interface BattleDialogProps {
   minimized: boolean;
   shortcutsBlocked?: boolean;
   onMinimizedChange: (next: boolean) => void;
-  onResolve: (optionId: string, odAction?: OdActionId) => void;
+  onResolve: (optionId: string) => void;
 }
+
+type JutsuTabId = 'ninjutsu' | 'taijutsu' | 'genjutsu' | 'other';
 
 const TACTIC_LABELS: Record<WarCompetitor['tactic'], string> = {
   reckless: 'Reckless Fighter',
@@ -37,15 +48,31 @@ const TACTIC_LABELS: Record<WarCompetitor['tactic'], string> = {
   desperate: 'Desperate Combatant',
 };
 
-const SUPPORT_IDS = new Set([
-  'bloodline',
-  'support_heal',
-  'support_ward',
-  'support_clone',
-  'exploit_weakness',
-]);
+const ROLE_LABELS: Record<JutsuDefinition['role'], string> = {
+  damage: 'Damage',
+  multi_hit: 'Multi-Hit',
+  pierce: 'Wall Pierce',
+  control: 'Control',
+  defense: 'Defense',
+  heal: 'Heal',
+  evasion: 'Evasion',
+  summon: 'Summon',
+  clash: 'Clash Art',
+};
 
-const RESOLVE_IDS = new Set(['partner_free_surpass', 'resolve_boost', 'resolve_cp', 'resolve_flee']);
+function getTabForJutsu(j: JutsuDefinition): JutsuTabId {
+  if (j.category === 'ninjutsu') return 'ninjutsu';
+  if (j.category === 'taijutsu' || j.category === 'kenjutsu') return 'taijutsu';
+  if (j.category === 'genjutsu') return 'genjutsu';
+  return 'other';
+}
+
+function getGapBadgeClass(label: PowerGapLabel): string {
+  if (label === 'Overwhelming' || label === 'Major disadvantage') return 'danger';
+  if (label === 'Disadvantage') return 'warn';
+  if (label === 'Advantage' || label === 'Dominant') return 'good';
+  return '';
+}
 
 export function BattleDialog({
   state,
@@ -58,24 +85,77 @@ export function BattleDialog({
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const innerRef = useRef<HTMLDivElement | null>(null);
   const titleId = useId();
-  const [supportOpen, setSupportOpen] = useState(false);
-  const [resolveOpen, setResolveOpen] = useState(false);
-  const [selectedOd, setSelectedOd] = useState<OdActionId | null>(null);
+
+  const [activeTab, setActiveTab] = useState<JutsuTabId>('ninjutsu');
+  const [inspectedJutsuId, setInspectedJutsuId] = useState<string | null>(null);
 
   const war = state.war!;
   const battle = war.activeBattle!;
   const enemy = war.enemies.find((e) => e.id === battle.enemyId)!;
-  const odOptions = getAvailableOdActions(state);
 
-  // Reset accordions, Od selection & scroll to top on every new round so Fighter Cards stay visible
+  const knownJutsu = useMemo(() => getKnownJutsu(state), [state]);
+  const lockedNext = useMemo(() => getNextTierLockedJutsu(state), [state]);
+  const optionById = useMemo(
+    () => new Map(decision.options.map((o) => [o.id, o])),
+    [decision.options],
+  );
+
+  // Group known + next-tier locked jutsu by tab
+  const knownByTab = useMemo(() => {
+    const groups: Record<JutsuTabId, JutsuDefinition[]> = {
+      ninjutsu: [],
+      taijutsu: [],
+      genjutsu: [],
+      other: [],
+    };
+    for (const j of knownJutsu) {
+      groups[getTabForJutsu(j)].push(j);
+    }
+    return groups;
+  }, [knownJutsu]);
+
+  const lockedByTab = useMemo(() => {
+    const groups: Record<JutsuTabId, { jutsu: JutsuDefinition; requirementLabel: string }[]> = {
+      ninjutsu: [],
+      taijutsu: [],
+      genjutsu: [],
+      other: [],
+    };
+    for (const item of lockedNext) {
+      groups[getTabForJutsu(item.jutsu)].push(item);
+    }
+    return groups;
+  }, [lockedNext]);
+
+  const otherSpecialOpts = useMemo(
+    () =>
+      decision.options.filter(
+        (o) =>
+          o.id === 'bloodline' ||
+          o.id === 'exploit_weakness' ||
+          o.id === 'partner_free_surpass' ||
+          o.id === 'resolve_boost' ||
+          o.id === 'resolve_cp' ||
+          o.id === 'resolve_flee',
+      ),
+    [decision.options],
+  );
+  const retreatOpt = optionById.get('retreat');
+
+  // Reset scroll & default inspected jutsu on each new round
   useEffect(() => {
-    setSupportOpen(false);
-    setResolveOpen(false);
-    setSelectedOd(null);
     if (innerRef.current) {
       innerRef.current.scrollTop = 0;
     }
-  }, [decision.id]);
+    const firstInTab = knownByTab[activeTab][0] ?? knownJutsu[0] ?? null;
+    setInspectedJutsuId(firstInTab?.id ?? null);
+  }, [decision.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Update inspected jutsu when switching tab
+  useEffect(() => {
+    const firstInTab = knownByTab[activeTab][0] ?? lockedByTab[activeTab][0]?.jutsu ?? null;
+    setInspectedJutsuId(firstInTab?.id ?? null);
+  }, [activeTab, knownByTab, lockedByTab]);
 
   // Open/close native <dialog> based on minimized state
   useEffect(() => {
@@ -103,27 +183,17 @@ export function BattleDialog({
     return () => el.removeEventListener('cancel', onCancel);
   }, []);
 
-  const optionById = new Map(decision.options.map((o) => [o.id, o]));
-  const taiOpt = optionById.get('taijutsu');
-  const kenOpt = optionById.get('kenjutsu');
-  const ninOpt = optionById.get('ninjutsu');
-  const genOpt = optionById.get('genjutsu');
-  const ultOpt = optionById.get('ultimate');
-  const retreatOpt = optionById.get('retreat');
-  const supportOpts = decision.options.filter((o) => SUPPORT_IDS.has(o.id));
-  const resolveOpts = decision.options.filter((o) => RESOLVE_IDS.has(o.id));
+  // Active tab executable options (mapped to number keys 1..9)
+  const activeTabActionIds = useMemo(() => {
+    const ids: string[] = knownByTab[activeTab].map((j) => `jutsu:${j.id}`);
+    if (activeTab === 'other') {
+      for (const sp of otherSpecialOpts) ids.push(sp.id);
+      if (retreatOpt) ids.push('retreat');
+    }
+    return ids;
+  }, [activeTab, knownByTab, otherSpecialOpts, retreatOpt]);
 
-  let nextKey = 1;
-  const taiKey = taiOpt ? nextKey++ : null;
-  const kenKey = kenOpt ? nextKey++ : null;
-  const ninKey = ninOpt ? nextKey++ : null;
-  const genKey = genOpt ? nextKey++ : null;
-  const ultKey = ultOpt ? nextKey++ : null;
-  const supportKey = supportOpts.length > 0 ? nextKey++ : null;
-  const resolveKey = resolveOpts.length > 0 ? nextKey++ : null;
-  const retreatKey = retreatOpt ? nextKey++ : null;
-
-  // Keyboard shortcuts: 0 toggles Minimize, dynamic 1..N pick core actions, accordions & retreat
+  // Keyboard shortcuts: 0 toggles Minimize, 1..9 pick cards in active tab, R triggers Retreat
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (shortcutsBlocked || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -137,59 +207,34 @@ export function BattleDialog({
       }
       if (minimized) return;
 
-      if (taiKey !== null && e.key === String(taiKey) && taiOpt && !taiOpt.disabled) {
-        e.preventDefault();
-        onResolve('taijutsu', selectedOd ?? undefined);
-      } else if (kenKey !== null && e.key === String(kenKey) && kenOpt && !kenOpt.disabled) {
-        e.preventDefault();
-        onResolve('kenjutsu', selectedOd ?? undefined);
-      } else if (ninKey !== null && e.key === String(ninKey) && ninOpt && !ninOpt.disabled) {
-        e.preventDefault();
-        onResolve('ninjutsu', selectedOd ?? undefined);
-      } else if (genKey !== null && e.key === String(genKey) && genOpt && !genOpt.disabled) {
-        e.preventDefault();
-        onResolve('genjutsu', selectedOd ?? undefined);
-      } else if (ultKey !== null && e.key === String(ultKey) && ultOpt && !ultOpt.disabled) {
-        e.preventDefault();
-        onResolve('ultimate', selectedOd ?? undefined);
-      } else if (supportKey !== null && e.key === String(supportKey)) {
-        e.preventDefault();
-        setSupportOpen((prev) => !prev);
-      } else if (resolveKey !== null && e.key === String(resolveKey)) {
-        e.preventDefault();
-        setResolveOpen((prev) => !prev);
-      } else if (retreatKey !== null && e.key === String(retreatKey) && retreatOpt && !retreatOpt.disabled) {
+      if ((e.key === 'r' || e.key === 'R') && retreatOpt && !retreatOpt.disabled) {
         e.preventDefault();
         onResolve('retreat');
+        return;
+      }
+
+      const num = Number(e.key);
+      if (Number.isInteger(num) && num >= 1 && num <= 9) {
+        const targetId = activeTabActionIds[num - 1];
+        if (targetId) {
+          const opt = optionById.get(targetId);
+          if (opt && !opt.disabled) {
+            e.preventDefault();
+            onResolve(targetId);
+          }
+        }
       }
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [
-    shortcutsBlocked,
-    minimized,
-    onMinimizedChange,
-    selectedOd,
-    taiKey,
-    kenKey,
-    ninKey,
-    genKey,
-    ultKey,
-    taiOpt,
-    kenOpt,
-    ninOpt,
-    genOpt,
-    ultOpt,
-    retreatOpt,
-    supportKey,
-    resolveKey,
-    retreatKey,
-    onResolve,
-  ]);
+  }, [shortcutsBlocked, minimized, onMinimizedChange, activeTabActionIds, optionById, retreatOpt, onResolve]);
 
   const playerRanks = getPlayerRanks(state, battle.resolveBoostThisRound);
+  const playerTier = getCombatTier(playerRanks);
+  const enemyDisplayRanks = getDisplayEnemyRanks(enemy);
+  const enemyTier = getCombatTier(enemyDisplayRanks);
+  const gapRead = getPowerGapRead(state, enemy, battle.resolveBoostThisRound);
   const ult = getPlayerSignatureUltimate(state);
-  const ultCost = getEffectiveUltimateCost(state, war);
   const partner = war.partner;
   const enemyKnown = enemy.intel >= 80;
   const enemyArchLabel = ARCHETYPE_LABELS[enemy.archetype];
@@ -199,14 +244,11 @@ export function BattleDialog({
       ? enemy.name
       : enemyArchLabel;
 
-  const taiOdds = estimateBattleActionOdds(state, enemy, 'taijutsu', battle.resolveBoostThisRound);
-  const kenOdds = kenOpt ? estimateBattleActionOdds(state, enemy, 'kenjutsu', battle.resolveBoostThisRound) : null;
-  const kenLevel = getKenjutsuLevel(state);
-  const ninOdds = estimateBattleActionOdds(state, enemy, 'ninjutsu', battle.resolveBoostThisRound);
-  const genOdds = estimateBattleActionOdds(state, enemy, 'genjutsu', battle.resolveBoostThisRound);
-  const retreatPct = estimateRetreatChance(state, enemy, battle.resolveBoostThisRound);
-  const elemMatch = enemy.intel >= 60 ? getElementMultiplier(state.element, enemy.element).label : null;
+  const officialRankLabel = enemy.formerShinobi
+    ? `Former ${OFFICIAL_RANK_LABELS[enemy.officialRank]}`
+    : OFFICIAL_RANK_LABELS[enemy.officialRank];
 
+  const retreatPct = estimateRetreatChance(state, enemy, battle.resolveBoostThisRound);
   const lastRound = battle.rounds[battle.rounds.length - 1] ?? null;
   const enemyCond = getHealthConditionLabel(enemy.hp);
   const playerCond = getHealthConditionLabel(war.hp);
@@ -240,12 +282,14 @@ export function BattleDialog({
   if (battle.enemyFieldRounds > 0) enemyMods.push(`▲ Terrain Field (${battle.enemyFieldRounds}r)`);
   if (battle.enemyDebuffRounds > 0) enemyMods.push(`▼ Disrupted (${battle.enemyDebuffRounds}r)`);
 
-  const supportPreview = supportOpts
-    .map((o) => o.label.split('(')[0].split(':')[0].trim())
-    .join(' · ');
-  const resolvePreview = resolveOpts
-    .map((o) => o.label.replace('Limit Break: ', '').split('(')[0].trim())
-    .join(' · ');
+  const inspectedJutsu =
+    knownJutsu.find((j) => j.id === inspectedJutsuId) ??
+    lockedNext.find((x) => x.jutsu.id === inspectedJutsuId)?.jutsu ??
+    knownByTab[activeTab][0] ??
+    null;
+  const inspectedMastery = inspectedJutsu
+    ? getJutsuMasteryInfo(state.jutsuMastery?.[inspectedJutsu.id] ?? 0)
+    : null;
 
   return (
     <>
@@ -253,10 +297,10 @@ export function BattleDialog({
         <div className="battle-minimized-bar" role="region" aria-label="Minimized battle controls">
           <div className="battle-min-info">
             <strong>
-              {headerEnemy} · Round {battle.round}
+              {headerEnemy} · Round {battle.round} · Threat {enemy.threatClass}
             </strong>
             <span className="disc-sub tabular">
-              You {war.hp} HP / {war.cp} CP | Enemy: {enemyCond}
+              You {war.hp} HP / {war.cp} CP | {gapRead.label} | Enemy: {enemyCond}
             </span>
           </div>
           <button
@@ -276,18 +320,30 @@ export function BattleDialog({
         {...({ closedby: 'none' } as Record<string, string>)}
       >
         <div ref={innerRef} className="battle-dialog-inner" tabIndex={-1}>
-          {/* Header Bar */}
+          {/* Header Bar with Threat Class, Enemy Combat Tier & Power-Gap Read */}
           <header className="battle-header">
             <div>
               <h1 id={titleId} className="battle-title">
                 {headerEnemy} · Round {battle.round}
                 {!battle.isFinal && <span className="battle-round-cap"> / {battle.maxRounds}</span>}
               </h1>
-              {decision.manual && (
-                <div className="chip-row" style={{ marginTop: 6 }}>
+              <div className="chip-row tabular" style={{ marginTop: 6 }}>
+                <span className={`power-gap-badge ${enemy.threatClass === 'S' ? 'danger' : enemy.threatClass === 'A' ? 'warn' : ''}`}>
+                  Threat {enemy.threatClass}
+                </span>
+                <span className="power-gap-badge">
+                  Tier: {COMBAT_TIER_LABELS[enemyTier]}{gapRead.isEstimate ? ' (est.)' : ''}
+                </span>
+                <span className={`power-gap-badge ${getGapBadgeClass(gapRead.label)}`}>
+                  Read: {gapRead.label}{gapRead.isEstimate ? ' (est.)' : ''}
+                </span>
+                {enemyKnown && (
+                  <span className="power-gap-badge">{officialRankLabel}</span>
+                )}
+                {decision.manual && (
                   <span className="chip">Critical Decision (Auto-Play Paused)</span>
-                </div>
-              )}
+                )}
+              </div>
             </div>
             <button
               type="button"
@@ -305,7 +361,7 @@ export function BattleDialog({
 
           {/* Two-Column Fighter Comparison Cards */}
           <div className="battle-cards-grid">
-            {/* Left: Player Card */}
+            {/* Left: Player Card (Unified Single Chakra Meter) */}
             <section className="battle-fighter-card battle-card-player" aria-label="Your Combat Status">
               <div className="fighter-top">
                 <div className="diamond-emblem player-emblem" aria-hidden="true">
@@ -313,7 +369,7 @@ export function BattleDialog({
                 </div>
                 <div className="fighter-id">
                   <div className="fighter-role">
-                    You · {t(`rank.${state.rank}`)} · {ELEMENT_NAMES[state.element]}
+                    You · {t(`rank.${state.rank}`)} ({COMBAT_TIER_LABELS[playerTier]}) · {ELEMENT_NAMES[state.element]}
                   </div>
                   <div className="fighter-name">{state.name}</div>
                 </div>
@@ -348,17 +404,27 @@ export function BattleDialog({
               <div className="fighter-vitals tabular">
                 <span>Health {war.hp}</span>
                 <span>Chakra {war.cp}</span>
-                <span>Od {battle.od}/{battle.odMax}</span>
                 <span>Fort {war.fort}</span>
+                <span>Resolves {war.resolves}</span>
               </div>
 
-              <div className="fighter-meta-line tabular">
-                Resolves {war.resolves}
-                {partner ? ` · Partner ${partner.name} ${partner.active ? `HP ${partner.hp} (Trust ${partner.trust})` : partner.died ? '(Fallen)' : partner.defected ? '(Defected)' : '(Down)'}` : ''}
-              </div>
-              <div className="fighter-meta-line">
-                Signature: <strong>{ult.name}</strong> · {rankValueToGrade(ult.rankVal)}
-              </div>
+              {partner && (
+                <div className="fighter-meta-line tabular">
+                  Partner {partner.name}{' '}
+                  {partner.active
+                    ? `HP ${partner.hp} (Trust ${partner.trust})`
+                    : partner.died
+                      ? '(Fallen)'
+                      : partner.defected
+                        ? '(Defected)'
+                        : '(Down)'}
+                </div>
+              )}
+              {ult && (
+                <div className="fighter-meta-line">
+                  Clash Art: <strong>{ult.name}</strong> · {rankValueToGrade(ult.rankVal)}
+                </div>
+              )}
 
               {playerMods.length > 0 && (
                 <div className="battle-mod-row">
@@ -375,12 +441,14 @@ export function BattleDialog({
             <section className="battle-fighter-card battle-card-enemy" aria-label="Enemy Combat Status">
               <div className="fighter-top enemy-top">
                 <div className="fighter-id enemy-id">
-                  <div className="fighter-role">Enemy Shinobi · {enemyArchLabel}</div>
+                  <div className="fighter-role">
+                    Threat {enemy.threatClass} · {enemyKnown ? officialRankLabel : enemyArchLabel}
+                  </div>
                   <div className="fighter-name">{enemyKnown ? enemy.name : 'Unknown'}</div>
                 </div>
                 <div className="diamond-emblem enemy-emblem" aria-hidden="true">
                   <span className="diamond-inner">
-                    {enemyKnown ? enemy.name.slice(0, 2).toUpperCase() : '?'}
+                    {enemyKnown ? enemy.name.slice(0, 2).toUpperCase() : enemy.threatClass}
                   </span>
                 </div>
               </div>
@@ -468,306 +536,173 @@ export function BattleDialog({
           </section>
 
           <p className="battle-status-line">
-            {enemyKnown
-              ? `${enemy.name} (${enemy.epithet}).`
-              : 'An unknown foe.'}{' '}
-            Enemy: {enemyCond} · You: {playerCond}
+            {enemyKnown ? `${enemy.name} (${enemy.epithet}).` : 'An unknown foe.'} Enemy: {enemyCond} · You: {playerCond}
           </p>
 
-          {/* Row 1: Optional Companion Od Actions (executed alongside Main Attack in the same round) */}
-          {odOptions.length > 0 && (
-            <section className="battle-od-row" aria-label="Optional Companion Od Actions">
-              <div className="disc-head tabular">
-                <span className="footer-label">
-                  Companion Action (Optional · Runs Alongside Main Attack)
-                </span>
-                <span className="stat-used-chip">
-                  Od {battle.od}/{battle.odMax}
+          {/* Phase 5: Jutsu Category Tabs (Ninjutsu / Taijutsu / Genjutsu / Other) */}
+          <div className="battle-jutsu-tabs" role="tablist" aria-label="Jutsu Categories">
+            {(
+              [
+                ['ninjutsu', `Ninjutsu (${knownByTab.ninjutsu.length})`],
+                ['taijutsu', `Taijutsu (${knownByTab.taijutsu.length})`],
+                ['genjutsu', `Genjutsu (${knownByTab.genjutsu.length})`],
+                ['other', `Other (${knownByTab.other.length + otherSpecialOpts.length})`],
+              ] as [JutsuTabId, string][]
+            ).map(([tabId, label]) => (
+              <button
+                key={tabId}
+                type="button"
+                role="tab"
+                aria-selected={activeTab === tabId}
+                className="tab-btn"
+                onClick={() => setActiveTab(tabId)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* Detail Panel for Inspected Jutsu */}
+          {inspectedJutsu && inspectedMastery && (
+            <div className="jutsu-detail-panel" aria-live="polite">
+              <div className="disc-head">
+                <strong>
+                  {inspectedJutsu.name} ({inspectedJutsu.rank}-Rank · {ROLE_LABELS[inspectedJutsu.role]})
+                </strong>
+                <span className="disc-sub tabular">
+                  Mastery: {inspectedMastery.label} ({inspectedMastery.uses}
+                  {inspectedMastery.nextThreshold ? `/${inspectedMastery.nextThreshold}` : '+'})
                 </span>
               </div>
-              <div className="od-chip-grid">
-                {odOptions.map((odOpt) => {
-                  const armed = selectedOd === odOpt.id;
-                  return (
-                    <button
-                      key={odOpt.id}
-                      type="button"
-                      className={`od-action-chip ${armed ? 'armed' : ''}`}
-                      disabled={odOpt.disabled}
-                      aria-pressed={armed}
-                      title={odOpt.disabled && odOpt.disabledReason ? odOpt.disabledReason : odOpt.desc}
-                      onClick={() => setSelectedOd((prev) => (prev === odOpt.id ? null : odOpt.id))}
-                    >
-                      <span className="od-chip-head tabular">
-                        <strong>{odOpt.label}</strong>
-                        <span className="cost-chip neutral">-{odOpt.cost} Od</span>
-                      </span>
-                      <span className="od-chip-desc">{odOpt.desc}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              {selectedOd && (
-                <div className="disc-sub" style={{ color: 'var(--accent-gold)', marginTop: 6 }}>
-                  Armed: will fire simultaneously when you pick a Main Attack below (click chip again to clear).
+              <div className="disc-sub">{inspectedJutsu.description}</div>
+              {inspectedJutsu.seals.length > 0 && (
+                <div className="chip-row" style={{ marginTop: 2 }}>
+                  <span className="disc-sub">Seals:</span>
+                  {inspectedJutsu.seals.map((seal, idx) => (
+                    <span key={`${seal}_${idx}`} className="chip">
+                      {ZODIAC_SEAL_KANJI[seal] ?? ''} {seal}
+                    </span>
+                  ))}
                 </div>
               )}
-            </section>
+            </div>
           )}
 
-          {/* Row 2: Tactical Action Cards */}
-          <div className="battle-actions-list">
-            {/* Taijutsu Strike */}
-            {taiOpt && taiKey !== null && (
-              <button
-                type="button"
-                className="battle-action-card"
-                disabled={taiOpt.disabled}
-                onClick={() => onResolve('taijutsu', selectedOd ?? undefined)}
-              >
-                <div className="action-card-top">
-                  <span className="action-key tabular">{taiKey}</span>
-                  <span className="action-title">
-                    {pickPlayerJutsu(state, 'taijutsu', battle.rounds.length).name} (Taijutsu)
-                  </span>
-                  <span className={`odds-pill ${taiOdds.tier}`}>
-                    {taiOdds.tier === 'strong' ? '▲' : taiOdds.tier === 'weak' ? '▼' : '◆'} {taiOdds.label}
-                  </span>
-                </div>
-                <div className="action-card-desc">
-                  Pit Taijutsu against their Stamina · Reliable when conserving Chakra
-                </div>
-                <div className="action-card-chips">
-                  <span className="cost-chip neutral">Chakra 0</span>
-                </div>
-                <div className="action-card-footer">
-                  <span className="footer-label">Stat used</span>
-                  <span className="stat-used-chip tabular">Taijutsu {rankValueToGrade(playerRanks[0])}</span>
-                </div>
-              </button>
-            )}
+          {/* Jutsu Card Grid for Active Tab */}
+          <div className="battle-jutsu-grid">
+            {knownByTab[activeTab].map((jutsu, idx) => {
+              const optId = `jutsu:${jutsu.id}`;
+              const opt = optionById.get(optId);
+              const effCost = getEffectiveJutsuCost(state, jutsu, war);
+              const mastery = getJutsuMasteryInfo(state.jutsuMastery?.[jutsu.id] ?? 0);
+              const isCombat = jutsu.style !== 'support';
+              const odds = isCombat
+                ? estimateBattleActionOdds(
+                    state,
+                    enemy,
+                    jutsu.style as BattleAttackStyle,
+                    battle.resolveBoostThisRound,
+                    jutsu.element,
+                  )
+                : null;
+              const keyNum = idx < 9 ? idx + 1 : null;
+              const disabled = Boolean(opt?.disabled);
 
-            {/* Kenjutsu Slash (Discipline-Gated: only shown when Shinobi Kenjutsu is learned) */}
-            {kenOpt && kenKey !== null && kenOdds && (
-              <button
-                type="button"
-                className="battle-action-card"
-                disabled={kenOpt.disabled}
-                onClick={() => onResolve('kenjutsu', selectedOd ?? undefined)}
-              >
-                <div className="action-card-top">
-                  <span className="action-key tabular">{kenKey}</span>
-                  <span className="action-title">
-                    {pickPlayerJutsu(state, 'kenjutsu', battle.rounds.length).name} (Kenjutsu)
-                  </span>
-                  <span className={`odds-pill ${kenOdds.tier}`}>
-                    {kenOdds.tier === 'strong' ? '▲' : kenOdds.tier === 'weak' ? '▼' : '◆'} {kenOdds.label}
-                  </span>
-                </div>
-                <div className="action-card-desc">
-                  Pit Speed &amp; Taijutsu against their Speed · Cleaves through Guard Walls &amp; shaves enemy Fort
-                </div>
-                <div className="action-card-chips">
-                  <span className="cost-chip">Chakra -4</span>
-                  <span className="cost-chip neutral">Wall Pierce · Tier {kenLevel}</span>
-                  {kenOpt.disabled && kenOpt.disabledReason && (
-                    <span className="cost-chip">{kenOpt.disabledReason}</span>
-                  )}
-                </div>
-                <div className="action-card-footer">
-                  <span className="footer-label">Stat used</span>
-                  <span className="stat-used-chip tabular">
-                    Speed {rankValueToGrade(playerRanks[1])} · Taijutsu {rankValueToGrade(playerRanks[0])}
-                  </span>
-                </div>
-              </button>
-            )}
-
-            {/* Elemental Ninjutsu */}
-            {ninOpt && ninKey !== null && (
-              <button
-                type="button"
-                className="battle-action-card"
-                disabled={ninOpt.disabled}
-                onClick={() => onResolve('ninjutsu', selectedOd ?? undefined)}
-              >
-                <div className="action-card-top">
-                  <span className="action-key tabular">{ninKey}</span>
-                  <span className="action-title">
-                    {pickPlayerJutsu(state, 'ninjutsu', battle.rounds.length).name} ({ELEMENT_NAMES[state.element]})
-                  </span>
-                  <span className={`odds-pill ${ninOdds.tier}`}>
-                    {ninOdds.tier === 'strong' ? '▲' : ninOdds.tier === 'weak' ? '▼' : '◆'} {ninOdds.label}
-                  </span>
-                </div>
-                <div className="action-card-desc">
-                  Pit Chakra against their Chakra ·{' '}
-                  {elemMatch ? elemMatch : 'Scales with elemental affinity and harder to dodge'}
-                </div>
-                <div className="action-card-chips">
-                  <span className="cost-chip">Chakra -8</span>
-                  {ninOpt.disabled && ninOpt.disabledReason && (
-                    <span className="cost-chip">{ninOpt.disabledReason}</span>
-                  )}
-                </div>
-                <div className="action-card-footer">
-                  <span className="footer-label">Stat used</span>
-                  <span className="stat-used-chip tabular">
-                    Chakra {rankValueToGrade(playerRanks[3])} · {ELEMENT_NAMES[state.element]}
-                  </span>
-                </div>
-              </button>
-            )}
-
-            {/* Genjutsu / Tactical Feint */}
-            {genOpt && genKey !== null && (
-              <button
-                type="button"
-                className="battle-action-card"
-                disabled={genOpt.disabled}
-                onClick={() => onResolve('genjutsu', selectedOd ?? undefined)}
-              >
-                <div className="action-card-top">
-                  <span className="action-key tabular">{genKey}</span>
-                  <span className="action-title">Genjutsu &amp; Tactical Feint</span>
-                  <span className={`odds-pill ${genOdds.tier}`}>
-                    {genOdds.tier === 'strong' ? '▲' : genOdds.tier === 'weak' ? '▼' : '◆'} {genOdds.label}
-                  </span>
-                </div>
-                <div className="action-card-desc">
-                  Pit Insight against their Insight · Landing a feint disrupts the enemy for 2 rounds
-                </div>
-                <div className="action-card-chips">
-                  <span className="cost-chip">Chakra -6</span>
-                  {genOpt.disabled && genOpt.disabledReason && (
-                    <span className="cost-chip">{genOpt.disabledReason}</span>
-                  )}
-                </div>
-                <div className="action-card-footer">
-                  <span className="footer-label">Stat used</span>
-                  <span className="stat-used-chip tabular">Insight {rankValueToGrade(playerRanks[4])}</span>
-                </div>
-              </button>
-            )}
-
-            {/* Signature Jutsu Ultimate */}
-            {ultOpt && ultKey !== null && (
-              <button
-                type="button"
-                className="battle-action-card ultimate-card"
-                disabled={ultOpt.disabled}
-                onClick={() => onResolve('ultimate', selectedOd ?? undefined)}
-              >
-                <div className="action-card-top">
-                  <span className="action-key tabular">{ultKey}</span>
-                  <span className="action-title">
-                    Signature Jutsu: {ult.name}
-                    <span className="rank-pill tabular">Rank {rankValueToGrade(ult.rankVal)}</span>
-                  </span>
-                </div>
-                <div className="action-card-desc">
-                  Unleash your signature technique · Simultaneous enemy Ultimate triggers a Jutsu Clash
-                </div>
-                <div className="action-card-chips">
-                  <span className="cost-chip">Your trump card will be revealed</span>
-                  <span className="cost-chip tabular">
-                    Chakra -{ultCost}
-                    {ultCost < ult.cost ? ' (-15% Bond)' : ''}
-                  </span>
-                  {ultOpt.disabled && ultOpt.disabledReason && (
-                    <span className="cost-chip">{ultOpt.disabledReason}</span>
-                  )}
-                </div>
-                <div className="action-card-footer">
-                  <span className="footer-label">Current</span>
-                  <span className="stat-used-chip tabular">Chakra {war.cp}</span>
-                  <span className="stat-used-chip tabular">Health {war.hp}</span>
-                </div>
-              </button>
-            )}
-
-            {/* [5] Tactical Support & Bloodline Accordion */}
-            {supportOpts.length > 0 && supportKey !== null && (
-              <div className="battle-accordion-card">
+              return (
                 <button
+                  key={jutsu.id}
                   type="button"
-                  className="battle-accordion-trigger"
-                  aria-expanded={supportOpen}
-                  onClick={() => setSupportOpen((prev) => !prev)}
+                  className={`jutsu-card-btn ${jutsu.role === 'clash' ? 'clash-card' : ''} ${inspectedJutsu?.id === jutsu.id ? 'selected' : ''}`}
+                  disabled={disabled}
+                  onMouseEnter={() => setInspectedJutsuId(jutsu.id)}
+                  onFocus={() => setInspectedJutsuId(jutsu.id)}
+                  onClick={() => onResolve(optId)}
                 >
                   <div className="action-card-top">
-                    <span className="action-key tabular">{supportKey}</span>
-                    <span className="action-title">Tactical Arts &amp; Bloodline</span>
-                    <span className="accordion-chevron">{supportOpen ? 'Collapse ▴' : 'Expand ▾'}</span>
+                    {keyNum !== null && <span className="action-key tabular">{keyNum}</span>}
+                    <span className="action-title" style={{ fontSize: '0.88rem' }}>
+                      {jutsu.name}
+                    </span>
+                    <span className="rank-pill tabular">{jutsu.rank}</span>
                   </div>
-                  <div className="action-card-desc tabular">
-                    {supportPreview} [HP {war.hp}/100 · CP {war.cp}/100]
+                  <div className="chip-row tabular">
+                    <span className={`cost-chip ${effCost === 0 ? 'neutral' : ''}`}>
+                      {effCost === 0 ? '0 CP' : `-${effCost} CP`}
+                    </span>
+                    <span className="cost-chip neutral">{ROLE_LABELS[jutsu.role]}</span>
+                    <span className="cost-chip neutral">{mastery.label}</span>
+                    {odds && (
+                      <span className={`odds-pill ${odds.tier}`}>
+                        {odds.tier === 'strong' ? '▲' : odds.tier === 'weak' ? '▼' : '◆'} {odds.label}
+                      </span>
+                    )}
                   </div>
+                  {disabled && opt?.disabledReason && (
+                    <div className="disc-sub" style={{ color: '#e69b9b' }}>
+                      {opt.disabledReason}
+                    </div>
+                  )}
                 </button>
+              );
+            })}
 
-                {supportOpen && (
-                  <div className="battle-accordion-body">
-                    {supportOpts.map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        className="battle-sub-btn"
-                        disabled={opt.disabled}
-                        onClick={() => onResolve(opt.id)}
-                      >
-                        <span className="battle-sub-title">{opt.label}</span>
-                        {opt.sublabel && <span className="action-card-desc">{opt.sublabel}</span>}
-                        {opt.disabled && opt.disabledReason && (
-                          <span className="cost-chip">{opt.disabledReason}</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
+            {/* Locked Next-Tier Jutsu Previews */}
+            {lockedByTab[activeTab].map(({ jutsu, requirementLabel }) => (
+              <button
+                key={`locked_${jutsu.id}`}
+                type="button"
+                className="jutsu-card-btn"
+                disabled
+                onMouseEnter={() => setInspectedJutsuId(jutsu.id)}
+              >
+                <div className="action-card-top">
+                  <span className="action-title" style={{ fontSize: '0.86rem' }}>
+                    {jutsu.name}
+                  </span>
+                  <span className="rank-pill tabular">{jutsu.rank}</span>
+                </div>
+                <div className="disc-sub">{requirementLabel}</div>
+              </button>
+            ))}
+
+            {/* Special Actions (Bloodline, Exploit Weakness, Resolves) in Other Tab */}
+            {activeTab === 'other' &&
+              otherSpecialOpts.map((opt, spIdx) => {
+                const keyIdx = knownByTab.other.length + spIdx + 1;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    className="jutsu-card-btn"
+                    disabled={opt.disabled}
+                    onClick={() => onResolve(opt.id)}
+                  >
+                    <div className="action-card-top">
+                      {keyIdx <= 9 && <span className="action-key tabular">{keyIdx}</span>}
+                      <span className="action-title" style={{ fontSize: '0.86rem' }}>
+                        {opt.label}
+                      </span>
+                    </div>
+                    {opt.sublabel && <div className="disc-sub">{opt.sublabel}</div>}
+                    {opt.disabled && opt.disabledReason && (
+                      <div className="disc-sub" style={{ color: '#e69b9b' }}>
+                        {opt.disabledReason}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+          </div>
+
+          {knownByTab[activeTab].length === 0 &&
+            lockedByTab[activeTab].length === 0 &&
+            (activeTab !== 'other' || otherSpecialOpts.length === 0) && (
+              <p className="history-sub">No learned techniques in this category yet.</p>
             )}
 
-            {/* [6] Limit Break / Resolve Accordion */}
-            {resolveOpts.length > 0 && resolveKey !== null && (
-              <div className="battle-accordion-card">
-                <button
-                  type="button"
-                  className="battle-accordion-trigger"
-                  aria-expanded={resolveOpen}
-                  onClick={() => setResolveOpen((prev) => !prev)}
-                >
-                  <div className="action-card-top">
-                    <span className="action-key tabular">{resolveKey}</span>
-                    <span className="action-title">Limit Break / Resolve ({war.resolves} left)</span>
-                    <span className="accordion-chevron">{resolveOpen ? 'Collapse ▴' : 'Expand ▾'}</span>
-                  </div>
-                  <div className="action-card-desc">{resolvePreview}</div>
-                </button>
-
-                {resolveOpen && (
-                  <div className="battle-accordion-body">
-                    {resolveOpts.map((opt) => (
-                      <button
-                        key={opt.id}
-                        type="button"
-                        className="battle-sub-btn"
-                        disabled={opt.disabled}
-                        onClick={() => onResolve(opt.id)}
-                      >
-                        <span className="battle-sub-title">{opt.label}</span>
-                        {opt.sublabel && <span className="action-card-desc">{opt.sublabel}</span>}
-                        {opt.disabled && opt.disabledReason && (
-                          <span className="cost-chip">{opt.disabledReason}</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
-            {/* [7] Shunshin Retreat */}
-            {retreatOpt && retreatKey !== null && (
+          {/* Always-Accessible Tactical Footer: Shunshin Retreat & Instant Body Flicker Escape */}
+          {!battle.isFinal && retreatOpt && (
+            <div className="battle-actions-list" style={{ marginTop: 4 }}>
               <button
                 type="button"
                 className="battle-action-card"
@@ -775,7 +710,7 @@ export function BattleDialog({
                 onClick={() => onResolve('retreat')}
               >
                 <div className="action-card-top">
-                  <span className="action-key tabular">{retreatKey}</span>
+                  <span className="action-key tabular">R</span>
                   <span className="action-title">Shunshin Retreat</span>
                   <span className={`odds-pill ${retreatPct >= 65 ? 'strong' : retreatPct <= 45 ? 'weak' : 'even'} tabular`}>
                     Escape ~{retreatPct}%
@@ -784,18 +719,9 @@ export function BattleDialog({
                 <div className="action-card-desc">
                   Disengage through smoke · Failed escape risks 14 to 24 parting damage
                 </div>
-                {retreatOpt.disabled && retreatOpt.disabledReason && (
-                  <div className="action-card-chips">
-                    <span className="cost-chip">{retreatOpt.disabledReason}</span>
-                  </div>
-                )}
-                <div className="action-card-footer">
-                  <span className="footer-label">Stat used</span>
-                  <span className="stat-used-chip tabular">Speed {rankValueToGrade(playerRanks[1])}</span>
-                </div>
               </button>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </dialog>
     </>

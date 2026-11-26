@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LIFE_EVENTS } from '../src/data/events-life';
 import { TEAM_EVENTS } from '../src/data/events-team';
-import { pickPlayerJutsu } from '../src/data/jutsu';
+import { JUTSU_MAP } from '../src/data/jutsu';
 import { ELEMENT_KANJI, RANK_KANJI } from '../src/data/powers';
 import { getKageTitle, kageTitle } from '../src/data/villages';
 import { resolveBattleRound } from '../src/sim/combat';
@@ -45,12 +45,12 @@ describe('Naruto Immersion Plan Verification (Fases 0-5)', () => {
     stA.war = initWarState(stA, rngA, false, 'front');
     startWarBattle(stA, stA.war.enemies[0].id, { isFinal: false, isAmbush: true, isDefense: false });
 
-    const jutsuPreview = pickPlayerJutsu(stA, 'ninjutsu', 0);
+    const jutsuPreview = JUTSU_MAP.ryuka;
     expect(jutsuPreview.name).toContain('Katon:');
     expect(jutsuPreview.seals.length).toBeGreaterThan(0);
 
     const rngBefore = rngA.snapshot();
-    const res = resolveBattleRound(stA, 'ninjutsu', rngA);
+    const res = resolveBattleRound(stA, 'jutsu:ryuka', rngA);
     expect(res.summary.jutsuName).toBe(jutsuPreview.name);
     expect(res.summary.seals).toEqual([...jutsuPreview.seals]);
     expect(res.summary.narrative).toContain(jutsuPreview.name);
@@ -67,7 +67,7 @@ describe('Naruto Immersion Plan Verification (Fases 0-5)', () => {
     stB.war = initWarState(stB, rngB, false, 'front');
     startWarBattle(stB, stB.war.enemies[0].id, { isFinal: false, isAmbush: true, isDefense: false });
     const rngB2 = new SeededRng(rngBefore.seed, rngBefore.state);
-    const resB = resolveBattleRound(stB, 'ninjutsu', rngB2);
+    const resB = resolveBattleRound(stB, 'jutsu:ryuka', rngB2);
     expect(resB.summary.enemyDmgTaken).toBe(res.summary.enemyDmgTaken);
     expect(resB.summary.playerDmgTaken).toBe(res.summary.playerDmgTaken);
   });

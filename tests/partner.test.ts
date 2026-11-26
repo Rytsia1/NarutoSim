@@ -6,11 +6,11 @@ import { WAR_CROSSROADS } from '../src/data/events-war';
 import { SUMMON_CLANS } from '../src/data/summons';
 import {
   buildBattleRoundDecision,
-  getAvailableOdActions,
+  getEffectiveJutsuCost,
   getEffectiveUltimateCost,
-  getPlayerSignatureUltimate,
   resolveBattleRound,
 } from '../src/sim/combat';
+import { JUTSU_MAP } from '../src/data/jutsu';
 import { buildPosthumousEpilogue, buildRetirementEventDecision } from '../src/sim/epilogue';
 import { createNewLife } from '../src/sim/life';
 import { detectWarArcs, recordWarFact } from '../src/sim/narrative';
@@ -83,8 +83,12 @@ describe('Mechanics Overhaul K1-K6: War Partner, Kuchiyose Od, Finale & Content 
     }
     expect(refused).toBe(true);
 
-    // Tier >= 60: 15% Ultimate CP discount
-    const baseUltCost = getPlayerSignatureUltimate(state).cost;
+    // Tier >= 60: 15% Clash Ultimate CP discount
+    state.disciplines = [
+      { id: 'fire_release', level: 4, xp: 50, lastLevelAge: 19, quality: 1, isMain: true, declinedUntilAge: 0 },
+    ];
+    partner.trust = 40;
+    const baseUltCost = getEffectiveUltimateCost(state, war);
     partner.trust = 65;
     expect(getEffectiveUltimateCost(state, war)).toBe(Math.round(baseUltCost * 0.85));
 
@@ -136,7 +140,7 @@ describe('Mechanics Overhaul K1-K6: War Partner, Kuchiyose Od, Finale & Content 
     expect(defected).toBe(true);
   });
 
-  it('K3: executes Companion Od Actions alongside main attacks in the same round without replacing them', () => {
+  it('K3: executes Kuchiyose & Support Jutsu via unified Chakra meter on their own exchange', () => {
     const state = createNewLife(7104);
     state.age = 21;
     promoteRank(state, 'chunin');
@@ -155,21 +159,19 @@ describe('Mechanics Overhaul K1-K6: War Partner, Kuchiyose Od, Finale & Content 
     enemy.hp = 100;
     startWarBattle(state, enemy.id, { isFinal: false, isAmbush: true, isDefense: false });
 
-    const battle = state.war.activeBattle!;
-    battle.od = 80;
-    battle.odMax = 80;
-    const odOpts = getAvailableOdActions(state);
-    expect(odOpts.map((o) => o.id)).toEqual(
-      expect.arrayContaining(['od_summon', 'od_heal', 'od_ward', 'od_clone']),
+    const menu = buildBattleRoundDecision(state);
+    expect(menu.options.map((o) => o.id)).toEqual(
+      expect.arrayContaining(['jutsu:kuchiyose', 'jutsu:shosen', 'jutsu:fuin_ward', 'jutsu:kage_bunshin']),
     );
 
-    const res = resolveBattleRound(state, 'taijutsu', rng, 'od_summon');
-    expect(battle.od).toBe(56);
-    expect(battle.odUsedCount).toBe(1);
+    const cpBefore = state.war.cp;
+    const expectedCost = getEffectiveJutsuCost(state, JUTSU_MAP.kuchiyose, state.war);
+    const res = resolveBattleRound(state, 'jutsu:kuchiyose', rng);
+    expect(state.war.cp).toBe(cpBefore - expectedCost);
     expect(state.summonContract.summonUses).toBe(1);
     expect(res.summary.narrative).toContain('Kuchiyose:');
-    expect(res.summary.jutsuName).toBeDefined();
-    expect(res.summary.outcome).not.toBe('support');
+    expect(res.summary.jutsuName).toBe('Kuchiyose no Jutsu');
+    expect(res.summary.outcome).toBe('support');
   });
 
   it('K4/K5: "Stay With Me" finale carries permanentPartner into the next war and retirement/posthumous epilogues', () => {
@@ -244,24 +246,20 @@ describe('Mechanics Overhaul K1-K6: War Partner, Kuchiyose Od, Finale & Content 
     enemy.hp = 200;
     startWarBattle(state, enemy.id, { isFinal: false, isAmbush: true, isDefense: false });
 
-    // 1. Simulate legacy save missing K1/K2/K3 fields
+    // 1. Simulate legacy save missing K1/K2 fields
     const rawWar = state.war as unknown as Record<string, unknown>;
     delete rawWar.usedPartnerScenes;
     delete rawWar.partner;
-    const rawBattle = state.war.activeBattle as unknown as Record<string, unknown>;
-    delete rawBattle.od;
-    delete rawBattle.odMax;
-    delete rawBattle.odUsedCount;
     ensureWarClockDefaults(state.war);
     expect(Array.isArray(state.war.usedPartnerScenes)).toBe(true);
     expect(state.war.partner).toBeNull();
-    expect(state.war.activeBattle!.od).toBeGreaterThan(0);
 
-    // 2. od_ward applies for the current round and expires cleanly to 0 at end of round
-    state.war.activeBattle!.od = 40;
+    // 2. Fuin Ward applies 2 rounds of ward via unified Chakra and decrements cleanly next round
     state.war.activeBattle!.playerWardRounds = 0;
-    resolveBattleRound(state, 'taijutsu', rng, 'od_ward');
-    expect(state.war.activeBattle!.playerWardRounds).toBe(0);
+    resolveBattleRound(state, 'jutsu:fuin_ward', rng);
+    expect(state.war.activeBattle!.playerWardRounds).toBe(2);
+    resolveBattleRound(state, 'jutsu:basic_strike', rng);
+    expect(state.war.activeBattle!.playerWardRounds).toBe(1);
 
     // 3. Partner facts surface in detectWarArcs
     recordWarFact(state.war, {

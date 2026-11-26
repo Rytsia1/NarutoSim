@@ -56,6 +56,14 @@ export function ensureKernelBootstrapped(
     },
   });
 
+  defaultMigrationRegistry.register({
+    id: 'jutsu_mastery_defaults',
+    order: 40,
+    apply: (state) => {
+      if (!state.jutsuMastery) state.jutsuMastery = {};
+    },
+  });
+
   // 2. Domain Decision Handlers registered cleanly per Engine!
   defaultDecisionRouter.register('academy_event', ({ state, decision, optionId, rng }) => {
     const before = snapshotStats(state);
