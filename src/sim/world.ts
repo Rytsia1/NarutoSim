@@ -3,6 +3,29 @@ import { clamp } from './powers';
 import type { SeededRng } from './rng';
 import type { CrisisId, GameState, PendingDecision, ScenarioConfig } from './types';
 
+export const MAX_CRISIS_CLUES = 5;
+
+export const BIJUU_LIST: readonly string[] = [
+  'Shukaku (One-Tail)',
+  'Matatabi (Two-Tails)',
+  'Isobu (Three-Tails)',
+  'Son Goku (Four-Tails)',
+  'Kokuo (Five-Tails)',
+  'Saiken (Six-Tails)',
+  'Chomei (Seven-Tails)',
+  'Gyuki (Eight-Tails)',
+  'Kurama (Nine-Tails)',
+];
+
+/**
+ * Deterministic Bijuu name per run without consuming RNG.
+ */
+export function getWorldBijuuName(state: { rng: { seed: number }; world: { bijuuName?: string } }): string {
+  if (state.world.bijuuName) return state.world.bijuuName;
+  const idx = Math.abs(state.rng.seed) % BIJUU_LIST.length;
+  return BIJUU_LIST[idx];
+}
+
 export function rollSeededCrisis(rng: SeededRng, scenario?: ScenarioConfig): CrisisId {
   if (scenario?.crisisOverride && scenario.crisisOverride !== 'natural') {
     return scenario.crisisOverride;
@@ -63,7 +86,7 @@ export function tickWorldTension(state: GameState, rng: SeededRng): TensionTickR
       (cw) => cw.crisisId === w.seededCrisis && !state.usedEvents.includes(cw.id),
     );
     if (availableWhispers.length > 0 && rng.chance(0.26)) {
-      const cw = availableWhispers[0];
+      const cw = rng.pick(availableWhispers);
       whisperDecision = {
         id: `${cw.id}_${state.age}`,
         kind: 'crisis_whisper',
@@ -90,8 +113,10 @@ export function tickWorldTension(state: GameState, rng: SeededRng): TensionTickR
     }
   }
 
-  // Check if a Great Shinobi War can break out
-  const warCooldownOk = w.lastWarAge === null || state.age - w.lastWarAge >= 6;
+  // Check if a Great Shinobi War can break out (honors K4 Peace Accord 12-year cooldown)
+  const warCooldownOk =
+    (w.lastWarAge === null || state.age - w.lastWarAge >= 6) &&
+    (!w.peaceAccordUntilAge || state.age >= w.peaceAccordUntilAge);
   let omenLogged = false;
 
   if (w.tension >= 70 && !w.omenActive && warCooldownOk && state.age >= 11) {
@@ -118,10 +143,11 @@ export function tickWorldTension(state: GameState, rng: SeededRng): TensionTickR
 export function buildWarPreludeDecision(state: GameState, isCrisisWar: boolean): PendingDecision {
   const warNum = state.world.eraNumber;
   const rankLabel = state.rank.toUpperCase();
+  const bijuu = getWorldBijuuName(state);
   const crisisTitle =
     state.world.seededCrisis === 'calamity'
-      ? 'Endgame Crisis: The Tailed-Beast Calamity'
-      : 'Endgame Crisis: The Shadow Mastermind';
+      ? `Endgame Crisis: ${bijuu} Rampage`
+      : 'Endgame Crisis: The Akatsuki Conspiracy';
 
   if (state.rank === 'civilian') {
     return {
@@ -157,8 +183,8 @@ export function buildWarPreludeDecision(state: GameState, isCrisisWar: boolean):
   if (isCrisisWar) {
     body =
       state.world.seededCrisis === 'calamity'
-        ? `The ancient seals you heard whispered about for years have shattered across the frontier. What began as a border war is now a continental calamity, forcing bitter rival villages into a fragile coalition. Clues gathered: ${state.world.crisisClues}.`
-        : `Every border skirmish was bait. A hidden mastermind and their S-Rank operatives have stepped out of the rain to seize the Five Great Nations from the shadows. Clues gathered: ${state.world.crisisClues}.`;
+        ? `The ancient seals you heard whispered about for years have shattered across the frontier. ${bijuu} has torn loose across the borderlands, forcing bitter rival villages into the Allied Shinobi Forces. Clues gathered: ${state.world.crisisClues}/${MAX_CRISIS_CLUES}.`
+        : `Every border skirmish was bait. Akatsuki and their masked leader have stepped out of the Amegakure rain to seize the Five Great Nations from the shadows. Clues gathered: ${state.world.crisisClues}/${MAX_CRISIS_CLUES}.`;
   } else if (state.rank === 'genin') {
     body = state.team?.active
       ? `Emergency mobilization drums echo at dawn. Even Genin cells are being rushed to hold secondary supply passes. Team ${state.team.number} is ordered to deploy immediately. Surviving rival Chunin and Jonin will take everything you have.`

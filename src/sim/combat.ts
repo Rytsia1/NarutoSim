@@ -1,7 +1,10 @@
+import { formatHandSeals, pickPlayerJutsu } from '../data/jutsu';
 import { BLOODLINE_MAP, DISCIPLINE_MAP, ELEMENT_NAMES } from '../data/powers';
 import { ARCHETYPE_AVG, ELEMENT_BEATS, ROSTER_MAP } from '../data/roster';
+import { getSummonPowerTier, SUMMON_CLAN_MAP } from '../data/summons';
 import { modRel } from './ai';
 import { recordWarFact } from './narrative';
+import { applyResolvePartnerReaction, syncPartnerBackToState } from './partner';
 import { clamp, computeCombatProjection } from './powers';
 import type { SeededRng } from './rng';
 import type {
@@ -9,6 +12,7 @@ import type {
   BattleRoundSummary,
   ChakraElement,
   GameState,
+  OdActionId,
   PendingDecision,
   SkillTag,
   UltimateScope,
@@ -97,6 +101,15 @@ export function getPlayerSignatureUltimate(state: GameState): PlayerUltimateInfo
     element: state.element,
     scope: 'single',
   };
+}
+
+export function getEffectiveUltimateCost(state: GameState, war?: WarState | null): number {
+  const ult = getPlayerSignatureUltimate(state);
+  const activeWar = war ?? state.war;
+  if (activeWar?.partner?.active && activeWar.partner.trust >= 60) {
+    return Math.round(ult.cost * 0.85);
+  }
+  return ult.cost;
 }
 
 export function unitBasePower(ranks: [number, number, number, number, number], hp: number): number {
@@ -286,6 +299,29 @@ export function computePlayerRoundPower(
     terms.push({ label: 'Strategic High Ground (+6)', val: 6 });
   }
 
+  if (war.partner && war.partner.active) {
+    const pTrustMod = Math.round(war.partner.trust * 0.08 - 5);
+    const pSkillMod =
+      war.partner.trust >= 60
+        ? Math.min(
+            2,
+            Math.round(
+              skillSum(war.partner.skills, 'power') * 0.22 +
+                (battle.isDefense ? skillSum(war.partner.skills, 'fort') * 0.22 : 0) +
+                (enemy.hp < 75 ? skillSum(war.partner.skills, 'slayer') * 0.22 : 0),
+            ),
+          )
+        : 0;
+    const partnerTotal = pTrustMod + pSkillMod;
+    total += partnerTotal;
+    if (partnerTotal !== 0) {
+      terms.push({
+        label: `Partner ${war.partner.name} (${partnerTotal >= 0 ? `+${partnerTotal}` : partnerTotal})`,
+        val: Math.abs(partnerTotal),
+      });
+    }
+  }
+
   if (battle.resolveBoostThisRound) {
     terms.push({ label: 'Limit Break: Surpass Limits (+3 Ranks)', val: 24 });
   }
@@ -350,11 +386,83 @@ export function npcUltimateChance(enemy: WarCompetitor, playerHp: number, isFina
   return clamp(p, 0, 0.75);
 }
 
+export interface OdActionOption {
+  id: OdActionId;
+  label: string;
+  desc: string;
+  cost: number;
+  disabled: boolean;
+  disabledReason?: string;
+}
+
+export function getAvailableOdActions(state: GameState): OdActionOption[] {
+  const war = state.war;
+  const battle = war?.activeBattle;
+  if (!war || !battle) return [];
+
+  const list: OdActionOption[] = [];
+  const od = battle.od;
+
+  if (state.summonContract) {
+    const clan = SUMMON_CLAN_MAP[state.summonContract.clanId];
+    const tier = getSummonPowerTier(state);
+    const summonName = clan.tierNames[tier.tierIndex];
+    list.push({
+      id: 'od_summon',
+      label: `Kuchiyose: ${summonName}`,
+      desc: clan.odEffectDesc,
+      cost: 24,
+      disabled: od < 24,
+      disabledReason: od < 24 ? 'Requires 24 Od' : undefined,
+    });
+  }
+
+  const hasMedical = state.disciplines.some((d) => d.id === 'medical');
+  if (hasMedical) {
+    const healDisabled = od < 18 || (war.hp >= 95 && (!war.partner?.active || war.partner.hp >= 95));
+    list.push({
+      id: 'od_heal',
+      label: 'Mystical Palm',
+      desc: 'Restore +12 HP (+6 Partner HP) alongside your attack.',
+      cost: 18,
+      disabled: healDisabled,
+      disabledReason: od < 18 ? 'Requires 18 Od' : 'HP already full',
+    });
+  }
+
+  const hasWard = state.disciplines.some((d) => d.id === 'barrier' || d.id === 'earth_release' || d.id === 'fuinjutsu');
+  if (hasWard) {
+    list.push({
+      id: 'od_ward',
+      label: 'Sealing Ward',
+      desc: 'Raise a quick defensive barrier (-35% incoming damage this round).',
+      cost: 16,
+      disabled: od < 16 || battle.playerWardRounds > 0,
+      disabledReason: od < 16 ? 'Requires 16 Od' : 'Ward already active',
+    });
+  }
+
+  const hasClone = state.disciplines.some((d) => d.id === 'shadow_clone' || d.id === 'genjutsu');
+  if (hasClone) {
+    list.push({
+      id: 'od_clone',
+      label: 'Shadow Clone',
+      desc: 'Instant decoy (+22% dodge on enemy counter this round).',
+      cost: 16,
+      disabled: od < 16 || battle.playerCloneEvade,
+      disabledReason: od < 16 ? 'Requires 16 Od' : 'Clone already active',
+    });
+  }
+
+  return list;
+}
+
 export function buildBattleRoundDecision(state: GameState): PendingDecision {
   const war = state.war!;
   const battle = war.activeBattle!;
   const enemy = war.enemies.find((e) => e.id === battle.enemyId)!;
   const ult = getPlayerSignatureUltimate(state);
+  const ultCost = getEffectiveUltimateCost(state, war);
 
   const enemyLabel = enemy.intel >= 80 ? `${enemy.name} (${enemy.epithet})` : `Unknown ${enemy.archetype.toUpperCase()}`;
   const elemHint =
@@ -363,9 +471,6 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
       : 'Element: Unknown';
   const elemMatch = enemy.intel >= 60 ? getElementMultiplier(state.element, enemy.element).label : null;
 
-  const hasMedical = state.disciplines.some((d) => d.id === 'medical');
-  const hasWard = state.disciplines.some((d) => d.id === 'barrier' || d.id === 'earth_release' || d.id === 'fuinjutsu');
-  const hasClone = state.disciplines.some((d) => d.id === 'shadow_clone' || d.id === 'genjutsu');
   const canBloodline =
     state.bloodline !== null &&
     state.bloodline.stage !== 'latent' &&
@@ -399,12 +504,15 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
     },
     {
       id: 'ultimate',
-      label: `Unleash Ultimate: ${ult.name} (${ult.cost} CP)`,
-      sublabel: 'Massive strike. If enemy fires their Ultimate simultaneously, triggers a Jutsu Clash!',
-      statHints: ['Ultimate', `${ult.cost} CP`],
-      disabled: war.cp < ult.cost,
-      disabledReason: `Requires ${ult.cost} CP`,
-      autoEligible: war.cp >= ult.cost && (enemy.hp <= 55 || battle.isFinal),
+      label: `Unleash Ultimate: ${ult.name} (${ultCost} CP)`,
+      sublabel:
+        ultCost < ult.cost
+          ? `Partner synergy cuts CP cost by 15%! Simultaneous enemy Ultimate triggers a Jutsu Clash.`
+          : 'Massive strike. If enemy fires their Ultimate simultaneously, triggers a Jutsu Clash!',
+      statHints: ['Ultimate', `${ultCost} CP`],
+      disabled: war.cp < ultCost,
+      disabledReason: `Requires ${ultCost} CP`,
+      autoEligible: war.cp >= ultCost && (enemy.hp <= 55 || battle.isFinal),
     },
   ];
 
@@ -421,38 +529,6 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
     });
   }
 
-  if (hasMedical && war.hp < 85) {
-    options.push({
-      id: 'support_heal',
-      label: 'Medical Triage: Mystical Palm (+20 HP, 12 CP)',
-      sublabel: 'Recover mid-fight while defending against incoming strikes.',
-      statHints: ['Medical'],
-      disabled: war.cp < 12,
-      disabledReason: 'Requires 12 CP',
-      autoEligible: war.hp < 50 && war.cp >= 12,
-    });
-  }
-  if (hasWard && battle.playerWardRounds === 0) {
-    options.push({
-      id: 'support_ward',
-      label: 'Raise Defensive Barrier (-35% damage for 2 rounds, 10 CP)',
-      statHints: ['Defense'],
-      disabled: war.cp < 10,
-      disabledReason: 'Requires 10 CP',
-      autoEligible: false,
-    });
-  }
-  if (hasClone && !battle.playerCloneEvade) {
-    options.push({
-      id: 'support_clone',
-      label: 'Shadow Clone Feint (+22% dodge & +8 next attack, 10 CP)',
-      statHints: ['Evasion'],
-      disabled: war.cp < 10,
-      disabledReason: 'Requires 10 CP',
-      autoEligible: false,
-    });
-  }
-
   if (state.stats.intel >= 40 && !battle.weaknessExploited) {
     options.push({
       id: 'exploit_weakness',
@@ -463,7 +539,18 @@ export function buildBattleRoundDecision(state: GameState): PendingDecision {
     });
   }
 
-  // 3x Limit Break / Resolve Tokens (replaces Command Seals)
+  // Unbreakable Bond (Trust >= 80): Free Surpass Limits once per war when HP < 35
+  if (war.partner?.active && war.partner.trust >= 80 && war.hp < 35 && !war.partner.freeSurpassUsed) {
+    options.push({
+      id: 'partner_free_surpass',
+      label: `Unbreakable Bond: Free Surpass Limits (${war.partner.name})`,
+      sublabel: '+3 Ranks & Ultimate x1.3 at 0 Resolve cost (once per war when HP < 35).',
+      statHints: ['Resolve', 'Bonds'],
+      autoEligible: true,
+    });
+  }
+
+  // 3x Limit Break / Resolve Tokens (Will of Fire surge)
   if (war.resolves > 0) {
     options.push({
       id: 'resolve_boost',
@@ -527,15 +614,123 @@ interface PreRoundCounters {
   field: boolean;
 }
 
+function applyCompanionOdAction(
+  state: GameState,
+  war: WarState,
+  enemy: WarCompetitor,
+  battle: ActiveBattleState,
+  odAction: OdActionId | undefined,
+  rng: SeededRng,
+): { prefix: string; bonusEnemyDmg: number; appliedWard: boolean; appliedBuff: boolean; appliedDebuff: boolean } {
+  if (!odAction) {
+    return { prefix: '', bonusEnemyDmg: 0, appliedWard: false, appliedBuff: false, appliedDebuff: false };
+  }
+  const available = getAvailableOdActions(state).find((a) => a.id === odAction && !a.disabled);
+  if (!available) {
+    return { prefix: '', bonusEnemyDmg: 0, appliedWard: false, appliedBuff: false, appliedDebuff: false };
+  }
+
+  battle.od = Math.max(0, battle.od - available.cost);
+  battle.odUsedCount += 1;
+
+  if (odAction === 'od_heal') {
+    war.hp = clamp(war.hp + 10, 1, 100);
+    if (war.partner?.active) {
+      war.partner.hp = clamp(war.partner.hp + 5, 1, war.partner.maxHp);
+    }
+    return {
+      prefix: '[Od: Mystical Palm +10 HP] ',
+      bonusEnemyDmg: 0,
+      appliedWard: false,
+      appliedBuff: false,
+      appliedDebuff: false,
+    };
+  }
+
+  if (odAction === 'od_ward') {
+    battle.playerWardRounds = 1;
+    return {
+      prefix: '[Od: Sealing Ward raised] ',
+      bonusEnemyDmg: 0,
+      appliedWard: false,
+      appliedBuff: false,
+      appliedDebuff: false,
+    };
+  }
+
+  if (odAction === 'od_clone') {
+    battle.playerCloneEvade = true;
+    return {
+      prefix: '[Od: Shadow Clone decoy] ',
+      bonusEnemyDmg: 0,
+      appliedWard: false,
+      appliedBuff: false,
+      appliedDebuff: false,
+    };
+  }
+
+  // od_summon: Kuchiyose Blood Contract!
+  const contract = state.summonContract!;
+  contract.summonUses += 1;
+  const clan = SUMMON_CLAN_MAP[contract.clanId];
+  const tier = getSummonPowerTier(state);
+  const summonName = clan.tierNames[tier.tierIndex];
+  const rawDmg = Math.round(rng.int(4, 7) * tier.mult);
+  const dmg = Math.min(Math.max(0, enemy.hp - 1), rawDmg);
+  enemy.hp = Math.max(1, enemy.hp - dmg);
+
+  let extraNote = '';
+  let appliedWard = false;
+  let appliedBuff = false;
+  let appliedDebuff = false;
+
+  if (clan.id === 'toad') {
+    battle.playerBuffRounds = Math.max(battle.playerBuffRounds, 1);
+    appliedBuff = true;
+    extraNote = ', +8 attack momentum';
+  } else if (clan.id === 'snake') {
+    battle.enemyDebuffRounds = Math.max(battle.enemyDebuffRounds, 2);
+    appliedDebuff = true;
+    extraNote = ', venom disrupts enemy';
+  } else if (clan.id === 'slug') {
+    war.hp = clamp(war.hp + 12, 1, 100);
+    if (war.partner?.active) war.partner.hp = clamp(war.partner.hp + 12, 1, war.partner.maxHp);
+    extraNote = ', +12 HP healed';
+  } else if (clan.id === 'hound') {
+    enemy.intel = clamp(enemy.intel + 18, 0, 100);
+    if (enemy.intel >= 90) enemy.skillsRevealed = true;
+    battle.enemyDebuffRounds = Math.max(battle.enemyDebuffRounds, 1);
+    appliedDebuff = true;
+    extraNote = ', +18 Intel & pinned flank';
+  } else if (clan.id === 'hawk') {
+    battle.playerCloneEvade = true;
+    extraNote = ', aerial evasion';
+  } else if (clan.id === 'ape') {
+    battle.playerWardRounds = Math.max(battle.playerWardRounds, 1);
+    appliedWard = true;
+    extraNote = ', adamantine guard';
+  }
+
+  return {
+    prefix: `[Kuchiyose: ${summonName} deals ${dmg} dmg${extraNote}] `,
+    bonusEnemyDmg: dmg,
+    appliedWard,
+    appliedBuff,
+    appliedDebuff,
+  };
+}
+
 export function resolveBattleRound(
   state: GameState,
   optionId: string,
   rng: SeededRng,
+  odAction?: OdActionId,
 ): { status: BattleResolutionStatus; summary: BattleRoundSummary } {
   const war = state.war!;
   const battle = war.activeBattle!;
   const enemy = war.enemies.find((e) => e.id === battle.enemyId)!;
   const ult = getPlayerSignatureUltimate(state);
+  const ultCost = getEffectiveUltimateCost(state, war);
 
   // Snapshot which counters were already active BEFORE this round's actions,
   // so newly applied buffs/debuffs never lose a turn on the same round!
@@ -553,6 +748,7 @@ export function resolveBattleRound(
     war.resolves -= 1;
     state.bodyStrain += 3;
     battle.resolveBoostThisRound = false;
+    const rx = applyResolvePartnerReaction(state, war, rng);
     recordWarFact(war, {
       type: 'resolve_burst',
       actorId: 'player',
@@ -567,7 +763,7 @@ export function resolveBattleRound(
       playerDmgTaken: 0,
       enemyDmgTaken: 0,
       whyLine: 'Key Factor: Limit Break Body Flicker guaranteed clean withdrawal',
-      narrative: 'Limit Break: You burn a surge of resolve into a blinding Body Flicker, vanishing beyond pursuit.',
+      narrative: `Limit Break: You burn a surge of resolve into a blinding Body Flicker, vanishing beyond pursuit.${rx.note}`,
     };
     battle.rounds.push(summary);
     return { status: 'retreated', summary };
@@ -578,6 +774,7 @@ export function resolveBattleRound(
     war.cp = clamp(war.cp + 40, 0, 100);
     state.bodyStrain += 4;
     battle.resolveBoostThisRound = false;
+    const rx = applyResolvePartnerReaction(state, war, rng);
     const chip = rng.int(4, 9);
     war.hp = Math.max(1, war.hp - chip);
     const summary: BattleRoundSummary = {
@@ -588,16 +785,30 @@ export function resolveBattleRound(
       playerDmgTaken: chip,
       enemyDmgTaken: 0,
       whyLine: 'Key Factor: Limit Break Second Wind restored 40 CP at minor damage cost',
-      narrative: `Limit Break: You force dormant reserves open (+40 CP) while absorbing a ${chip}-damage glancing blow.`,
+      narrative: `Limit Break: You force dormant reserves open (+40 CP) while absorbing a ${chip}-damage glancing blow.${rx.note}`,
     };
     battle.rounds.push(summary);
     return advanceRoundCounter(battle, summary, preCounters);
   }
 
-  if (optionId === 'resolve_boost' && war.resolves > 0) {
+  let resolvePartnerNote = '';
+  if (
+    optionId === 'partner_free_surpass' &&
+    war.partner?.active &&
+    war.partner.trust >= 80 &&
+    war.hp < 35 &&
+    !war.partner.freeSurpassUsed
+  ) {
+    war.partner.freeSurpassUsed = true;
+    battle.resolveBoostThisRound = true;
+    resolvePartnerNote = ` ${war.partner.name} pours chakra into your back in an Unbreakable Bond surge!`;
+    optionId = war.cp >= ultCost ? 'ultimate' : 'taijutsu';
+  } else if (optionId === 'resolve_boost' && war.resolves > 0) {
     war.resolves -= 1;
     battle.resolveBoostThisRound = true;
     state.bodyStrain += 6;
+    const rx = applyResolvePartnerReaction(state, war, rng);
+    resolvePartnerNote = rx.note;
     recordWarFact(war, {
       type: 'resolve_burst',
       actorId: 'player',
@@ -607,7 +818,7 @@ export function resolveBattleRound(
       detail: 'Unleashed Limit Break: Surpass Limits',
     });
     // Immediately execute an empowered strike this round!
-    optionId = war.cp >= ult.cost ? 'ultimate' : 'taijutsu';
+    optionId = war.cp >= ultCost ? 'ultimate' : 'taijutsu';
   }
 
   // Compute pRanks AFTER resolve_boost has been applied!
@@ -617,6 +828,24 @@ export function resolveBattleRound(
 
   // Standard Retreat attempt (shared formula with estimateRetreatChance)
   if (optionId === 'retreat' && !battle.isFinal) {
+    if (war.partner?.active && war.partner.trust < 35 && rng.chance(0.3)) {
+      const failDmg = rng.int(10, 18);
+      war.hp = Math.max(0, war.hp - failDmg);
+      battle.resolveBoostThisRound = false;
+      const summary: BattleRoundSummary = {
+        round: battle.round,
+        playerAction: 'Shunshin Retreat (Partner Refused)',
+        enemyAction: 'Pursuit strike',
+        outcome: 'lose',
+        playerDmgTaken: failDmg,
+        enemyDmgTaken: 0,
+        whyLine: `Key Factor: Distrustful partner ${war.partner.name} refused to fall back (-${failDmg} HP)`,
+        narrative: `${war.partner.name} ignores your withdrawal signal and breaks formation, exposing your flank for ${failDmg} damage!`,
+      };
+      battle.rounds.push(summary);
+      return resolveNonCombatLethalCheck(state, war, battle, summary, preCounters, rng);
+    }
+
     const hasSummoning = state.disciplines.some((d) => d.id === 'summoning');
     const fleeP = computeRetreatChance(pRanks[1], enemy.ranks[1], battle.playerCloneEvade, hasSummoning);
     if (rng.chance(fleeP)) {
@@ -729,6 +958,19 @@ export function resolveBattleRound(
     return resolveNonCombatLethalCheck(state, war, battle, summary, preCounters, rng);
   }
 
+  // Execute Optional Companion Od Action alongside main attacks (K3: does not replace attack!)
+  const isMainAttack =
+    optionId === 'taijutsu' ||
+    optionId === 'ninjutsu' ||
+    optionId === 'genjutsu' ||
+    optionId === 'ultimate';
+  const odRes = isMainAttack
+    ? applyCompanionOdAction(state, war, enemy, battle, odAction, rng)
+    : { prefix: '', bonusEnemyDmg: 0, appliedWard: false, appliedBuff: false, appliedDebuff: false };
+  if (odRes.appliedWard) preCounters.ward = false;
+  if (odRes.appliedBuff) preCounters.buff = false;
+  if (odRes.appliedDebuff) preCounters.debuff = false;
+
   // Decide whether Enemy fires Ultimate this round
   const enemyUsesUlt = rng.chance(npcUltimateChance(enemy, war.hp, battle.isFinal));
   if (enemyUsesUlt) {
@@ -738,9 +980,9 @@ export function resolveBattleRound(
     if (enemy.intel >= 90) enemy.skillsRevealed = true;
   }
 
-  const playerUsesUlt = optionId === 'ultimate' && war.cp >= ult.cost;
+  const playerUsesUlt = optionId === 'ultimate' && war.cp >= ultCost;
   if (playerUsesUlt) {
-    war.cp = Math.max(0, war.cp - ult.cost);
+    war.cp = Math.max(0, war.cp - ultCost);
     war.exposure = clamp(war.exposure + (ult.scope === 'fortress' ? 10 : 6), 0, 100);
   } else if (optionId === 'ninjutsu') {
     war.cp = Math.max(0, war.cp - 8);
@@ -748,16 +990,27 @@ export function resolveBattleRound(
     war.cp = Math.max(0, war.cp - 6);
   }
 
-  const boostTag = battle.resolveBoostThisRound ? 'Limit Break: ' : '';
+  const memForBoost =
+    battle.resolveBoostThisRound && state.memories && state.memories.length > 0
+      ? state.memories[state.memories.length - 1]
+      : null;
+  const baseBoostTag = battle.resolveBoostThisRound
+    ? `Limit Break: ${memForBoost ? `Memory flashes back (Age ${memForBoost.age}): "${memForBoost.text}" ` : ''}${resolvePartnerNote ? `${resolvePartnerNote.trim()} ` : ''}`
+    : resolvePartnerNote
+      ? `${resolvePartnerNote.trim()} `
+      : '';
+  const boostTag = `${odRes.prefix}${baseBoostTag}`;
 
   // === JUTSU CLASH (Both sides fire Ultimates on the same round!) ===
   if (playerUsesUlt && enemyUsesUlt) {
     const elemInfo = getElementMultiplier(ult.element, enemy.element);
+    const partnerClashBonus = war.partner?.active && war.partner.trust >= 80 ? 4 : 0;
     const pCV =
       ult.rankVal * 8 +
       pRanks[3] * 3 +
       (battle.resolveBoostThisRound ? 15 : 0) +
       (enemy.intel >= 80 ? 6 : 0) +
+      partnerClashBonus +
       elemInfo.clashBonus +
       rng.int(-10, 10);
     const eCV =
@@ -817,7 +1070,7 @@ export function resolveBattleRound(
       enemyAction: `Ultimate: ${enemy.ultimate.name}`,
       outcome,
       playerDmgTaken: pTaken,
-      enemyDmgTaken: eTaken,
+      enemyDmgTaken: eTaken + odRes.bonusEnemyDmg,
       whyLine,
       narrative,
     };
@@ -844,7 +1097,7 @@ export function resolveBattleRound(
       enemyAction: 'Desperate guard',
       outcome: 'win',
       playerDmgTaken: chip,
-      enemyDmgTaken: dmg,
+      enemyDmgTaken: dmg + odRes.bonusEnemyDmg,
       whyLine: `Key Factor: Uncontested Ultimate${elemInfo.label ? ` · ${elemInfo.label}` : ''}`,
       narrative: `${boostTag}You unleash ${ult.name}, tearing through their guard for ${dmg} damage!`,
     };
@@ -895,10 +1148,16 @@ export function resolveBattleRound(
       enemyAction: `Ultimate: ${enemy.ultimate.name}`,
       outcome: 'lose',
       playerDmgTaken: pTaken,
-      enemyDmgTaken: counterChip,
+      enemyDmgTaken: counterChip + odRes.bonusEnemyDmg,
       whyLine: `Key Factor: Enemy fired ${enemy.ultimate.name} uncontested`,
-      narrative,
+      narrative: `${odRes.prefix}${narrative}`,
     };
+    if (war.partner?.active && pTaken > 0) {
+      const splash = Math.max(3, Math.round(pTaken * 0.35));
+      war.partner.hp = Math.max(0, war.partner.hp - splash);
+      summary.narrative += ` Shockwaves from the Ultimate catch ${war.partner.name} for ${splash} damage.`;
+      checkPartnerDowned(state, war, summary, rng);
+    }
     battle.rounds.push(summary);
     return finalizeCombatOutcomes(state, war, enemy, battle, summary, preCounters, rng);
   }
@@ -924,15 +1183,18 @@ export function resolveBattleRound(
     styleKey,
   );
 
+  const pickedJutsu = pickPlayerJutsu(state, styleKey, battle.rounds.length);
+  const sealPrefix = pickedJutsu.seals.length > 0
+    ? `${formatHandSeals(pickedJutsu.seals)}: ${pickedJutsu.name}! `
+    : `${pickedJutsu.name}! `;
+
   let stanceReason = '';
-  let playerActionLabel = 'Taijutsu Strike';
+  const playerActionLabel = pickedJutsu.name;
   if (styleKey === 'taijutsu') {
     stanceReason = `Taijutsu (TAI ${pRanks[0].toFixed(1)} vs STA ${enemy.ranks[2].toFixed(1)})`;
   } else if (styleKey === 'ninjutsu') {
-    playerActionLabel = `${ELEMENT_NAMES[state.element]} Ninjutsu`;
     stanceReason = elemLabel ?? `Ninjutsu (CHK ${pRanks[3].toFixed(1)} vs CHK ${enemy.ranks[3].toFixed(1)})`;
   } else {
-    playerActionLabel = 'Genjutsu Feint';
     stanceReason = `Genjutsu (INS ${pRanks[4].toFixed(1)} vs INS ${enemy.ranks[4].toFixed(1)})`;
   }
 
@@ -947,7 +1209,7 @@ export function resolveBattleRound(
     eTaken = rng.int(4, 8);
     outcome = 'draw';
     whyLine = `Key Factor: Even clash (Δ${Math.round(diff)}) · ${stanceReason}`;
-    narrative = `${boostTag}Sparks and steel collide evenly: both shinobi trade glancing wounds (${eTaken} dealt, ${pTaken} taken).`;
+    narrative = `${boostTag}${sealPrefix}Sparks and chakra collide evenly: both shinobi trade glancing wounds (${eTaken} dealt, ${pTaken} taken).`;
   } else {
     // Reversal check (instinct/luck)
     let playerWins = diff > 0;
@@ -962,7 +1224,7 @@ export function resolveBattleRound(
         pTaken = rng.int(1, 3);
         outcome = 'win';
         whyLine = `Key Factor: Enemy evaded brunt of attack · ${stanceReason}`;
-        narrative = `${boostTag}Your ${playerActionLabel} nearly connects, grazing them for ${eTaken} damage as they twist clear.`;
+        narrative = `${boostTag}${sealPrefix}Your strike nearly connects cleanly, grazing them for ${eTaken} damage as they twist clear.`;
       } else {
         // Lava Release (yoton) melts enemy defensive walls
         const wallMult = battle.enemyWallRounds > 0 && activeBloodlineId !== 'yoton' ? 0.65 : 1;
@@ -977,7 +1239,7 @@ export function resolveBattleRound(
           enemy.cp = Math.max(0, enemy.cp - 10);
         }
         whyLine = `Key Factor: ${reversal ? 'Instinct Reversal! ' : ''}${stanceReason} · ${topFactor}`;
-        narrative = `${boostTag}Your ${playerActionLabel} breaks their guard for ${eTaken} damage${
+        narrative = `${boostTag}${sealPrefix}Breaks their guard for ${eTaken} damage${
           styleKey === 'genjutsu'
             ? ' and rattles their focus!'
             : gentleFistActive
@@ -1004,7 +1266,7 @@ export function resolveBattleRound(
         eTaken = rng.int(2, 5);
         outcome = 'draw';
         whyLine = 'Key Factor: High-speed evasion turned a heavy hit into a graze';
-        narrative = `You twist out of a lethal strike at the last fraction of a second, taking only ${pTaken} damage.`;
+        narrative = `${sealPrefix}Your opponent answers fast, forcing you to twist clear at the last instant (${pTaken} taken, ${eTaken} dealt).`;
       } else {
         const wardMult =
           (battle.playerWardRounds > 0 ? 0.65 : 1) *
@@ -1013,8 +1275,18 @@ export function resolveBattleRound(
         eTaken = rng.int(1, 5);
         outcome = 'lose';
         whyLine = `Key Factor: ${reversal ? 'Enemy Reversal! ' : ''}Enemy outpaced round (+${Math.round(Math.abs(diff))} power)`;
-        narrative = `Your opponent seizes the tempo and lands a clean counter for ${pTaken} damage!`;
+        narrative = `${sealPrefix}Your opponent reads the opening and lands a clean counter for ${pTaken} damage!`;
       }
+    }
+  }
+
+  // Wire unused roster clash (Round 1) & win lines deterministically without touching RNG
+  const rosterDef = ROSTER_MAP[enemy.rosterId];
+  if (rosterDef) {
+    if (battle.round === 1 && rosterDef.lines.clash) {
+      narrative += ` ${rosterDef.lines.clash}`;
+    } else if (outcome === 'lose' && rosterDef.lines.win) {
+      narrative += ` ${rosterDef.lines.win}`;
     }
   }
 
@@ -1026,15 +1298,115 @@ export function resolveBattleRound(
   const summary: BattleRoundSummary = {
     round: battle.round,
     playerAction: playerActionLabel,
+    jutsuName: pickedJutsu.name,
+    seals: [...pickedJutsu.seals],
     enemyAction: 'Combat exchange',
     outcome,
     playerDmgTaken: pTaken,
-    enemyDmgTaken: eTaken,
+    enemyDmgTaken: eTaken + odRes.bonusEnemyDmg,
     whyLine,
-    narrative,
+    narrative: odRes.prefix && !narrative.startsWith(odRes.prefix) ? `${odRes.prefix}${narrative}` : narrative,
   };
   battle.rounds.push(summary);
   return finalizeCombatOutcomes(state, war, enemy, battle, summary, preCounters, rng);
+}
+
+function checkNindoResolve(
+  state: GameState,
+  war: WarState,
+  battle: ActiveBattleState,
+  summary: BattleRoundSummary,
+): void {
+  if (battle.usedNindoResolve || !state.nindo) return;
+  if (war.hp <= 0 || war.hp >= 25) return;
+  battle.usedNindoResolve = true;
+  war.hp = clamp(war.hp + 12, 1, 100);
+  const mem = state.memories && state.memories.length > 0
+    ? state.memories[state.memories.length - 1]
+    : null;
+  const flashText = mem ? ` Memory flashes back (Age ${mem.age}): "${mem.text}"` : '';
+  summary.narrative += ` NINDO RESOLVE! Remembering your ninja way pulls you back from the brink (+12 HP)!${flashText}`;
+}
+
+function checkPartnerDowned(
+  state: GameState,
+  war: WarState,
+  summary: BattleRoundSummary,
+  rng: SeededRng,
+): void {
+  const partner = war.partner;
+  if (!partner || !partner.active || partner.hp > 0) return;
+  partner.hp = 0;
+  partner.active = false;
+  const killed = rng.chance(0.3);
+  partner.died = killed;
+  syncPartnerBackToState(state, partner);
+
+  if (killed) {
+    if (!state.memories) state.memories = [];
+    state.memories.push({
+      age: state.age,
+      tag: 'loss',
+      text: `${partner.name} fell shielding you during Great Shinobi War #${war.warNumber}.`,
+    });
+    if (state.memories.length > 12) state.memories.splice(0, state.memories.length - 12);
+  }
+
+  recordWarFact(war, {
+    type: 'partner_down',
+    actorId: partner.id,
+    actorName: partner.name,
+    targetId: 'player',
+    targetName: state.name,
+    detail: killed
+      ? `${partner.name} fell in action shielding you`
+      : `${partner.name} was critically wounded shielding you`,
+  });
+  summary.narrative += killed
+    ? ` FALLEN PARTNER! ${partner.name} collapses with fatal wounds after taking the blow for you.`
+    : ` PARTNER DOWN! ${partner.name} collapses heavily wounded and can no longer fight beside you.`;
+}
+
+function checkPartnerOrSquadInterception(
+  state: GameState,
+  war: WarState,
+  battle: ActiveBattleState,
+  summary: BattleRoundSummary,
+  rng: SeededRng,
+): boolean {
+  const partner = war.partner;
+  if (
+    partner &&
+    partner.active &&
+    !battle.partnerIntercepted &&
+    partner.trust >= 30 &&
+    summary.playerDmgTaken > 0 &&
+    (summary.playerDmgTaken >= 14 || war.hp < 35)
+  ) {
+    const prob = clamp(0.28 + partner.trust * 0.003 + partner.relStage * 0.04, 0.28, 0.72);
+    if (rng.chance(prob)) {
+      battle.partnerIntercepted = true;
+      const saved = Math.min(summary.playerDmgTaken, Math.max(3, Math.round(summary.playerDmgTaken * 0.35)));
+      war.hp = clamp(war.hp + saved, 1, 100);
+      summary.playerDmgTaken = Math.max(0, summary.playerDmgTaken - saved);
+      const partnerDmg = Math.max(saved, Math.round(saved * 1.35));
+      partner.hp = Math.max(0, partner.hp - partnerDmg);
+      state.flags.had_loyal_intercept = true;
+      summary.narrative += ` PARTNER INTERCEPTION! ${partner.name} steps into the strike, blocking ${saved} damage for you (-${partnerDmg} Partner HP)!`;
+      recordWarFact(war, {
+        type: 'partner_intercept',
+        actorId: partner.id,
+        actorName: partner.name,
+        targetId: 'player',
+        targetName: state.name,
+        detail: `${partner.name} intercepted ${saved} damage for ${state.name}`,
+      });
+      checkPartnerDowned(state, war, summary, rng);
+      return true;
+    }
+    return false;
+  }
+  return checkLoyalInterception(state, war, summary, rng);
 }
 
 function resolveNonCombatLethalCheck(
@@ -1045,13 +1417,19 @@ function resolveNonCombatLethalCheck(
   preCounters: PreRoundCounters,
   rng: SeededRng,
 ): { status: BattleResolutionStatus; summary: BattleRoundSummary } {
-  checkLoyalInterception(state, war, summary, rng);
+  checkPartnerOrSquadInterception(state, war, battle, summary, rng);
+  checkNindoResolve(state, war, battle, summary);
   if (war.hp <= 0 && !battle.usedDesperation && state.stats.will >= 65) {
     battle.usedDesperation = true;
     war.hp = 10;
     summary.narrative += ' Sheer shinobi willpower keeps you standing at 10 HP!';
   }
   if (war.hp <= 0) {
+    const foe = war.enemies.find((e) => e.id === battle.enemyId);
+    const rosterDef = foe ? ROSTER_MAP[foe.rosterId] : undefined;
+    if (rosterDef?.lines.win && !summary.narrative.includes(rosterDef.lines.win)) {
+      summary.narrative += ` ${rosterDef.lines.win}`;
+    }
     return { status: 'player_dead', summary };
   }
   return advanceRoundCounter(battle, summary, preCounters);
@@ -1108,8 +1486,9 @@ function finalizeCombatOutcomes(
 ): { status: BattleResolutionStatus; summary: BattleRoundSummary } {
   battle.resolveBoostThisRound = false;
 
-  // Check Kizuna Loyal Interception before resolving lethal blow
-  checkLoyalInterception(state, war, summary, rng);
+  // Check Partner / Kizuna Interception & Nindo Resolve before resolving lethal blow
+  checkPartnerOrSquadInterception(state, war, battle, summary, rng);
+  checkNindoResolve(state, war, battle, summary);
 
   // Update 6-axis relations after combat exchange
   if (summary.enemyDmgTaken > summary.playerDmgTaken) {
@@ -1145,6 +1524,10 @@ function finalizeCombatOutcomes(
   }
 
   if (war.hp <= 0) {
+    const rosterDef = ROSTER_MAP[enemy.rosterId];
+    if (rosterDef?.lines.win && !summary.narrative.includes(rosterDef.lines.win)) {
+      summary.narrative += ` ${rosterDef.lines.win}`;
+    }
     return { status: 'player_dead', summary };
   }
 

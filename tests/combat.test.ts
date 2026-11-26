@@ -69,7 +69,7 @@ describe('Solo Tactical Combat & Jutsu Clash Engine', () => {
       { id: 'fire_release', level: 4, xp: 50, lastLevelAge: 22, quality: 1.2, isMain: true, declinedUntilAge: 0 },
     ];
     const ult = getPlayerSignatureUltimate(state);
-    expect(ult.name).toBe('Great Dragon Flame Annihilation');
+    expect(ult.name).toBe('Katon: Goka Mekkyaku');
     expect(ult.rankVal).toBeGreaterThanOrEqual(5);
   });
 });

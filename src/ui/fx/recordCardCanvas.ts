@@ -1,11 +1,12 @@
 import { t } from '../../data/i18n';
 import { ELEMENT_NAMES } from '../../data/powers';
+import { getKageTitle } from '../../data/villages';
 import type { LifeRecord } from '../../sim/types';
 
 export function formatShareText(rec: LifeRecord): string {
   const rankLabel =
     rec.specialStatus === 'kage'
-      ? 'Kage'
+      ? getKageTitle(rec.villageId)
       : rec.specialStatus === 'missing_nin'
         ? `Missing-Nin (${t(`rank.${rec.peakRank}`)})`
         : t(`rank.${rec.peakRank}`);
@@ -137,7 +138,7 @@ export function renderShinobiCardCanvas(rec: LifeRecord): HTMLCanvasElement {
 
   const rankLabel =
     rec.specialStatus === 'kage'
-      ? 'KAGE'
+      ? getKageTitle(rec.villageId).toUpperCase()
       : rec.specialStatus === 'missing_nin'
         ? `MISSING-NIN (${t(`rank.${rec.peakRank}`).toUpperCase()})`
         : t(`rank.${rec.peakRank}`).toUpperCase();

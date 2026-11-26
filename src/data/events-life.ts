@@ -1,4 +1,5 @@
-import type { FocusId, LeaningKey, ShinobiRank, StatKey } from '../sim/types';
+import type { FocusId, LeaningKey, ShinobiRank, StatKey, VillageId } from '../sim/types';
+import { EXTRA_FLAVOR_LINES, EXTRA_GROWTH_EVENTS, EXTRA_LIFE_EVENTS } from './events-life-extra';
 
 export interface SimpleEffect {
   stats?: Partial<Record<StatKey, number>>;
@@ -40,6 +41,7 @@ export interface LifeEventDef {
   weight: number;
   repeatable?: boolean;
   ranks?: ShinobiRank[];
+  villageOnly?: VillageId[];
   excludeOrphan?: boolean;
   onlyOrphan?: boolean;
   leaningBias?: LeaningKey;
@@ -214,7 +216,7 @@ export const LIFE_EVENTS: readonly LifeEventDef[] = [
     options: [
       {
         id: 'report_kage',
-        label: 'Deliver the ledger directly to the Kage tower',
+        label: 'Deliver the ledger directly to the {kage} Tower',
         statHints: ['Will', 'Bonds'],
         autoEligible: true,
         check: { label: 'Political Courage', stat: 'will', rollMax: 30, threshold: 52 },
@@ -555,6 +557,369 @@ export const LIFE_EVENTS: readonly LifeEventDef[] = [
       },
     ],
   },
+  // === VILLAGE-SIGNATURE & EXPANDED NARUTO LIFE EVENTS ===
+  {
+    id: 'le_konoha_ichiraku',
+    title: 'Steam Rising at Ichiraku Ramen',
+    body: 'Rain patters on the red cloth curtains of Ichiraku Ramen as the chef slides a steaming bowl of miso chashu across the wooden counter after a brutal training week.',
+    minAge: 8,
+    maxAge: 60,
+    weight: 12,
+    villageOnly: ['konoha'],
+    options: [
+      {
+        id: 'order_extra',
+        label: 'Order a double bowl and swap war stories with the regulars',
+        statHints: ['Bonds', 'Health'],
+        autoEligible: true,
+        onPassText: 'Warm broth restores bruised muscles and reminds you why Konohagakure is worth bleeding for.',
+        onPass: { stats: { health: 6, bonds: 5, ryo: -3 }, leanings: { will_of_fire: 1 } },
+      },
+      {
+        id: 'eat_fast',
+        label: 'Finish quickly and head back to the training posts',
+        statHints: ['Chakra'],
+        autoEligible: true,
+        onPassText: 'You leave exact coin on the wood and spend two more hours refining hand seals in the rain.',
+        onPass: { stats: { chakra: 3, will: 2, ryo: -2 }, xpMain: 3 },
+      },
+    ],
+  },
+  {
+    id: 'le_konoha_hokage_rock',
+    title: 'Scrubbing the Hokage Monument',
+    body: 'You climb the wooden scaffolding beneath the towering stone faces overlooking Konohagakure, looking down over every cedar roof and academy courtyard.',
+    minAge: 9,
+    maxAge: 22,
+    weight: 11,
+    villageOnly: ['konoha'],
+    options: [
+      {
+        id: 'vow_carved_face',
+        label: 'Stare at the carved stone and swear your face will join them one day',
+        statHints: ['Will'],
+        autoEligible: true,
+        onPassText: 'Wind whips your headband tails as fierce determination settles into your chest.',
+        onPass: { stats: { will: 5, chakra: 3 }, leanings: { ambition: 2, will_of_fire: 1 } },
+      },
+      {
+        id: 'help_cleanup',
+        label: 'Help the younger academy kids scrub the paint cleanly before dusk',
+        statHints: ['Bonds'],
+        autoEligible: true,
+        onPassText: 'Everyone descends the cliff exhausted and grinning as lanterns blink on across the village.',
+        onPass: { stats: { bonds: 6, will: 2 }, leanings: { will_of_fire: 1 } },
+      },
+    ],
+  },
+  {
+    id: 'le_suna_puppet_forge',
+    title: 'Sandstorm in the Puppet Brigade Workshop',
+    body: 'Howling desert wind rattles the iron shutters of Sunagakure\'s craft hall, where senior artisans test chakra threads on lacquered wood joints.',
+    minAge: 11,
+    maxAge: 34,
+    weight: 12,
+    villageOnly: ['suna'],
+    options: [
+      {
+        id: 'tune_threads',
+        label: 'Spend the storm calibrating ten chakra threads at once',
+        statHints: ['Intel', 'Chakra'],
+        autoEligible: true,
+        onPassText: 'Your fingertips ache by morning, yet your fine chakra precision leaps forward.',
+        onPass: { stats: { intel: 5, chakra: 4 }, xpMain: 5 },
+      },
+      {
+        id: 'trade_parts',
+        label: 'Help reinforce desert water seals for bonus workshop pay',
+        statHints: ['Ryo', 'Bonds'],
+        autoEligible: true,
+        onPass: { stats: { ryo: 10, bonds: 3 } },
+        onPassText: 'Clean seals save precious cistern water, earning gratitude and silver coin.',
+      },
+    ],
+  },
+  {
+    id: 'le_kiri_bloody_mist',
+    title: 'Fog Over the Kirigakure Sparring Ring',
+    body: 'Salt mist rolls thick across the stone courtyard. Instructors call out names in pairs, reviving harsh echoes of the old Bloody Mist proving grounds.',
+    minAge: 10,
+    maxAge: 18,
+    weight: 14,
+    villageOnly: ['kiri'],
+    options: [
+      {
+        id: 'strike_decisive',
+        label: 'End the bout in three ruthless strikes without hesitating',
+        statHints: ['Health', 'Will'],
+        autoEligible: true,
+        onPassText: 'Silence falls across the fogged yard. Nobody questions your edge afterward.',
+        onPass: { stats: { will: 5, chakra: 3, health: -3 }, xpMain: 5, leanings: { ruthless: 2 } },
+      },
+      {
+        id: 'disarm_cleanly',
+        label: 'Pin your classmate\'s blade without drawing blood',
+        statHints: ['Intel', 'Bonds'],
+        autoEligible: true,
+        onPassText: 'You prove control beats cruelty, earning quiet respect from the younger generation of Kirigakure.',
+        onPass: { stats: { intel: 4, bonds: 4, will: 3 }, leanings: { will_of_fire: 1 } },
+      },
+    ],
+  },
+  {
+    id: 'le_kumo_lightning_peaks',
+    title: 'Storm Drills Above the Cloud Peaks',
+    body: 'Thunder rumbles beneath your sandals on Kumogakure\'s high training plateau as senior shinobi spar amidst crackling static.',
+    minAge: 11,
+    maxAge: 36,
+    weight: 12,
+    villageOnly: ['kumo'],
+    options: [
+      {
+        id: 'match_pace',
+        label: 'Push your footwork to lightning-cloak tempo until dusk',
+        statHints: ['Health', 'Chakra'],
+        autoEligible: true,
+        onPassText: 'Your muscles burn like live wire, forging relentless Kumogakure speed.',
+        onPass: { stats: { health: 4, chakra: 5, will: 2 }, xpMain: 5, leanings: { ambition: 1 } },
+      },
+      {
+        id: 'study_stance',
+        label: 'Analyze their lightning-blade openings from the cliff edge',
+        statHints: ['Intel'],
+        autoEligible: true,
+        onPassText: 'You chart three lightning timing cues before the storm breaks.',
+        onPass: { stats: { intel: 5, chakra: 2 } },
+      },
+    ],
+  },
+  {
+    id: 'le_iwa_stone_trial',
+    title: 'Burden of the Canyon Basalt',
+    body: 'Iwagakure elders set a jagged boulder atop the narrow ridge path, daring young shinobi to shoulder the village\'s unyielding Will of Stone.',
+    minAge: 11,
+    maxAge: 38,
+    weight: 12,
+    villageOnly: ['iwa'],
+    options: [
+      {
+        id: 'shoulder_stone',
+        label: 'Heft the basalt slab across the gorge without dropping your stance',
+        statHints: ['Health', 'Will'],
+        autoEligible: true,
+        onPassText: 'Your shoulders bruise black and blue, yet your endurance hardens like mountain rock.',
+        onPass: { stats: { health: 6, will: 5 }, xpMain: 4, leanings: { will_of_fire: 1 } },
+      },
+      {
+        id: 'shatter_doton',
+        label: 'Channel Earth Release to cleave the boulder cleanly in two',
+        statHints: ['Chakra', 'Intel'],
+        autoEligible: true,
+        onPassText: 'Stone cracks cleanly along the seam as onlookers applaud your chakra precision.',
+        onPass: { stats: { chakra: 5, intel: 3 }, xpMain: 5 },
+      },
+    ],
+  },
+  {
+    id: 'le_kuchiyose_contract',
+    title: 'Blood Seal of a Summoning Scroll',
+    body: 'A scarred veteran unrolls a weathered Kuchiyose blood-contract scroll scented with cedar and mountain mist, offering you a chance to sign with a named summon clan.',
+    minAge: 14,
+    maxAge: 36,
+    weight: 10,
+    ranks: ['genin', 'chunin', 'jonin'],
+    options: [
+      {
+        id: 'sign_toad',
+        label: 'Sign in blood with the Mount Myoboku Toads (Gamahiro lineage)',
+        statHints: ['Chakra', 'Bonds'],
+        autoEligible: true,
+        check: { label: 'Summon Resonance', stat: 'chakra', rollMax: 30, threshold: 52 },
+        onPassText: 'Smoke bursts wide as a gruff armored toad nods in approval. "Do not call me for petty chores, kid."',
+        onPass: { stats: { chakra: 5, bonds: 5, will: 3 }, xpMain: 5, setFlags: ['summon_contract_toad'] },
+        onFailText: 'Only a tiny tadpole pops out of the smoke, though the blood signature remains bound to your chakra.',
+        onFail: { stats: { chakra: 2, will: 2 }, setFlags: ['summon_contract_toad'] },
+      },
+      {
+        id: 'sign_hound',
+        label: 'Sign in blood with the Ninken Tracking Hounds (Kuromaru pack)',
+        statHints: ['Intel', 'Bonds'],
+        autoEligible: true,
+        onPassText: 'A sharp-eyed hound in a village vest steps through the mist and touches nose to your knuckle.',
+        onPass: { stats: { intel: 5, bonds: 5 }, xpMain: 4, setFlags: ['summon_contract_hound'] },
+      },
+    ],
+  },
+  {
+    id: 'le_chunin_vest_tailor',
+    title: 'Fitting the Green Flak Jacket',
+    body: 'The quartermaster lays a crisp olive-green tactical vest across the bench, complete with scroll pouches and reinforced shoulder plates.',
+    minAge: 14,
+    maxAge: 32,
+    weight: 12,
+    ranks: ['chunin', 'jonin'],
+    options: [
+      {
+        id: 'pack_tactical',
+        label: 'Line the chest pockets with extra wire spools, smoke tags, and antidote vials',
+        statHints: ['Intel', 'Health'],
+        autoEligible: true,
+        onPassText: 'Every gram sits balanced over your ribs. A prepared shinobi lives longer than a flashy one.',
+        onPass: { stats: { intel: 4, health: 4, ryo: -4 } },
+      },
+      {
+        id: 'keep_light',
+        label: 'Trim excess straps for maximum sprint agility',
+        statHints: ['Chakra', 'Will'],
+        autoEligible: true,
+        onPassText: 'You test three Body Flicker bursts across the yard without a single strap snagging.',
+        onPass: { stats: { chakra: 3, will: 4 } },
+      },
+    ],
+  },
+  {
+    id: 'le_hotspring_recovery',
+    title: 'Steam in the Border Hot Springs',
+    body: 'Between deployments, a quiet sulfur spring tucked in the cedar foothills offers rare relief for aching chakra coils and old scar tissue.',
+    minAge: 18,
+    maxAge: 62,
+    weight: 9,
+    repeatable: true,
+    ranks: ['genin', 'chunin', 'jonin'],
+    options: [
+      {
+        id: 'soak_rest',
+        label: 'Pay for an inn room and let every bruise mend properly',
+        statHints: ['Health', 'Ryo'],
+        autoEligible: true,
+        onPassText: 'Mineral steam melts weeks of tension out of your shoulders.',
+        onPass: { stats: { health: 9, will: 3, ryo: -6 } },
+      },
+      {
+        id: 'listen_travelers',
+        label: 'Keep your cloak dry and eavesdrop on traveling merchants',
+        statHints: ['Intel'],
+        autoEligible: true,
+        onPassText: 'You pick up fresh rumors on border patrols and rival village supply routes.',
+        onPass: { stats: { intel: 4 }, clues: 1 },
+      },
+    ],
+  },
+  {
+    id: 'le_bingo_book_broker',
+    title: 'Pages From an Underground Bingo Book',
+    body: 'A hooded collector in a border bazaar offers you an updated copy of the continent\'s black-market Bingo Book listing S-Rank bounties and jutsu weaknesses.',
+    minAge: 16,
+    maxAge: 48,
+    weight: 10,
+    ranks: ['chunin', 'jonin'],
+    options: [
+      {
+        id: 'buy_dossier',
+        label: 'Purchase the annotated Bingo Book (-10 Ryo)',
+        statHints: ['Intel', 'Ryo'],
+        autoEligible: true,
+        onPassText: 'Memorizing elemental counters and rogue aliases sharpens your battlefield instincts.',
+        onPass: { stats: { intel: 7, ryo: -10 }, clues: 1 },
+      },
+      {
+        id: 'decline_broker',
+        label: 'Walk away before the collector remembers your face',
+        statHints: ['Will'],
+        autoEligible: true,
+        onPassText: 'Keeping your own name out of shady ledgers is worth more than gossip.',
+        onPass: { stats: { will: 3 } },
+      },
+    ],
+  },
+  {
+    id: 'le_shuriken_wager',
+    title: 'Blind-Corner Shuriken Challenge',
+    body: 'Off-duty shinobi gather behind the red torii gate, wagering silver ryo on bouncing shuriken off stone posts to strike a hidden target.',
+    minAge: 12,
+    maxAge: 34,
+    weight: 10,
+    ranks: ['genin', 'chunin', 'jonin'],
+    options: [
+      {
+        id: 'throw_ricochet',
+        label: 'Snap a four-shuriken ricochet around the blind post',
+        statHints: ['Intel', 'Ryo'],
+        autoEligible: true,
+        check: { label: 'Ricochet Precision', stat: 'intel', rollMax: 30, threshold: 50 },
+        onPassText: 'Steel sparks off stone and pins dead center. Cheers erupt as coins slide your way.',
+        onPass: { stats: { ryo: 10, intel: 3, bonds: 3 }, xpMain: 3 },
+        onFailText: 'The third shuriken clips wide, costing you the wager and a round of teasing.',
+        onFail: { stats: { ryo: -4, will: 2 } },
+      },
+      {
+        id: 'watch_form',
+        label: 'Watch their wrist angles quietly without betting',
+        statHints: ['Intel'],
+        autoEligible: true,
+        onPassText: 'You pocket two crisp angle tricks without risking a single coin.',
+        onPass: { stats: { intel: 3 } },
+      },
+    ],
+  },
+  {
+    id: 'le_archive_night',
+    title: 'Lantern Light in the Forbidden Archive',
+    body: 'Pulling late guard duty outside the village scroll vault, you notice a senior archivist left an old Second War battlefield journal open on the desk.',
+    minAge: 15,
+    maxAge: 42,
+    weight: 10,
+    ranks: ['chunin', 'jonin'],
+    options: [
+      {
+        id: 'read_tactics',
+        label: 'Study the formation notes until the morning bell rings',
+        statHints: ['Intel', 'Will'],
+        autoEligible: true,
+        onPassText: 'Old war maps reveal how outnumbered Jonin survived encirclements through seal arrays.',
+        onPass: { stats: { intel: 6, will: 2, health: -2 }, xpMain: 4 },
+      },
+      {
+        id: 'seal_vault',
+        label: 'Close the ledger untouched and lock the ward cleanly',
+        statHints: ['Bonds', 'Will'],
+        autoEligible: true,
+        onPassText: 'The head archivist notices your discipline at dawn and adds a commendation to your record.',
+        onPass: { stats: { bonds: 4, will: 3 }, leanings: { will_of_fire: 1 } },
+      },
+    ],
+  },
+  {
+    id: 'le_bridge_builder',
+    title: 'Escorting a Stubborn Bridge Builder',
+    body: 'A weathered master carpenter hires village shinobi to guard his coastal bridge against syndicate thugs, though his trembling hands hint the danger runs far deeper than bandits.',
+    minAge: 13,
+    maxAge: 38,
+    weight: 10,
+    ranks: ['genin', 'chunin', 'jonin'],
+    options: [
+      {
+        id: 'stay_guard_bridge',
+        label: 'Refuse to abandon the town and hold the mist-wrapped bridge',
+        statHints: ['Chakra', 'Bonds'],
+        autoEligible: true,
+        check: { label: 'Bridge Defense', stat: 'chakra', rollMax: 35, threshold: 56 },
+        onPassText: 'When the mist clears, the bridge stands unbroken and the townsfolk name its span after your courage.',
+        onPass: { stats: { bonds: 8, will: 5, ryo: 10, health: -4 }, xpMain: 6, leanings: { will_of_fire: 2 } },
+        onFailText: 'A brutal ambush leaves deep cuts across your ribs before reinforcements force the assassins to retreat.',
+        onFail: { stats: { health: -12, will: 4, bonds: 5 }, xpMain: 3 },
+      },
+      {
+        id: 'demand_reclass',
+        label: 'Report the false rank immediately and request backup',
+        statHints: ['Intel'],
+        autoEligible: true,
+        onPassText: 'Protocol saves lives: a Jonin detachment arrives within two days to secure the crossing.',
+        onPass: { stats: { intel: 4, ryo: 5 } },
+      },
+    ],
+  },
+  ...EXTRA_LIFE_EVENTS,
 ];
 
 export interface GrowthEventDef {
@@ -766,6 +1131,7 @@ export const GROWTH_EVENTS: readonly GrowthEventDef[] = [
       },
     ],
   },
+  ...EXTRA_GROWTH_EVENTS,
 ];
 
 export interface FlavorLineDef {
@@ -798,6 +1164,7 @@ export const FLAVOR_LINES: readonly FlavorLineDef[] = [
   { id: 'fl_18', text: 'Winter rain hammers the tin eaves as you review counter-formations against enemy jutsu.', focus: 'study', minAge: 14 },
   { id: 'fl_19', text: 'Sharing tea with old acquaintances reminds you what lies behind the village walls.', focus: 'social', minAge: 15 },
   { id: 'fl_20', text: 'Even in peacetime, your boots stay laced beside the bed out of habit.', ranks: ['chunin', 'jonin'] },
+  ...EXTRA_FLAVOR_LINES,
 ];
 
 export const REFLECTION_PROMPTS: readonly { age: number; prompt: string }[] = [

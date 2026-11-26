@@ -74,7 +74,7 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
     id: 'ach_kage',
     category: 'path',
     title: 'Shadow of the Village',
-    desc: 'Be acclaimed as Kage after breaking an Endgame Crisis.',
+    desc: 'Ascend as Hokage, Kazekage, or village leader through crisis victory or succession.',
     check: (s) => s.specialStatus === 'kage',
   },
   {
@@ -222,8 +222,8 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
   {
     id: 'ach_rinne_eye',
     category: 'powers',
-    title: 'Eyes of Samsara',
-    desc: 'Awaken the mythic Rinne-Tier bloodline.',
+    title: 'Eyes of the Six Paths',
+    desc: 'Awaken the mythic Rinnegan.',
     hidden: true,
     check: (s) => Boolean(s.bloodline?.id === 'rinne_eye' && s.bloodline.stage !== 'latent'),
   },
@@ -239,15 +239,15 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
   {
     id: 'ach_calamity_clear',
     category: 'crises',
-    title: 'Seal of the Continental Storm',
-    desc: 'Defeat the Tailed-Beast Calamity Endgame Crisis.',
+    title: 'Seal of the Rampaging Bijuu',
+    desc: 'Subdue the Bijuu Rampage Endgame Crisis.',
     check: (s, m) => m.crisisCleared.calamity >= 1 || (s.world.seededCrisis === 'calamity' && s.world.crisisStage === 3),
   },
   {
     id: 'ach_mastermind_clear',
     category: 'crises',
-    title: 'Mask Shattered in the Rain',
-    desc: 'Defeat the Shadow Mastermind Endgame Crisis.',
+    title: 'Red Clouds Shattered in the Rain',
+    desc: 'Defeat the Akatsuki Conspiracy Endgame Crisis.',
     check: (s, m) => m.crisisCleared.mastermind >= 1 || (s.world.seededCrisis === 'mastermind' && s.world.crisisStage === 3),
   },
   {
@@ -297,7 +297,7 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
     id: 'ach_meta_both_crises',
     category: 'meta',
     title: 'Savior of Two Timelines',
-    desc: 'Clear both the Tailed-Beast Calamity and Shadow Mastermind Endgame Crises.',
+    desc: 'Clear both the Bijuu Rampage and Akatsuki Conspiracy Endgame Crises.',
     check: (_s, m) => m.crisisCleared.calamity >= 1 && m.crisisCleared.mastermind >= 1,
   },
 ];

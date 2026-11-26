@@ -144,18 +144,19 @@ export function initWarRelations(state: GameState, war: WarState): void {
     if (enemy.isExTeammateRogue) {
       modRel(war, enemy.id, 'player', { rivalry: 38, respect: 25, grudge: 32, trust: -10 });
       modRel(war, 'player', enemy.id, { rivalry: 38, respect: 22, grudge: 25 });
-    } else if (enemy.villageId === state.villageId) {
-      modRel(war, enemy.id, 'player', { respect: 15, trust: 10 });
+    } else if (enemy.villageId === state.villageId && state.specialStatus !== 'missing_nin') {
+      modRel(war, enemy.id, 'player', { respect: 24, trust: 28, affection: 14, rivalry: -10 });
+      modRel(war, 'player', enemy.id, { respect: 24, trust: 28, affection: 14, rivalry: -10 });
     } else {
-      modRel(war, enemy.id, 'player', { rivalry: 12 });
+      modRel(war, enemy.id, 'player', { rivalry: 14 });
     }
 
     for (const other of war.enemies) {
       if (enemy.id === other.id) continue;
       if (enemy.villageId === other.villageId) {
-        modRel(war, enemy.id, other.id, { trust: 14, respect: 10 });
+        modRel(war, enemy.id, other.id, { trust: 26, respect: 18, affection: 10, rivalry: -10 });
       } else {
-        modRel(war, enemy.id, other.id, { rivalry: 10 });
+        modRel(war, enemy.id, other.id, { rivalry: 12 });
       }
     }
   }
@@ -347,8 +348,12 @@ export function evaluateAllyFinalIntent(
   let pYield = ally.tactic === 'defensive' ? 0.4 : 0.18;
   let pShare = 1 - pBetray - pYield;
 
-  pBetray = clamp(pBetray + (bScore - 0.35) * 0.7 - state.stats.bonds * 0.002, 0.05, 0.8);
-  pShare = clamp(pShare + edge.trust * 0.003 + edge.owe * 0.05, 0.1, 0.8);
+  const sameVillageDiscount =
+    ally.villageId === state.villageId && !ally.isExTeammateRogue && state.specialStatus !== 'missing_nin'
+      ? 0.22
+      : 0;
+  pBetray = clamp(pBetray + (bScore - 0.35) * 0.7 - state.stats.bonds * 0.002 - sameVillageDiscount, 0.02, 0.8);
+  pShare = clamp(pShare + edge.trust * 0.003 + edge.owe * 0.05 + sameVillageDiscount, 0.1, 0.9);
   pYield = Math.max(0.05, pYield);
 
   const total = pBetray + pShare + pYield;

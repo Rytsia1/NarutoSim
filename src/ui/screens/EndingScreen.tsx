@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { getKageTitle } from '../../data/villages';
 import { t } from '../../data/i18n';
 import { VILLAGE_MAP } from '../../data/villages';
 import type { GameState } from '../../sim/types';
@@ -78,7 +79,7 @@ export function EndingScreen({
   const rec = state.record!;
   const peakRankText =
     rec.specialStatus === 'kage'
-      ? 'Kage'
+      ? getKageTitle(rec.villageId)
       : rec.specialStatus !== 'none'
         ? `${t(`status.${rec.specialStatus}`)} (${t(`rank.${rec.peakRank}`)})`
         : t(`rank.${rec.peakRank}`);

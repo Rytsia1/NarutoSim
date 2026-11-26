@@ -42,8 +42,8 @@ export const EN_DICT: Record<string, string> = {
   'leaning.forbidden': 'Forbidden Arts',
   'leaning.ambition': 'Sovereign Ambition',
   'crisis.none': 'Normal Shinobi Era',
-  'crisis.calamity': 'Tailed-Beast Calamity',
-  'crisis.mastermind': 'Shadow Mastermind',
+  'crisis.calamity': 'Bijuu Rampage',
+  'crisis.mastermind': 'Akatsuki Conspiracy',
 };
 
 export function t(key: string, vars?: Record<string, string | number>): string {

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ACHIEVEMENT_MAP } from '../data/achievements';
 import { ShinobiSim } from '../sim/engine';
 import { recordCompletedLifeInMeta, updateMetaFromState } from '../sim/meta';
-import type { FocusId, GameState, LifeRecord, MetaState, ScenarioConfig } from '../sim/types';
+import type { FocusId, GameState, LifeRecord, MetaState, OdActionId, ScenarioConfig } from '../sim/types';
 import { soundEngine } from './audio/soundEngine';
 import { SettingsDialog } from './components/SettingsDialog';
 import { CinematicFxOverlay, pickHighestPriorityFx, type ActiveFxEvent } from './fx/CinematicFxOverlay';
@@ -298,9 +298,9 @@ export function App() {
     setView('playing');
   }, [savedLife]);
 
-  const handleResolve = useCallback((optId: string, text?: string) => {
+  const handleResolve = useCallback((optId: string, text?: string, odAction?: OdActionId) => {
     soundEngine.playSfx('click', simRef.current!.getState().speed);
-    simRef.current!.resolve(optId, text);
+    simRef.current!.resolve(optId, text, odAction);
   }, []);
 
   const handleSetSpeed = useCallback((sp: 1 | 2 | 4 | 8) => {

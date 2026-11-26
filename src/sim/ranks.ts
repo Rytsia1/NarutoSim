@@ -173,14 +173,19 @@ export function buildChuninExamStage(state: GameState, stage: 1 | 2 | 3): Pendin
     };
   }
 
+  const rival = state.rivalId
+    ? state.team?.members.find((m) => m.id === state.rivalId && m.alive && m.specialStatus !== 'missing_nin')
+    : undefined;
   return {
     id: `chunin_s3_${state.age}`,
     kind: 'chunin_exam_stage',
     eventId: 'chunin_stage_3',
-    title: 'Chunin Exam (Stage 3 of 3): Arena Finals',
-    body: 'Kage envoys and Jonin examiners watch from the upper gallery as you step into the central sand arena solo. Victory matters less than demonstrating tactical judgment worthy of leading missions.',
+    title: rival ? `Chunin Exam (Stage 3 of 3): Arena Finals vs ${rival.name}` : 'Chunin Exam (Stage 3 of 3): Arena Finals',
+    body: rival
+      ? `Kage envoys and Jonin examiners watch from the upper gallery as you step onto the central sand across from your rival, ${rival.name}. Victory matters less than demonstrating tactical judgment worthy of leading missions.`
+      : 'Kage envoys and Jonin examiners watch from the upper gallery as you step into the central sand arena solo. Victory matters less than demonstrating tactical judgment worthy of leading missions.',
     manual: true,
-    meta: { stage: 3 },
+    meta: { stage: 3, rivalName: rival?.name ?? '' },
     options: [
       {
         id: 'tactical_outplay',

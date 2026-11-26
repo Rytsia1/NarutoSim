@@ -31,6 +31,9 @@ export function sanitizeMetaState(raw: unknown): MetaState {
     codexRoster: p.codexRoster && typeof p.codexRoster === 'object' ? { ...p.codexRoster } : {},
     codexBloodlines: p.codexBloodlines && typeof p.codexBloodlines === 'object' ? { ...p.codexBloodlines } : {},
     codexDisciplines: p.codexDisciplines && typeof p.codexDisciplines === 'object' ? { ...p.codexDisciplines } : {},
+    codexSummons: Array.isArray(p.codexSummons)
+      ? p.codexSummons.filter((x): x is NonNullable<MetaState['codexSummons']>[number] => typeof x === 'string')
+      : [],
     crisisCleared: {
       calamity: typeof p.crisisCleared?.calamity === 'number' ? p.crisisCleared.calamity : 0,
       mastermind: typeof p.crisisCleared?.mastermind === 'number' ? p.crisisCleared.mastermind : 0,

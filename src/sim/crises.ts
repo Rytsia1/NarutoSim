@@ -11,6 +11,7 @@ import type {
   WarCrisisState,
   WarState,
 } from './types';
+import { getWorldBijuuName } from './world';
 
 const SENTINEL_DIVISOR = [0, 0.35, 0.85, 1.5, 2.3, 3.2];
 
@@ -39,13 +40,14 @@ export function initWarCrisisState(state: GameState, war: WarState, rng: SeededR
   const clueDiscount = state.world.crisisClues * 8;
   const bossMaxHp = id === 'calamity' ? Math.max(95, 145 - clueDiscount) : Math.max(90, 130 - clueDiscount);
 
+  const bijuu = getWorldBijuuName(state);
   return {
     id,
     phase: 1,
     bossName:
       id === 'calamity'
-        ? 'Unbound Ten-Tails Fragment (Calamity)'
-        : 'The Masked Shadow Mastermind',
+        ? `${bijuu} (Unbound Bijuu)`
+        : 'Masked Akatsuki Leader',
     bossHp: bossMaxHp,
     bossMaxHp,
     bossPhase2Done: false,
@@ -97,8 +99,8 @@ export function advanceCrisisPhase(state: GameState, war: WarState, rng: SeededR
       pushLog(
         state,
         'crisis',
-        `CRISIS PHASE 2 (RELIC ANCHORS): Five Forbidden Relic Sentinels shield the Shadow Mastermind (Current Boss Durability Divisor: x${getMastermindDivisor(state, c)}). Hunt Sentinels at night to shatter their armor!`,
-        { title: 'Mastermind Phase 2: Hunt the Sentinels' },
+        `CRISIS PHASE 2 (AKATSUKI RELIC ANCHORS): Five Forbidden Relic Sentinels shield the Masked Akatsuki Leader (Current Boss Durability Divisor: x${getMastermindDivisor(state, c)}). Hunt Sentinels at night to shatter their armor!`,
+        { title: 'Akatsuki Phase 2: Hunt the Sentinels' },
       );
     }
   }
@@ -130,8 +132,8 @@ export function advanceCrisisPhase(state: GameState, war: WarState, rng: SeededR
       state,
       'crisis',
       c.id === 'calamity'
-        ? `CRISIS PHASE 3 (DESCENT): ${c.bossName} tears free of the valley seals! ${c.coalitionAllies} allied shinobi stand ready to join a Coalition Raid.`
-        : `CRISIS PHASE 3 (UNMASKED): ${c.bossName} steps openly into the storm with ${c.sentinelsLeft} remaining Sentinels (Divisor x${getMastermindDivisor(state, c)})!`,
+        ? `CRISIS PHASE 3 (DESCENT): ${c.bossName} tears free of the valley seals! ${c.coalitionAllies} Allied Shinobi Forces companions stand ready to join the raid.`
+        : `CRISIS PHASE 3 (UNMASKED): ${c.bossName} steps openly out of the rain with ${c.sentinelsLeft} remaining Sentinels (Divisor x${getMastermindDivisor(state, c)})!`,
       { title: `${c.bossName} Descends!` },
     );
   }
@@ -168,12 +170,17 @@ export function buildCrisisBossDecision(state: GameState): PendingDecision {
       ? ` | Durability Divisor: x${getMastermindDivisor(state, c)} | Active Sentinel Guards: ${c.guardsActive}`
       : ` | Coalition Companions: ${c.coalitionAllies} (+${c.coalitionAllies * 7} power)`;
 
+  const mem = state.memories && state.memories.length > 0
+    ? state.memories[state.memories.length - 1]
+    : null;
+  const memLine = mem ? ` Memory echoes (Age ${mem.age}): "${mem.text}"` : '';
+
   return {
     id: `crisis_raid_${war.day}_${c.bossHp}`,
     kind: 'war_crisis_raid',
     eventId: 'war_crisis_raid',
     title: `Boss Raid: ${c.bossName} (HP ${c.bossHp}/${c.bossMaxHp})`,
-    body: `You confront ${c.bossName} beneath a torn sky! Your HP ${war.hp}/100, CP ${war.cp}/100, Resolves ${war.resolves}${divNote}.`,
+    body: `You confront ${c.bossName} beneath a torn sky! Your HP ${war.hp}/100, CP ${war.cp}/100, Resolves ${war.resolves}${divNote}.${memLine}`,
     manual: true,
     options: [
       {
@@ -188,8 +195,8 @@ export function buildCrisisBossDecision(state: GameState): PendingDecision {
       },
       {
         id: 'boss_strike',
-        label: 'Coordinated Strike with Coalition Allies (8 CP)',
-        sublabel: `Steady damage boosted by ${c.coalitionAllies} companions.`,
+        label: 'Coordinated Strike with Allied Shinobi Forces (8 CP)',
+        sublabel: `Steady damage boosted by ${c.coalitionAllies} allied shinobi.`,
         disabled: war.cp < 8,
         disabledReason: 'Requires 8 CP',
         autoEligible: war.cp >= 8,
@@ -235,7 +242,7 @@ export function buildCrisisAftermathDecision(state: GameState): PendingDecision 
     kind: 'war_crisis_end',
     eventId: 'war_crisis_end',
     title: `Aftermath: ${c.bossName} Shattered`,
-    body: `The storm collapses around the crater, leaving the exposed core of ${c.id === 'calamity' ? 'the unbound Tailed-Beast chakra' : 'the Mastermind Relic Matrix'} trembling before you. How will you end this era?`,
+    body: `The storm collapses around the crater, leaving the exposed core of ${c.id === 'calamity' ? `${getWorldBijuuName(state)}'s chakra` : 'the Akatsuki Relic Matrix'} trembling before you. How will you end this era?`,
     manual: true,
     options: [
       {
@@ -390,7 +397,9 @@ export function startConvictionRoute(
   triggerOutcome: 'victor' | 'shared' = 'victor',
 ): PendingDecision {
   const leaning = findDominantExtremeLeaning(state)!;
-  const opponent = [...state.team!.members.filter((m) => m.alive)].sort((a, b) => b.trust - a.trust)[0];
+  const livingSquad = state.team!.members.filter((m) => m.alive);
+  const rivalOpp = state.rivalId ? livingSquad.find((m) => m.id === state.rivalId) : undefined;
+  const opponent = rivalOpp ?? [...livingSquad].sort((a, b) => b.trust - a.trust)[0];
 
   // Clear any leftover activeBattle when transitioning into Conviction Route
   war.activeBattle = null;
@@ -432,6 +441,8 @@ export function startConvictionRoute(
 
 export function buildConvictionBeatDecision(state: GameState): PendingDecision {
   const conv = state.war!.conviction!;
+  const mem = state.memories && state.memories.length > 0 ? state.memories[0] : null;
+  const memQuote = mem ? ` A memory flashes back from Age ${mem.age}: "${mem.text}"` : '';
   const prompts: Record<1 | 2 | 3, { title: string; body: string }> = {
     1: {
       title: `Valley of the End (1/3): ${conv.opponentName} Blocks Your Path`,
@@ -439,7 +450,7 @@ export function buildConvictionBeatDecision(state: GameState): PendingDecision {
     },
     2: {
       title: 'Valley of the End (2/3): Echo of Team Memories',
-      body: `Rain begins falling over the carved stone statues. ${conv.opponentName} tightens their grip on a familiar kunai, asking whether the Genin days you shared meant nothing at all. (Their Resolve: ${conv.resolveR}/100)`,
+      body: `Rain begins falling over the carved stone statues. ${conv.opponentName} tightens their grip on a familiar kunai, asking whether the Genin days you shared meant nothing at all.${memQuote} (Their Resolve: ${conv.resolveR}/100)`,
     },
     3: {
       title: 'Valley of the End (3/3): The Final Step',

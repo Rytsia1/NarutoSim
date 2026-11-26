@@ -1,7 +1,9 @@
+import { NINDO_MAP } from '../data/nindo';
+import { getAvailableOdActions } from './combat';
 import { canEnterRetirement } from './epilogue';
 import { advanceYear, createNewLife, finalizeLifeRecord, pushLog, resolvePendingDecision } from './life';
 import { SeededRng } from './rng';
-import type { FocusId, GameState, LifeRecord, ScenarioConfig } from './types';
+import type { FocusId, GameState, LifeRecord, OdActionId, ScenarioConfig } from './types';
 import {
   advanceWarBeat,
   ensureWarClockDefaults,
@@ -198,16 +200,16 @@ export class ShinobiSim {
     this.notify(true);
   }
 
-  resolve(optionId: string, freeText?: string): void {
+  resolve(optionId: string, freeText?: string, odAction?: OdActionId): void {
     if (!this.state.pending) return;
     const valid = this.state.pending.options.find((o) => o.id === optionId && !o.disabled);
     if (!valid) return;
-    resolvePendingDecision(this.state, optionId, freeText);
+    resolvePendingDecision(this.state, optionId, freeText, odAction);
     this.notify(true);
   }
 
   /**
-   * Picks a deterministic eligible option when auto-play is active.
+   * Picks a deterministic eligible option weighted by the character's Nindo and moral leanings.
    * Respects `manual` decisions unless `forceManual` is true (headless stress runner).
    */
   autoChoice(forceManual = false): boolean {
@@ -220,9 +222,52 @@ export class ShinobiSim {
     if (pool.length === 0) return false;
 
     const rng = new SeededRng(this.state.rng.seed, this.state.rng.state);
-    const picked = rng.pick(pool);
+    const nindoDef = this.state.nindo ? NINDO_MAP[this.state.nindo] : null;
+    const weighted = pool.map((opt) => {
+      let weight = 1;
+      if (nindoDef && opt.statHints && opt.statHints.length > 0) {
+        if (opt.statHints.some((h) => nindoDef.preferredHints.includes(h))) {
+          weight += 1.5;
+        }
+      }
+      if (this.state.nindo === 'become_kage' && (opt.id === 'accept_kage' || opt.id === 'vow_lead' || opt.id === 's_mission')) {
+        weight += 3;
+      }
+      if (this.state.leanings.will_of_fire >= 3 && opt.statHints?.includes('Bonds')) {
+        weight += 0.8;
+      }
+      if (this.state.leanings.ruthless >= 3 && (opt.statHints?.includes('Intel') || opt.statHints?.includes('Stealth'))) {
+        weight += 0.8;
+      }
+      if (this.state.leanings.ambition >= 3 && opt.statHints?.includes('Chakra')) {
+        weight += 0.8;
+      }
+      return { item: opt, weight };
+    });
+
+    const picked = rng.weighted(weighted);
+    let chosenOd: OdActionId | undefined;
+    if (
+      pending.kind === 'war_battle_round' &&
+      this.state.war?.activeBattle &&
+      (picked.id === 'taijutsu' || picked.id === 'ninjutsu' || picked.id === 'genjutsu' || picked.id === 'ultimate')
+    ) {
+      const odOpts = getAvailableOdActions(this.state).filter((a) => !a.disabled);
+      const war = this.state.war;
+      const battle = war.activeBattle!;
+      if (odOpts.length > 0 && battle.odUsedCount < 2) {
+        const healOpt = odOpts.find((a) => a.id === 'od_heal');
+        const summonOpt = odOpts.find((a) => a.id === 'od_summon');
+        const wardOpt = odOpts.find((a) => a.id === 'od_ward');
+        const cloneOpt = odOpts.find((a) => a.id === 'od_clone');
+        if (healOpt && war.hp < 55) chosenOd = 'od_heal';
+        else if (summonOpt && rng.chance(0.55)) chosenOd = 'od_summon';
+        else if (wardOpt && battle.round === 1 && rng.chance(0.5)) chosenOd = 'od_ward';
+        else if (cloneOpt && rng.chance(0.35)) chosenOd = 'od_clone';
+      }
+    }
     this.state.rng = rng.snapshot();
-    this.resolve(picked.id);
+    this.resolve(picked.id, undefined, chosenOd);
     return true;
   }
 

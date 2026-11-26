@@ -429,8 +429,8 @@ export function CustomBuilderPanel({
         >
           <option value="natural">Natural Fate</option>
           <option value="none">Normal Era Only</option>
-          <option value="calamity">Seed Tailed-Beast Calamity</option>
-          <option value="mastermind">Seed Shadow Mastermind</option>
+          <option value="calamity">Seed Bijuu Rampage</option>
+          <option value="mastermind">Seed Akatsuki Conspiracy</option>
         </select>
       </div>
 

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { t } from '../../data/i18n';
+import { NINDO_MAP } from '../../data/nindo';
 import { ORIGIN_MAP } from '../../data/origins';
 import {
   BLOODLINE_GRADE_NAMES,
@@ -7,14 +8,16 @@ import {
   BLOODLINE_STAGE_LABELS,
   DISCIPLINE_MAP,
   DISCIPLINE_TIER_NAMES,
+  ELEMENT_KANJI,
   ELEMENT_NAMES,
+  RANK_KANJI,
 } from '../../data/powers';
-import { VILLAGE_MAP } from '../../data/villages';
+import { kageTitle, VILLAGE_MAP } from '../../data/villages';
 import { canEnterRetirement } from '../../sim/epilogue';
 import { computeCombatProjection, getChakraCap, XP_NEED_FOR_NEXT } from '../../sim/powers';
 import { getRelStageLabel, getTrustTier } from '../../sim/team';
 import type { FocusId, GameState } from '../../sim/types';
-import { getTensionLabel } from '../../sim/world';
+import { getTensionLabel, MAX_CRISIS_CLUES } from '../../sim/world';
 import { DecisionDialog } from '../components/DecisionDialog';
 
 interface GameScreenProps {
@@ -111,9 +114,19 @@ export function GameScreen({
       <header className="game-topbar">
         <div className="identity-block">
           <h1 className="char-name">{state.name}</h1>
-          <span className={`status-tag ${rankClass}`}>{t(`rank.${state.rank}`)}</span>
+          <span className={`status-tag ${rankClass}`}>
+            <span className="kanji-glyph">{RANK_KANJI[state.rank] ?? ''}</span> {t(`rank.${state.rank}`)}
+          </span>
           {state.specialStatus !== 'none' && (
-            <span className="status-tag">{t(`status.${state.specialStatus}`)}</span>
+            <span className="status-tag">
+              {state.specialStatus === 'kage' ? (
+                <>
+                  <span className="kanji-glyph">{RANK_KANJI.kage}</span> {kageTitle(state)}
+                </>
+              ) : (
+                t(`status.${state.specialStatus}`)
+              )}
+            </span>
           )}
           {state.phase === 'retirement' && <span className="status-tag">Retired</span>}
           <span className="history-sub tabular">
@@ -185,7 +198,22 @@ export function GameScreen({
                   </span>
                   {entry.tone !== 'normal' && <span>{entry.tone.toUpperCase()}</span>}
                 </div>
-                {entry.title && <div className="log-title">{entry.title}</div>}
+                {entry.title && (
+                  <div className="log-title-row">
+                    <div className="log-title">{entry.title}</div>
+                    {(entry.title.startsWith('Promoted to ') || entry.title.startsWith('Acclaimed as ')) && (
+                      <span className="hanko-stamp" aria-hidden="true">
+                        {entry.title.startsWith('Acclaimed as ')
+                          ? RANK_KANJI.kage
+                          : entry.title.includes('Jonin')
+                            ? RANK_KANJI.jonin
+                            : entry.title.includes('Chunin')
+                              ? RANK_KANJI.chunin
+                              : RANK_KANJI.genin}
+                      </span>
+                    )}
+                  </div>
+                )}
                 <p className="log-text">{entry.text}</p>
                 {(entry.deltas || entry.checks) && (
                   <div className="chip-row">
@@ -242,8 +270,12 @@ export function GameScreen({
               <section className="panel">
                 <h2 className="panel-title">Core Attributes</h2>
                 <div className="history-sub" style={{ marginBottom: 10 }}>
-                  {origin.name} | Element: {ELEMENT_NAMES[state.element]} | Capacity Tier {state.capacity}/5
+                  {origin.name} | Element:{' '}
+                  <span className="kanji-glyph">{ELEMENT_KANJI[state.element]}</span> {ELEMENT_NAMES[state.element]} |
+                  Capacity Tier {state.capacity}/5
                   {state.hasClanLegacy ? ' | Clan Hiden Inherited' : ''}
+                  <br />
+                  Village Trait ({village.name}): {village.perk.label}
                 </div>
                 <div className="stat-list tabular">
                   <div className="stat-row">
@@ -323,6 +355,60 @@ export function GameScreen({
                     </div>
                   </div>
                 </div>
+                {state.nindo && NINDO_MAP[state.nindo] && (
+                  <div className="disc-item" style={{ marginTop: 12, borderColor: 'var(--accent-gold)' }}>
+                    <div className="disc-head">
+                      <span>Nindo (Ninja Way)</span>
+                      <span className="status-tag">
+                        {NINDO_MAP[state.nindo].title.replace(/\{kage\}/g, kageTitle(state))}
+                      </span>
+                    </div>
+                    <div className="disc-sub" style={{ fontStyle: 'italic' }}>
+                      &ldquo;{NINDO_MAP[state.nindo].vow.replace(/\{kage\}/g, kageTitle(state))}&rdquo;
+                    </div>
+                    {state.memories && state.memories.length > 0 && (
+                      <div className="disc-sub" style={{ marginTop: 4 }}>
+                        Latest Memory (Age {state.memories[state.memories.length - 1].age}):{' '}
+                        {state.memories[state.memories.length - 1].text}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {state.specialStatus !== 'kage' &&
+                  state.specialStatus !== 'missing_nin' &&
+                  (state.rank === 'chunin' || state.rank === 'jonin' || state.nindo === 'become_kage') && (
+                    <div className="disc-item" style={{ marginTop: 10 }}>
+                      <div className="disc-head">
+                        <span>Path to {kageTitle(state)}</span>
+                        <span className="disc-sub tabular">Succession Requirements</span>
+                      </div>
+                      <div className="chip-row tabular">
+                        <span className={`chip ${state.rank === 'jonin' ? 'pos' : ''}`}>
+                          {state.rank === 'jonin' ? '✓' : '·'} Jonin
+                        </span>
+                        <span className={`chip ${state.age >= 28 ? 'pos' : ''}`}>
+                          {state.age >= 28 ? '✓' : '·'} Age {state.age}/28
+                        </span>
+                        <span
+                          className={`chip ${
+                            state.stats.bonds >= (state.nindo === 'become_kage' ? 50 : 55) ? 'pos' : ''
+                          }`}
+                        >
+                          {state.stats.bonds >= (state.nindo === 'become_kage' ? 50 : 55) ? '✓' : '·'} Bonds{' '}
+                          {state.stats.bonds}/{state.nindo === 'become_kage' ? 50 : 55}
+                        </span>
+                        <span
+                          className={`chip ${
+                            state.missions.s >= (state.nindo === 'become_kage' ? 1 : 2) ? 'pos' : ''
+                          }`}
+                        >
+                          {state.missions.s >= (state.nindo === 'become_kage' ? 1 : 2) ? '✓' : '·'} S-Rank{' '}
+                          {state.missions.s}/{state.nindo === 'become_kage' ? 1 : 2}
+                        </span>
+                      </div>
+                    </div>
+                  )}
               </section>
 
               {state.phase === 'life' && state.age >= 6 && (
@@ -412,7 +498,7 @@ export function GameScreen({
                   <div className="disc-item" style={{ marginTop: 10, borderColor: 'var(--accent-gold)' }}>
                     <div className="disc-head">
                       <span>Anomalous Intelligence</span>
-                      <span className="tabular">{state.world.crisisClues}/5 Clues</span>
+                      <span className="tabular">{state.world.crisisClues}/{MAX_CRISIS_CLUES} Clues</span>
                     </div>
                     <div className="disc-sub">
                       Strange patterns uncovered across borders will prove decisive if a continental crisis erupts.
@@ -445,7 +531,7 @@ export function GameScreen({
                     <article key={m.id} className={`squad-card ${!m.alive ? 'fallen' : ''}`}>
                       <div className="disc-head">
                         <span>
-                          {m.name} ({m.role === 'sensei' ? 'Jonin Sensei' : 'Squadmate'})
+                          {m.name} ({m.role === 'sensei' ? 'Jonin Sensei' : m.id === state.rivalId ? 'Sworn Rival' : 'Squadmate'})
                         </span>
                         <span className="status-tag">
                           {!m.alive

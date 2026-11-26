@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import { t } from '../../data/i18n';
-import { ELEMENT_NAMES } from '../../data/powers';
+import { ELEMENT_KANJI, ELEMENT_NAMES, RANK_KANJI } from '../../data/powers';
 import { ARCHETYPE_LABELS } from '../../data/roster';
 import { VILLAGE_MAP } from '../../data/villages';
 import { getRel, SHORT_GOAL_LABELS } from '../../sim/ai';
 import { getHealthConditionLabel, getPlayerRanks } from '../../sim/combat';
 import { getMastermindDivisor } from '../../sim/crises';
 import { detectWarArcs } from '../../sim/narrative';
+import { getPartnerRelStageLabel, getPartnerTrustTier } from '../../sim/partner';
 import { rankValueToGrade } from '../../sim/powers';
-import type { GameState } from '../../sim/types';
+import type { GameState, OdActionId } from '../../sim/types';
 import { getLivingEnemies } from '../../sim/war';
 import { BattleDialog } from '../components/BattleDialog';
 import { DecisionDialog } from '../components/DecisionDialog';
@@ -36,7 +37,7 @@ interface WarScreenProps {
   onTogglePause: () => void;
   onToggleAuto: () => void;
   onSkipWarBeat: () => void;
-  onResolve: (optionId: string, freeText?: string) => void;
+  onResolve: (optionId: string, freeText?: string, odAction?: OdActionId) => void;
   onOpenSettings: () => void;
   onBackToLobby: () => void;
 }
@@ -121,12 +122,16 @@ export function WarScreen({
       <header className="game-topbar">
         <div className="identity-block">
           <h1 className="char-name">
-            {war.isCrisisWar ? `Endgame Crisis War #${war.warNumber}` : `Great Shinobi War #${war.warNumber}`}
+            {war.isCrisisWar
+              ? `Allied Shinobi Forces vs ${war.crisis?.bossName ?? `Crisis War #${war.warNumber}`}`
+              : `Great Shinobi War #${war.warNumber}: ${VILLAGE_MAP[state.villageId].name} vs Coalition`}
           </h1>
           <span className={`status-tag ${war.isCrisisWar ? 'tension-high' : 'rank-jonin'} tabular`}>
             Day {war.day}/{war.maxDays} · {TIME_OF_DAY_LABELS[war.timeOfDay] ?? war.subPhase.toUpperCase()}
           </span>
-          <span className="status-tag">{t(`rank.${state.rank}`)}</span>
+          <span className="status-tag">
+            <span className="kanji-glyph">{RANK_KANJI[state.rank] ?? ''}</span> {t(`rank.${state.rank}`)}
+          </span>
           {activeAlly && (
             <span className="status-tag rank-genin">
               Ally: {activeAlly.intel >= 80 ? activeAlly.name : ARCHETYPE_LABELS[activeAlly.archetype]}
@@ -334,7 +339,9 @@ export function WarScreen({
                 <div className="arena-fighter">
                   <div className="disc-head">
                     <strong>{state.name}</strong>
-                    <span className="chip">{ELEMENT_NAMES[state.element]}</span>
+                    <span className="chip">
+                      <span className="kanji-glyph">{ELEMENT_KANJI[state.element]}</span> {ELEMENT_NAMES[state.element]}
+                    </span>
                   </div>
                   <div className="disc-sub tabular">
                     HP {war.hp}/100 | CP {war.cp}/100
@@ -425,7 +432,66 @@ export function WarScreen({
           </div>
         </section>
 
-        <aside className="side-column" aria-label="Sector Dossier & Diplomacy">
+        <aside className="side-column" aria-label="War Partner, Sector Dossier & Diplomacy">
+          {war.partner && (
+            <section className="panel partner-war-card" aria-label="War Partner Status">
+              <div className="disc-head">
+                <h2 className="panel-title" style={{ margin: 0, fontSize: '0.98rem' }}>
+                  War Partner: {war.partner.name}
+                </h2>
+                <span
+                  className={`status-tag ${
+                    war.partner.died || war.partner.defected
+                      ? 'tension-high'
+                      : !war.partner.active
+                        ? 'rank-chunin'
+                        : war.partner.trust >= 80
+                          ? 'rank-jonin'
+                          : 'rank-genin'
+                  }`}
+                >
+                  {war.partner.died
+                    ? 'Fallen (KIA)'
+                    : war.partner.defected
+                      ? 'Defected'
+                      : !war.partner.active
+                        ? 'Incapacitated'
+                        : getPartnerTrustTier(war.partner.trust).label}
+                </span>
+              </div>
+              <div className="disc-sub tabular" style={{ marginTop: 4 }}>
+                {war.partner.epithet} · {ELEMENT_NAMES[war.partner.element]} · {getPartnerRelStageLabel(war.partner)}
+              </div>
+              <div className="partner-bars tabular" style={{ marginTop: 8 }}>
+                <div className="disc-head">
+                  <span>Partner HP {war.partner.hp}/{war.partner.maxHp}</span>
+                  <span>Trust {war.partner.trust}/100 · Fit {war.partner.fit}</span>
+                </div>
+                <div className="bar-track" style={{ marginTop: 4 }}>
+                  <div className="bar-fill health" style={{ width: `${Math.round((war.partner.hp / Math.max(1, war.partner.maxHp)) * 100)}%` }} />
+                </div>
+              </div>
+              <div className="chip-row" style={{ marginTop: 8 }}>
+                {war.partner.traits.map((tr) => (
+                  <span key={tr} className="chip">
+                    {tr}
+                  </span>
+                ))}
+                <span className="chip">Fragments {war.partner.fragments}/3</span>
+              </div>
+              {war.partner.fragments >= 1 && (
+                <div className="disc-sub" style={{ marginTop: 6 }}>
+                  Motive: {war.partner.motive}
+                </div>
+              )}
+              {war.partner.fragments >= 2 && (
+                <div className="disc-sub" style={{ marginTop: 2 }}>
+                  Background: {war.partner.originHint}
+                </div>
+              )}
+            </section>
+          )}
+
           <div className="tab-strip" style={{ gridTemplateColumns: '1fr 1fr' }} role="tablist">
             <button
               type="button"
@@ -559,7 +625,7 @@ export function WarScreen({
           minimized={battleMinimized}
           shortcutsBlocked={shortcutsBlocked}
           onMinimizedChange={onBattleMinimizedChange}
-          onResolve={onResolve}
+          onResolve={(optionId, odAction) => onResolve(optionId, undefined, odAction)}
         />
       ) : (
         <DecisionDialog

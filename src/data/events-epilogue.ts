@@ -1,4 +1,5 @@
 import type { StatKey } from '../sim/types';
+import { EXTRA_RETIREMENT_EVENTS } from './events-epilogue-extra';
 
 export interface RetirementEventDef {
   id: string;
@@ -6,6 +7,7 @@ export interface RetirementEventDef {
   body: string;
   requiresJonin?: boolean;
   requiresSpouse?: boolean;
+  requiresPartner?: boolean;
   options: {
     id: string;
     label: string;
@@ -41,7 +43,7 @@ export const RETIREMENT_EVENTS: readonly RetirementEventDef[] = [
   {
     id: 'ret_mentor_new_genin',
     title: 'Three Young Genin at Your Gate',
-    body: 'The Kage office asks if you are willing to oversee a newly minted three-man Genin squad during peacetime drills.',
+    body: 'The {kage} office asks if you are willing to oversee a newly minted three-man Genin squad during peacetime drills.',
     requiresJonin: true,
     options: [
       {
@@ -120,4 +122,64 @@ export const RETIREMENT_EVENTS: readonly RetirementEventDef[] = [
       },
     ],
   },
+  {
+    id: 'ret_partner_visit',
+    title: 'Annual Visit at the Lantern Gate',
+    body: 'Every autumn on the anniversary of the armistice, {partner} arrives at your garden gate carrying roasted chestnuts and a battered canteen. {partnerRelLine}',
+    requiresPartner: true,
+    options: [
+      {
+        id: 'partner_tea_stories',
+        label: 'Sit until twilight trading old battlefield jokes',
+        autoEligible: true,
+        stats: { bonds: 6, will: 4, health: 2 },
+        resultText: 'Laughter softens the lines around both your eyes as the lanterns come alive down the street.',
+      },
+      {
+        id: 'partner_walk_memorial',
+        label: 'Walk together to the hillside memorial before supper',
+        autoEligible: true,
+        stats: { will: 6, bonds: 4 },
+        resultText: 'You set two white blossoms at the stone side by side, grateful that both of you lived to grow grey.',
+      },
+    ],
+  },
+  {
+    id: 'ret_partner_doorstep',
+    title: 'At the Doorstep in Winter Rain',
+    body: 'Cold sleet hammers the eaves when {partner} knocks quietly at your doorstep, shaking snow from a travel cloak that still smells of cedar smoke. {partnerRelLine}',
+    requiresPartner: true,
+    options: [
+      {
+        id: 'partner_hearth',
+        label: 'Pull them inside beside the charcoal hearth and warm two bowls of soup',
+        autoEligible: true,
+        stats: { bonds: 7, health: 3 },
+        resultText: 'No guard shifts remain to divide the night; only steady warmth and a bond that outlived every war.',
+      },
+      {
+        id: 'partner_spar_slow',
+        label: 'Trade three slow wooden-sword stances beneath the covered porch',
+        autoEligible: true,
+        stats: { will: 5, health: 2 },
+        resultText: 'Even with stiff joints, neither of you has forgotten the rhythm of the other’s footwork.',
+      },
+    ],
+  },
+  {
+    id: 'ret_partner_final_night',
+    title: 'The Final Night Together',
+    body: 'Under a clear harvest moon, your breathing slows while {partner} sits calmly at your bedside holding your scarred hand. {partnerRelLine}',
+    requiresPartner: true,
+    options: [
+      {
+        id: 'partner_thank_you',
+        label: 'Thank them for never once letting go of your back',
+        autoEligible: true,
+        stats: { bonds: 8, will: 6 },
+        resultText: 'They smile through quiet tears and whisper that walking beside you was the proudest mission of their life.',
+      },
+    ],
+  },
+  ...EXTRA_RETIREMENT_EVENTS,
 ];

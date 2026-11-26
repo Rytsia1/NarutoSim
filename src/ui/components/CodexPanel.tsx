@@ -7,6 +7,7 @@ import {
   ELEMENT_NAMES,
 } from '../../data/powers';
 import { ARCHETYPE_LABELS, ROSTER } from '../../data/roster';
+import { SUMMON_CLANS } from '../../data/summons';
 import { VILLAGE_MAP } from '../../data/villages';
 import type { MetaState } from '../../sim/types';
 
@@ -126,35 +127,58 @@ export function CodexPanel({ meta, selectedFatedId, onSelectFated }: CodexPanelP
       )}
 
       {subTab === 'disciplines' && (
-        <div className="codex-grid">
-          {DISCIPLINES.map((d) => {
-            const lvl = meta.codexDisciplines[d.id] as 1 | 2 | 3 | 4 | undefined;
-            return (
-              <article key={d.id} className={`squad-card ${!lvl ? 'fallen' : ''}`}>
-                <div className="disc-head">
-                  <span>{d.name}</span>
-                  <span className="status-tag">{lvl ? DISCIPLINE_TIER_NAMES[lvl] : 'unlearned'}</span>
-                </div>
-                <div className="disc-sub">{d.combatRole}</div>
-                {lvl === 4 && d.secretArtName && (
-                  <div className="disc-sub" style={{ color: 'var(--accent-gold)' }}>
-                    Secret Art: {d.secretArtName}
+        <>
+          <div className="codex-grid">
+            {DISCIPLINES.map((d) => {
+              const lvl = meta.codexDisciplines[d.id] as 1 | 2 | 3 | 4 | undefined;
+              return (
+                <article key={d.id} className={`squad-card ${!lvl ? 'fallen' : ''}`}>
+                  <div className="disc-head">
+                    <span>{d.name}</span>
+                    <span className="status-tag">{lvl ? DISCIPLINE_TIER_NAMES[lvl] : 'unlearned'}</span>
                   </div>
-                )}
-              </article>
-            );
-          })}
-        </div>
+                  <div className="disc-sub">{d.combatRole}</div>
+                  {lvl === 4 && d.secretArtName && (
+                    <div className="disc-sub" style={{ color: 'var(--accent-gold)' }}>
+                      Secret Art: {d.secretArtName}
+                    </div>
+                  )}
+                </article>
+              );
+            })}
+          </div>
+          <h3 className="panel-title" style={{ fontSize: '1rem', marginTop: 18 }}>
+            Kuchiyose Summoning Contracts ({(meta.codexSummons ?? []).length}/{SUMMON_CLANS.length})
+          </h3>
+          <div className="codex-grid">
+            {SUMMON_CLANS.map((clan) => {
+              const signed = (meta.codexSummons ?? []).includes(clan.id);
+              return (
+                <article key={clan.id} className={`squad-card ${!signed ? 'fallen' : ''}`}>
+                  <div className="disc-head">
+                    <span>{signed ? clan.name : '??? (Uncontracted Clan)'}</span>
+                    <span className="status-tag">{signed ? clan.originPlace : 'locked'}</span>
+                  </div>
+                  <div className="disc-sub">
+                    {signed
+                      ? `${clan.shortDesc} Od Art: ${clan.odEffectDesc}`
+                      : 'Sign a Kuchiyose Blood Contract during your shinobi career to record this clan.'}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </>
       )}
 
       {subTab === 'crises' && (
         <div className="record-grid">
           <div className="record-cell">
-            <span className="record-label">Tailed-Beast Calamity Cleared</span>
+            <span className="record-label">Bijuu Rampage Cleared</span>
             <span className="record-value tabular">{meta.crisisCleared.calamity} times</span>
           </div>
           <div className="record-cell">
-            <span className="record-label">Shadow Mastermind Cleared</span>
+            <span className="record-label">Akatsuki Conspiracy Cleared</span>
             <span className="record-value tabular">{meta.crisisCleared.mastermind} times</span>
           </div>
           <div className="record-cell">

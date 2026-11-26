@@ -1,10 +1,11 @@
 import { RETIREMENT_EVENTS } from '../data/events-epilogue';
 import { BLOODLINE_MAP, DISCIPLINE_MAP } from '../data/powers';
 import { ORIGIN_MAP } from '../data/origins';
-import { VILLAGE_MAP } from '../data/villages';
+import { kageTitle, VILLAGE_MAP } from '../data/villages';
 import { computeCombatProjection } from './powers';
 import type { SeededRng } from './rng';
 import type { EpilogueBeat, GameState, LifeRecord, PendingDecision } from './types';
+import { getWorldBijuuName } from './world';
 
 export function canEnterRetirement(state: GameState): boolean {
   if (state.phase !== 'life') return false;
@@ -14,28 +15,48 @@ export function canEnterRetirement(state: GameState): boolean {
 
 export function buildRetirementEventDecision(state: GameState, rng: SeededRng): PendingDecision | null {
   const hasSpouse = state.family.some((f) => f.relation === 'spouse' && f.alive);
+  const hasLivingPartner = Boolean(state.permanentPartner && state.permanentPartner.alive);
   const candidates = RETIREMENT_EVENTS.filter((ev) => {
     if (state.usedRetirement.includes(ev.id)) return false;
     if (ev.requiresJonin && state.rank !== 'jonin') return false;
     if (ev.requiresSpouse && !hasSpouse) return false;
+    if (ev.requiresPartner && !hasLivingPartner) return false;
     return true;
   });
 
   if (candidates.length === 0) return null;
-  const chosen = rng.pick(candidates);
+  // Prioritize partner epilogue beats gently so players who chose "Stay With Me" reliably see them
+  const partnerCands = hasLivingPartner ? candidates.filter((c) => c.requiresPartner) : [];
+  const chosen = partnerCands.length > 0 && rng.chance(0.45) ? rng.pick(partnerCands) : rng.pick(candidates);
   state.usedRetirement.push(chosen.id);
+
+  const leaderTitle = kageTitle(state);
+  const p = state.permanentPartner;
+  const partnerName = p?.name ?? 'your war partner';
+  const partnerRelLine =
+    p?.relTrack === 'romance'
+      ? 'Their fingers brush yours gently, carrying decades of quiet devotion forged under fire.'
+      : p?.relTrack === 'mentorship'
+        ? 'They still incline their head with the quiet respect of a bond passed down through steel and will.'
+        : 'They clasp your forearm like a sworn comrade who still remembers every narrow escape you survived together.';
+
+  const fmt = (txt: string) =>
+    txt
+      .replace(/\{kage\}/g, leaderTitle)
+      .replace(/\{partner\}/g, partnerName)
+      .replace(/\{partnerRelLine\}/g, partnerRelLine);
 
   return {
     id: `ret_${chosen.id}_${state.age}`,
     kind: 'retirement_event',
     eventId: chosen.id,
-    title: chosen.title,
-    body: chosen.body,
+    title: fmt(chosen.title),
+    body: fmt(chosen.body),
     manual: false,
     meta: { retEventId: chosen.id },
     options: chosen.options.map((opt) => ({
       id: opt.id,
-      label: opt.label,
+      label: fmt(opt.label),
       autoEligible: opt.autoEligible,
     })),
   };
@@ -60,7 +81,7 @@ export function buildPosthumousEpilogue(state: GameState): EpilogueBeat[] {
     beats.push({
       title: 'Carved Into the Memorial Stone',
       tone: 'milestone',
-      body: `Black umbrellas crowd the hillside above ${village} as your name is chiseled beside the village's greatest defenders. Passing at age ${state.age} (${state.causeOfDeath ?? 'at the end of your road'}), you leave behind the weight of a true ${state.specialStatus === 'kage' ? 'Kage' : 'Jonin'}.`,
+      body: `Black umbrellas crowd the hillside above ${village} as your name is chiseled beside the village's greatest defenders. Passing at age ${state.age} (${state.causeOfDeath ?? 'at the end of your road'}), you leave behind the weight of a true ${state.specialStatus === 'kage' ? kageTitle(state) : 'Jonin'}.`,
     });
   } else if (state.rank === 'genin' || state.rank === 'chunin') {
     beats.push({
@@ -110,12 +131,39 @@ export function buildPosthumousEpilogue(state: GameState): EpilogueBeat[] {
     });
   }
 
+  // Beat 2.5: Permanent War Partner / Fallen Partner Memorial Stone Beat (K5)
+  const permPartner = state.permanentPartner;
+  const fallenPartnerMemory = state.memories?.find((m) => m.tag === 'loss' && m.text.includes('fell shielding you'));
+  if (permPartner && permPartner.alive) {
+    const partnerFarewell =
+      permPartner.relTrack === 'romance'
+        ? `${permPartner.name} lingers at the stone long after the last lantern fades, resting your worn headband against their chest where your promise first took root.`
+        : permPartner.relTrack === 'mentorship'
+          ? `${permPartner.name} bows low before the carved slate, vowing to pass down the resolve you forged together on the battlefield.`
+          : `${permPartner.name} sets two cracked tea cups before the monument, raising a final silent toast to the finest partner they ever fought beside.`;
+    beats.push({
+      title: `Beside Your War Partner: ${permPartner.name}`,
+      tone: 'bond',
+      body: partnerFarewell,
+    });
+  } else if ((permPartner && !permPartner.alive) || fallenPartnerMemory) {
+    const fallenName = permPartner?.name ?? 'your fallen war partner';
+    beats.push({
+      title: 'Two Names Carved Side by Side',
+      tone: 'bond',
+      body: permPartner
+        ? `On the rain-slick Memorial Stone of ${village}, your name is chiseled directly beside ${fallenName}, who ${permPartner.causeOfDeath ?? 'fell protecting you in war'}. At last, neither stands watch alone.`
+        : `On the Memorial Stone of ${village}, your name now rests beside the war partner who gave their life shielding you in battle (${fallenPartnerMemory!.text}).`,
+    });
+  }
+
   // Beat 3: World Echo / Posthumous Crisis Echo
   if (state.world.seededCrisis !== 'none' && state.world.crisisStage < 2) {
+    const bijuu = getWorldBijuuName(state);
     const echoText =
       state.world.seededCrisis === 'calamity'
-        ? 'Years after your passing, the sky over the Five Great Nations cracks crimson as an ancient tailed-beast calamity tears free of its seals. The storm that once only whispered through your missions finally breaks upon the next generation.'
-        : 'Years after your passing, a hidden mastermind steps out of the rain to plunge all five nations into a shadow war. The conspiracy whose loose threads you never lived to unravel finally claims the stage.';
+        ? `Years after your passing, the sky over the Five Great Nations cracks crimson as ${bijuu} tears free of its ancient seals. The storm that once only whispered through your missions finally breaks upon the next generation.`
+        : 'Years after your passing, Akatsuki steps out of the Amegakure rain to plunge all five nations into a shadow war. The conspiracy whose loose threads you never lived to unravel finally claims the stage.';
     beats.push({
       title: 'The Storm You Never Lived to See',
       tone: 'crisis',
@@ -159,7 +207,7 @@ export function buildLifeRecord(state: GameState): LifeRecord {
   }
 
   const crisisName =
-    state.world.seededCrisis === 'calamity' ? 'Tailed-Beast Calamity' : 'Shadow Mastermind';
+    state.world.seededCrisis === 'calamity' ? `${getWorldBijuuName(state)} Rampage` : 'Akatsuki Conspiracy';
   const crisisStatus =
     state.world.seededCrisis === 'none'
       ? 'Normal Shinobi Era'

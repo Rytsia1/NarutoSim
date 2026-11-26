@@ -102,7 +102,7 @@ describe('Phase 5: Polish, Accessibility & Share Card', () => {
     const text = formatShareText(rec);
     expect(text).toContain('Renji Sarutobi');
     expect(text).toContain('Hidden Leaf');
-    expect(text).toContain('Peak Rank: Kage');
+    expect(text).toContain('Peak Rank: Hokage');
     expect(text).toContain('Bingo Tier: S-Rank');
     expect(text).toContain('Wars Survived: 4/4');
     expect(text).toContain('Sealed the Tailed-Beast Calamity');

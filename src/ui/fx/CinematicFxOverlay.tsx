@@ -42,17 +42,25 @@ export function detectFxFromLogEntry(entry: LogEntry): ActiveFxEvent | null {
   }
   if (
     entry.text.includes('Limit Break:') ||
+    entry.text.includes('NINDO RESOLVE!') ||
     entry.text.includes('KIZUNA INTERCEPTION!') ||
     entry.text.includes('Limit Break Body Flicker') ||
     entry.text.includes('Limit Break Second Wind')
   ) {
+    const isNindo = entry.text.includes('NINDO RESOLVE!');
+    const isKizuna = entry.text.includes('KIZUNA INTERCEPTION!');
+    const memMatch = entry.text.match(/Memory flashes back \(Age \d+\): "([^"]+)"/);
     return {
       id: entry.id,
       kind: 'resolve_burst',
-      headline: entry.text.includes('KIZUNA INTERCEPTION!') ? 'KIZUNA INTERCEPTION' : 'LIMIT BREAK',
-      subline: entry.text.includes('KIZUNA INTERCEPTION!')
-        ? 'Old bonds hold the line against death'
-        : 'Surpassing physical limits through pure shinobi resolve',
+      headline: isNindo ? 'NINDO RESOLVE' : isKizuna ? 'KIZUNA INTERCEPTION' : 'LIMIT BREAK',
+      subline: memMatch
+        ? memMatch[1]
+        : isNindo
+          ? 'Your ninja way refuses to break'
+          : isKizuna
+            ? 'Old bonds hold the line against death'
+            : 'Surpassing physical limits through pure shinobi resolve',
     };
   }
   if (entry.title?.includes('Descends!') || entry.title?.includes('Endgame Crisis War')) {
@@ -65,7 +73,7 @@ export function detectFxFromLogEntry(entry: LogEntry): ActiveFxEvent | null {
   }
   if (
     entry.title?.startsWith('Promoted to ') ||
-    entry.title === 'Acclaimed as Kage' ||
+    entry.title?.startsWith('Acclaimed as ') ||
     entry.title?.startsWith('S-Rank Mastery:')
   ) {
     return {

@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { ACHIEVEMENTS } from '../../data/achievements';
 import { t } from '../../data/i18n';
 import { ROSTER, ROSTER_MAP } from '../../data/roster';
-import { VILLAGES, VILLAGE_MAP } from '../../data/villages';
+import { getKageTitle, VILLAGES, VILLAGE_MAP } from '../../data/villages';
 import type {
   CrisisId,
   CustomBuildConfig,
@@ -266,8 +266,8 @@ export function LobbyScreen({
                 >
                   <option value="natural">Natural Fate (Seeded at Birth)</option>
                   <option value="none">Normal Era Only (No World Crisis)</option>
-                  <option value="calamity">Seed Tailed-Beast Calamity</option>
-                  <option value="mastermind">Seed Shadow Mastermind</option>
+                  <option value="calamity">Seed Bijuu Rampage</option>
+                  <option value="mastermind">Seed Akatsuki Conspiracy</option>
                 </select>
               </div>
             </div>
@@ -332,7 +332,7 @@ export function LobbyScreen({
                       <span>{rec.name}</span>
                       <span className="status-tag">
                         {rec.specialStatus === 'kage'
-                          ? 'Kage'
+                          ? getKageTitle(rec.villageId)
                           : rec.specialStatus === 'missing_nin'
                             ? 'Missing-Nin'
                             : t(`rank.${rec.peakRank}`)}

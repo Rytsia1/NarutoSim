@@ -17,6 +17,7 @@ export function createDefaultMeta(): MetaState {
     codexRoster: {},
     codexBloodlines: {},
     codexDisciplines: {},
+    codexSummons: [],
     crisisCleared: { calamity: 0, mastermind: 0 },
     convictionEndings: [],
     achievements: [],
@@ -39,12 +40,16 @@ export function updateMetaFromState(
     if (d.level > prev) next.codexDisciplines[d.id] = d.level;
   }
 
-  // 2. Update Bloodlines Codex
+  // 2. Update Bloodlines & Kuchiyose Summons Codex
   if (state.bloodline && state.bloodline.stage !== 'latent') {
     const prev = next.codexBloodlines[state.bloodline.id];
     if (!prev || BLOODLINE_STAGE_RANK[state.bloodline.stage] > BLOODLINE_STAGE_RANK[prev]) {
       next.codexBloodlines[state.bloodline.id] = state.bloodline.stage;
     }
+  }
+  if (!Array.isArray(next.codexSummons)) next.codexSummons = [];
+  if (state.summonContract && !next.codexSummons.includes(state.summonContract.clanId)) {
+    next.codexSummons.push(state.summonContract.clanId);
   }
 
   // 3. Update Bingo Book Roster Codex from active war & fallen roster

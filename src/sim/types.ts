@@ -90,12 +90,79 @@ export interface CustomBuildConfig {
   startBloodlineStage?: BloodlineStage;
 }
 
+export type SummonClanId = 'toad' | 'snake' | 'slug' | 'hound' | 'hawk' | 'ape';
+
+export type OdActionId = 'od_summon' | 'od_heal' | 'od_ward' | 'od_clone';
+
+export type PartnerTrustTier = 'distrust' | 'steady' | 'trusted' | 'bond';
+
+export interface WarPartnerState {
+  id: string;
+  source: 'permanent' | 'squad' | 'village_roster' | 'village_gen';
+  rosterId?: string;
+  teamMemberId?: string;
+  name: string;
+  epithet: string;
+  villageId: VillageId;
+  element: ChakraElement;
+  archetype: CombatArchetype;
+  hp: number;
+  maxHp: number;
+  trust: number;
+  fit: number;
+  traits: TraitId[];
+  skills: { name: string; tag: SkillTag; rank: number }[];
+  relTrack: RelTrack;
+  relStage: 0 | 1 | 2 | 3;
+  relPoints: number;
+  fragments: number;
+  motive: string;
+  originHint: string;
+  active: boolean;
+  defected: boolean;
+  died: boolean;
+  downHandled: boolean;
+  freeSurpassUsed: boolean;
+}
+
+export interface PermanentPartnerRecord {
+  id: string;
+  rosterId?: string;
+  teamMemberId?: string;
+  name: string;
+  epithet: string;
+  villageId: VillageId;
+  element: ChakraElement;
+  archetype: CombatArchetype;
+  trust: number;
+  traits: TraitId[];
+  skills: { name: string; tag: SkillTag; rank: number }[];
+  relTrack: RelTrack;
+  relStage: 0 | 1 | 2 | 3;
+  relPoints: number;
+  fragments: number;
+  motive: string;
+  originHint: string;
+  alive: boolean;
+  stayedAge: number;
+  diedAge?: number;
+  causeOfDeath?: string;
+}
+
+export interface SummonContractState {
+  clanId: SummonClanId;
+  contractedAge: number;
+  fitScore: number;
+  summonUses: number;
+}
+
 export interface MetaState {
   version: number;
   livesPlayed: number;
   codexRoster: Record<string, { state: 'seen' | 'met' | 'defeated'; encounters: number; defeats: number }>;
   codexBloodlines: Record<string, BloodlineStage>;
   codexDisciplines: Record<string, number>;
+  codexSummons?: SummonClanId[];
   crisisCleared: Record<'calamity' | 'mastermind', number>;
   convictionEndings: string[];
   achievements: string[];
@@ -165,6 +232,9 @@ export type WarFactType =
   | 'kill'
   | 'jutsu_clash'
   | 'squad_protect'
+  | 'partner_intercept'
+  | 'partner_defect'
+  | 'partner_down'
   | 'resolve_burst'
   | 'siege_broken'
   | 'ex_mate_clash';
@@ -227,9 +297,24 @@ export interface WarCompetitor {
   isExTeammateRogue: boolean;
 }
 
+export type NindoId =
+  | 'never_go_back'
+  | 'protect_bonds'
+  | 'become_kage'
+  | 'avenge_clan'
+  | 'results_first';
+
+export interface ShinobiMemory {
+  age: number;
+  tag: 'bell_test' | 'graduation' | 'nindo' | 'loss' | 'rival' | 'promotion' | 'war';
+  text: string;
+}
+
 export interface BattleRoundSummary {
   round: number;
   playerAction: string;
+  jutsuName?: string;
+  seals?: string[];
   enemyAction: string;
   outcome: 'win' | 'lose' | 'draw' | 'clash_win' | 'clash_lose' | 'clash_cancel' | 'retreat' | 'support';
   playerDmgTaken: number;
@@ -285,7 +370,12 @@ export interface ActiveBattleState {
   enemyFieldRounds: number;
   weaknessExploited: boolean;
   usedDesperation: boolean;
+  usedNindoResolve?: boolean;
+  partnerIntercepted?: boolean;
   resolveBoostThisRound: boolean;
+  od: number;
+  odMax: number;
+  odUsedCount: number;
   rounds: BattleRoundSummary[];
 }
 
@@ -329,6 +419,9 @@ export interface WarState {
   crossroadsCount: number;
   usedCrossroads: string[];
   loyalInterceptUsed: boolean;
+  partner: WarPartnerState | null;
+  usedPartnerScenes: string[];
+  finaleWishDone?: boolean;
   facts: WarFact[];
   crisis: WarCrisisState | null;
   conviction: ConvictionState | null;
@@ -457,7 +550,10 @@ export interface WorldState {
   lastWarAge: number | null;
   warsSurvived: number;
   truePeace: boolean;
+  peaceAccordUntilAge?: number;
+  vengeanceTargetId?: string | null;
   seededCrisis: CrisisId;
+  bijuuName?: string;
   crisisStage: CrisisStage;
   crisisClues: number;
 }
@@ -499,15 +595,19 @@ export type DecisionKind =
   | 'academy_choice'
   | 'graduation_exam'
   | 'bell_test'
+  | 'nindo_choice'
   | 'chunin_exam_stage'
   | 'team_disband'
   | 'jonin_eval'
+  | 'kage_succession'
+  | 'kuchiyose_contract'
   | 'bloodline_event'
   | 'discipline_advance'
   | 'clan_legacy'
   | 'life_event'
   | 'growth_event'
   | 'team_event'
+  | 'mission_board'
   | 'mission_event'
   | 'crisis_whisper'
   | 'war_prelude'
@@ -517,6 +617,9 @@ export type DecisionKind =
   | 'war_battle_round'
   | 'war_pressure'
   | 'war_crossroads'
+  | 'war_partner_down'
+  | 'war_partner_scene'
+  | 'war_finale_wish'
   | 'war_ally_offer'
   | 'war_ally_final'
   | 'war_crisis_raid'
@@ -627,6 +730,11 @@ export interface GameState {
 
   family: FamilyMember[];
   team: TeamState | null;
+  permanentPartner?: PermanentPartnerRecord | null;
+  summonContract?: SummonContractState | null;
+  nindo?: NindoId;
+  rivalId?: string | null;
+  memories?: ShinobiMemory[];
   missions: MissionRecord;
   world: WorldState;
   war: WarState | null;

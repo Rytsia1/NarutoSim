@@ -1,18 +1,22 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import { t } from '../../data/i18n';
-import { BLOODLINE_MAP, ELEMENT_NAMES } from '../../data/powers';
+import { pickPlayerJutsu, ZODIAC_SEAL_KANJI } from '../../data/jutsu';
+import { BLOODLINE_MAP, ELEMENT_KANJI, ELEMENT_NAMES } from '../../data/powers';
 import { ARCHETYPE_LABELS } from '../../data/roster';
 import { VILLAGE_MAP } from '../../data/villages';
 import {
   estimateBattleActionOdds,
   estimateRetreatChance,
+  getAvailableOdActions,
+  getEffectiveUltimateCost,
   getElementMultiplier,
   getHealthConditionLabel,
   getPlayerRanks,
   getPlayerSignatureUltimate,
 } from '../../sim/combat';
+import { getPartnerTrustTier } from '../../sim/partner';
 import { rankValueToGrade } from '../../sim/powers';
-import type { GameState, PendingDecision, WarCompetitor } from '../../sim/types';
+import type { GameState, OdActionId, PendingDecision, WarCompetitor } from '../../sim/types';
 
 interface BattleDialogProps {
   state: GameState;
@@ -20,7 +24,7 @@ interface BattleDialogProps {
   minimized: boolean;
   shortcutsBlocked?: boolean;
   onMinimizedChange: (next: boolean) => void;
-  onResolve: (optionId: string) => void;
+  onResolve: (optionId: string, odAction?: OdActionId) => void;
 }
 
 const TACTIC_LABELS: Record<WarCompetitor['tactic'], string> = {
@@ -40,7 +44,7 @@ const SUPPORT_IDS = new Set([
   'exploit_weakness',
 ]);
 
-const RESOLVE_IDS = new Set(['resolve_boost', 'resolve_cp', 'resolve_flee']);
+const RESOLVE_IDS = new Set(['partner_free_surpass', 'resolve_boost', 'resolve_cp', 'resolve_flee']);
 
 export function BattleDialog({
   state,
@@ -55,15 +59,18 @@ export function BattleDialog({
   const titleId = useId();
   const [supportOpen, setSupportOpen] = useState(false);
   const [resolveOpen, setResolveOpen] = useState(false);
+  const [selectedOd, setSelectedOd] = useState<OdActionId | null>(null);
 
   const war = state.war!;
   const battle = war.activeBattle!;
   const enemy = war.enemies.find((e) => e.id === battle.enemyId)!;
+  const odOptions = getAvailableOdActions(state);
 
-  // Reset accordions & scroll to top on every new round so Fighter Cards stay visible
+  // Reset accordions, Od selection & scroll to top on every new round so Fighter Cards stay visible
   useEffect(() => {
     setSupportOpen(false);
     setResolveOpen(false);
+    setSelectedOd(null);
     if (innerRef.current) {
       innerRef.current.scrollTop = 0;
     }
@@ -125,16 +132,16 @@ export function BattleDialog({
 
       if (e.key === '1' && taiOpt && !taiOpt.disabled) {
         e.preventDefault();
-        onResolve('taijutsu');
+        onResolve('taijutsu', selectedOd ?? undefined);
       } else if (e.key === '2' && ninOpt && !ninOpt.disabled) {
         e.preventDefault();
-        onResolve('ninjutsu');
+        onResolve('ninjutsu', selectedOd ?? undefined);
       } else if (e.key === '3' && genOpt && !genOpt.disabled) {
         e.preventDefault();
-        onResolve('genjutsu');
+        onResolve('genjutsu', selectedOd ?? undefined);
       } else if (e.key === '4' && ultOpt && !ultOpt.disabled) {
         e.preventDefault();
-        onResolve('ultimate');
+        onResolve('ultimate', selectedOd ?? undefined);
       } else if (supportKey !== null && e.key === String(supportKey)) {
         e.preventDefault();
         setSupportOpen((prev) => !prev);
@@ -152,6 +159,7 @@ export function BattleDialog({
     shortcutsBlocked,
     minimized,
     onMinimizedChange,
+    selectedOd,
     taiOpt,
     ninOpt,
     genOpt,
@@ -165,6 +173,8 @@ export function BattleDialog({
 
   const playerRanks = getPlayerRanks(state, battle.resolveBoostThisRound);
   const ult = getPlayerSignatureUltimate(state);
+  const ultCost = getEffectiveUltimateCost(state, war);
+  const partner = war.partner;
   const enemyKnown = enemy.intel >= 80;
   const enemyArchLabel = ARCHETYPE_LABELS[enemy.archetype];
   const headerEnemy = battle.isFinal
@@ -201,6 +211,10 @@ export function BattleDialog({
   if (battle.weaknessExploited) playerMods.push('▲ Weakness Read');
   if (war.nextBattleBonus > 0) playerMods.push(`▲ Prep Bonus (+${war.nextBattleBonus})`);
   if (war.strategicClaimedBy === 'player') playerMods.push('▲ High Ground (+6)');
+  if (partner?.active) {
+    const tier = getPartnerTrustTier(partner.trust);
+    playerMods.push(`▲ ${partner.name}: ${tier.label} (HP ${partner.hp})`);
+  }
   if (battle.resolveBoostThisRound) playerMods.push('▲▲ Surpass Limits');
 
   const enemyMods: string[] = [`▲▲ ${TACTIC_LABELS[enemy.tactic]}`];
@@ -277,7 +291,7 @@ export function BattleDialog({
             <section className="battle-fighter-card battle-card-player" aria-label="Your Combat Status">
               <div className="fighter-top">
                 <div className="diamond-emblem player-emblem" aria-hidden="true">
-                  <span className="diamond-inner">{ELEMENT_NAMES[state.element].slice(0, 2).toUpperCase()}</span>
+                  <span className="diamond-inner kanji-glyph">{ELEMENT_KANJI[state.element]}</span>
                 </div>
                 <div className="fighter-id">
                   <div className="fighter-role">
@@ -316,10 +330,14 @@ export function BattleDialog({
               <div className="fighter-vitals tabular">
                 <span>Health {war.hp}</span>
                 <span>Chakra {war.cp}</span>
+                <span>Od {battle.od}/{battle.odMax}</span>
                 <span>Fort {war.fort}</span>
               </div>
 
-              <div className="fighter-meta-line tabular">Resolves {war.resolves}</div>
+              <div className="fighter-meta-line tabular">
+                Resolves {war.resolves}
+                {partner ? ` · Partner ${partner.name} ${partner.active ? `HP ${partner.hp} (Trust ${partner.trust})` : partner.died ? '(Fallen)' : partner.defected ? '(Defected)' : '(Down)'}` : ''}
+              </div>
               <div className="fighter-meta-line">
                 Signature: <strong>{ult.name}</strong> · {rankValueToGrade(ult.rankVal)}
               </div>
@@ -399,6 +417,25 @@ export function BattleDialog({
             <div className="context-eyebrow">◆ This battle</div>
             {lastRound ? (
               <>
+                {lastRound.seals && lastRound.seals.length > 0 && (
+                  <div className="seal-chain" key={`seals_${lastRound.round}`} aria-label="Hand seal sequence">
+                    {lastRound.seals.map((seal, idx) => (
+                      <span
+                        key={`${seal}_${idx}`}
+                        className="seal-chip"
+                        style={{ animationDelay: `${idx * 70}ms` }}
+                      >
+                        <span className="seal-kanji">{ZODIAC_SEAL_KANJI[seal] ?? ''}</span>
+                        <span>{seal}</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {lastRound.jutsuName && (
+                  <div className="jutsu-title-card" key={`jutsu_${lastRound.round}`}>
+                    {lastRound.jutsuName}
+                  </div>
+                )}
                 <p className="context-scene">{lastRound.narrative}</p>
                 <p className="context-quote">{lastRound.whyLine}</p>
               </>
@@ -419,7 +456,48 @@ export function BattleDialog({
             Enemy: {enemyCond} · You: {playerCond}
           </p>
 
-          {/* Tactical Action Cards */}
+          {/* Row 1: Optional Companion Od Actions (executed alongside Main Attack in the same round) */}
+          {odOptions.length > 0 && (
+            <section className="battle-od-row" aria-label="Optional Companion Od Actions">
+              <div className="disc-head tabular">
+                <span className="footer-label">
+                  Companion Action (Optional · Runs Alongside Main Attack)
+                </span>
+                <span className="stat-used-chip">
+                  Od {battle.od}/{battle.odMax}
+                </span>
+              </div>
+              <div className="od-chip-grid">
+                {odOptions.map((odOpt) => {
+                  const armed = selectedOd === odOpt.id;
+                  return (
+                    <button
+                      key={odOpt.id}
+                      type="button"
+                      className={`od-action-chip ${armed ? 'armed' : ''}`}
+                      disabled={odOpt.disabled}
+                      aria-pressed={armed}
+                      title={odOpt.disabled && odOpt.disabledReason ? odOpt.disabledReason : odOpt.desc}
+                      onClick={() => setSelectedOd((prev) => (prev === odOpt.id ? null : odOpt.id))}
+                    >
+                      <span className="od-chip-head tabular">
+                        <strong>{odOpt.label}</strong>
+                        <span className="cost-chip neutral">-{odOpt.cost} Od</span>
+                      </span>
+                      <span className="od-chip-desc">{odOpt.desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {selectedOd && (
+                <div className="disc-sub" style={{ color: 'var(--accent-gold)', marginTop: 6 }}>
+                  Armed: will fire simultaneously when you pick a Main Attack below (click chip again to clear).
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Row 2: Tactical Action Cards */}
           <div className="battle-actions-list">
             {/* [1] Taijutsu Strike */}
             {taiOpt && (
@@ -427,11 +505,13 @@ export function BattleDialog({
                 type="button"
                 className="battle-action-card"
                 disabled={taiOpt.disabled}
-                onClick={() => onResolve('taijutsu')}
+                onClick={() => onResolve('taijutsu', selectedOd ?? undefined)}
               >
                 <div className="action-card-top">
                   <span className="action-key tabular">1</span>
-                  <span className="action-title">Face them head-on (Taijutsu)</span>
+                  <span className="action-title">
+                    {pickPlayerJutsu(state, 'taijutsu', battle.rounds.length).name} (Taijutsu)
+                  </span>
                   <span className={`odds-pill ${taiOdds.tier}`}>
                     {taiOdds.tier === 'strong' ? '▲' : taiOdds.tier === 'weak' ? '▼' : '◆'} {taiOdds.label}
                   </span>
@@ -455,11 +535,13 @@ export function BattleDialog({
                 type="button"
                 className="battle-action-card"
                 disabled={ninOpt.disabled}
-                onClick={() => onResolve('ninjutsu')}
+                onClick={() => onResolve('ninjutsu', selectedOd ?? undefined)}
               >
                 <div className="action-card-top">
                   <span className="action-key tabular">2</span>
-                  <span className="action-title">Attack with {ELEMENT_NAMES[state.element]} Ninjutsu</span>
+                  <span className="action-title">
+                    {pickPlayerJutsu(state, 'ninjutsu', battle.rounds.length).name} ({ELEMENT_NAMES[state.element]})
+                  </span>
                   <span className={`odds-pill ${ninOdds.tier}`}>
                     {ninOdds.tier === 'strong' ? '▲' : ninOdds.tier === 'weak' ? '▼' : '◆'} {ninOdds.label}
                   </span>
@@ -489,7 +571,7 @@ export function BattleDialog({
                 type="button"
                 className="battle-action-card"
                 disabled={genOpt.disabled}
-                onClick={() => onResolve('genjutsu')}
+                onClick={() => onResolve('genjutsu', selectedOd ?? undefined)}
               >
                 <div className="action-card-top">
                   <span className="action-key tabular">3</span>
@@ -520,7 +602,7 @@ export function BattleDialog({
                 type="button"
                 className="battle-action-card ultimate-card"
                 disabled={ultOpt.disabled}
-                onClick={() => onResolve('ultimate')}
+                onClick={() => onResolve('ultimate', selectedOd ?? undefined)}
               >
                 <div className="action-card-top">
                   <span className="action-key tabular">4</span>
@@ -534,7 +616,10 @@ export function BattleDialog({
                 </div>
                 <div className="action-card-chips">
                   <span className="cost-chip">Your trump card will be revealed</span>
-                  <span className="cost-chip tabular">Chakra -{ult.cost}</span>
+                  <span className="cost-chip tabular">
+                    Chakra -{ultCost}
+                    {ultCost < ult.cost ? ' (-15% Bond)' : ''}
+                  </span>
                   {ultOpt.disabled && ultOpt.disabledReason && (
                     <span className="cost-chip">{ultOpt.disabledReason}</span>
                   )}

@@ -25,7 +25,7 @@ export const DISCIPLINES: readonly DisciplineDef[] = [
     gain: { chakra: 2 },
     leaningBias: 'will_of_fire',
     combatRole: 'Aggressive flame barrages; beats Wind Release.',
-    secretArtName: 'Great Dragon Flame Annihilation',
+    secretArtName: 'Katon: Goka Mekkyaku',
   },
   {
     id: 'wind_release',
@@ -36,7 +36,7 @@ export const DISCIPLINES: readonly DisciplineDef[] = [
     element: 'wind',
     gain: { chakra: 2 },
     combatRole: 'Razor-edged cutting waves; beats Lightning Release.',
-    secretArtName: 'Spiraling Gale Shuriken',
+    secretArtName: 'Futon: Rasenshuriken',
   },
   {
     id: 'lightning_release',
@@ -48,7 +48,7 @@ export const DISCIPLINES: readonly DisciplineDef[] = [
     gain: { chakra: 1, health: 1 },
     leaningBias: 'ambition',
     combatRole: 'High-speed piercing strikes; beats Earth Release.',
-    secretArtName: 'Heavenly Thunder Spear',
+    secretArtName: 'Raiton: Raikiri',
   },
   {
     id: 'earth_release',
@@ -59,7 +59,7 @@ export const DISCIPLINES: readonly DisciplineDef[] = [
     element: 'earth',
     gain: { health: 2 },
     combatRole: 'Stone ramparts and terrain control; beats Water Release.',
-    secretArtName: 'Mountain Crushing Earthen Dome',
+    secretArtName: 'Doton: Sando no Jutsu',
   },
   {
     id: 'water_release',
@@ -70,7 +70,7 @@ export const DISCIPLINES: readonly DisciplineDef[] = [
     element: 'water',
     gain: { chakra: 1, intel: 1 },
     combatRole: 'Fluid battlefield torrents; beats Fire Release.',
-    secretArtName: 'Great Waterfall Dragon Vortex',
+    secretArtName: 'Suiton: Daibakufu no Jutsu',
   },
   {
     id: 'shadow_clone',
@@ -90,7 +90,7 @@ export const DISCIPLINES: readonly DisciplineDef[] = [
     gain: { intel: 2 },
     leaningBias: 'forbidden',
     combatRole: 'Chakra suppression, storage scrolls, and crisis sealing.',
-    secretArtName: 'Eight-Trigram Grand Seal',
+    secretArtName: 'Hakke no Fuin Shiki (Eight Trigrams Seal)',
   },
   {
     id: 'medical',
@@ -101,7 +101,7 @@ export const DISCIPLINES: readonly DisciplineDef[] = [
     gain: { intel: 1, health: 1 },
     leaningBias: 'will_of_fire',
     combatRole: 'Field triage, poison extraction, and chakra scalpel strikes.',
-    secretArtName: 'Hundred Healings Mitotic Seal',
+    secretArtName: 'Byakugo no In (Strength of a Hundred Seal)',
   },
   {
     id: 'barrier',
@@ -139,7 +139,7 @@ export const DISCIPLINES: readonly DisciplineDef[] = [
     gain: { intel: 2, chakra: 1 },
     leaningBias: 'ambition',
     combatRole: 'Instant marker teleportation and impossible counterattacks.',
-    secretArtName: 'Flying Thunder Flash Array',
+    secretArtName: 'Hiraishin no Jutsu (Flying Raijin)',
   },
 
   // Genjutsu & Stealth Branch
@@ -151,7 +151,7 @@ export const DISCIPLINES: readonly DisciplineDef[] = [
     ability: 'will',
     gain: { will: 2 },
     combatRole: 'Sensory disruption, false targets, and mental traps.',
-    secretArtName: 'Infinite Bringer-of-Darkness',
+    secretArtName: 'Kokuangyo no Jutsu (Bringer-of-Darkness)',
   },
   {
     id: 'sensory',
@@ -201,11 +201,11 @@ export const DISCIPLINES: readonly DisciplineDef[] = [
     ability: 'health',
     gain: { health: 2 },
     combatRole: 'Relentless bone-breaking strikes with minimal chakra drain.',
-    secretArtName: 'Eight Inner Gates Formation',
+    secretArtName: 'Hachimon Tonko (Eight Inner Gates)',
   },
   {
     id: 'gentle_fist',
-    name: 'Precision Chakra Fist',
+    name: 'Gentle Fist (Juken)',
     branch: 'taijutsu',
     maxLevel: 3,
     ability: 'health',
@@ -220,7 +220,7 @@ export const DISCIPLINES: readonly DisciplineDef[] = [
     ability: 'will',
     gain: { will: 1, health: 1 },
     combatRole: 'Chakra-infused blade duels and lethal draw cuts.',
-    secretArtName: 'White Fang Flashing Crescent',
+    secretArtName: 'Konoha-Ryu: Mikazuki no Mai',
   },
   {
     id: 'shurikenjutsu',
@@ -239,7 +239,7 @@ export const DISCIPLINES: readonly DisciplineDef[] = [
     ability: 'will',
     gain: { will: 2, chakra: 2 },
     combatRole: 'Nature-energy empowerment multiplying every combat attribute.',
-    secretArtName: 'True Sage Mode Awakening',
+    secretArtName: 'Sennin Modo (Sage Mode)',
   },
 ];
 
@@ -273,7 +273,7 @@ export const BLOODLINES: readonly BloodlineDef[] = [
     weight: 20,
     gradeRange: [2, 5],
     strainCost: 6,
-    description: 'Crimson eyes that read motion, copy jutsu, and awaken catastrophic Mangekyo arts at severe cost.',
+    description: 'Crimson Uchiha-lineage eyes that read motion, copy jutsu, and awaken the Mangekyo Sharingan at severe cost.',
     bonusSummary: '+Insight, +Genjutsu, +Combat Read; high-grade use strains Health.',
   },
   {
@@ -283,7 +283,7 @@ export const BLOODLINES: readonly BloodlineDef[] = [
     weight: 22,
     gradeRange: [1, 4],
     strainCost: 3,
-    description: 'Near-360-degree chakra vision capable of spotting ambushes kilometers away.',
+    description: 'Near-360-degree chakra network vision capable of piercing solid cover and spotting tenketsu points.',
     bonusSummary: '+Sensory Intel, +Crisis Clues, +Precision strikes.',
   },
   {
@@ -338,17 +338,17 @@ export const BLOODLINES: readonly BloodlineDef[] = [
   },
   {
     id: 'uzumaki_chains',
-    name: 'Adamantine Sealing Chains',
+    name: 'Adamantine Sealing Chains (Kongo Fusa)',
     category: 'body',
     weight: 10,
     gradeRange: [2, 4],
     strainCost: 5,
-    description: 'Golden chakra chains born of ferocious vitality that bind even giant threats.',
+    description: 'Golden chakra chains born of ferocious Uzumaki vitality that bind even a rampaging Bijuu.',
     bonusSummary: '+Chakra Cap, +Sealing power, +Vitality.',
   },
   {
     id: 'sage_body',
-    name: 'Natural Energy Vessel',
+    name: 'Jugo-Style Sage Body',
     category: 'body',
     weight: 8,
     gradeRange: [2, 4],
@@ -358,13 +358,13 @@ export const BLOODLINES: readonly BloodlineDef[] = [
   },
   {
     id: 'rinne_eye',
-    name: 'Samsara Eye (Rinne-Tier)',
+    name: 'Rinnegan',
     category: 'dojutsu',
     weight: 0.4,
     gradeRange: [4, 5],
     strainCost: 14,
-    description: 'Mythic rippled eyes rumored to wield gravity, absorption, and dominion over all five natures.',
-    bonusSummary: 'Peerless combat authority; extreme Health strain per activation.',
+    description: 'Mythic rippled eyes of the Sage of Six Paths wielding gravity, chakra absorption, and dominion over all five natures.',
+    bonusSummary: 'Peerless Six Paths authority; extreme Health strain per activation.',
   },
 ];
 
@@ -394,4 +394,21 @@ export const ELEMENT_NAMES: Record<ChakraElement, string> = {
   lightning: 'Lightning',
   earth: 'Earth',
   water: 'Water',
+};
+
+export const ELEMENT_KANJI: Record<ChakraElement, string> = {
+  fire: '火',
+  wind: '風',
+  lightning: '雷',
+  earth: '土',
+  water: '水',
+};
+
+export const RANK_KANJI: Record<string, string> = {
+  civilian: '民',
+  academy: '学',
+  genin: '下忍',
+  chunin: '中忍',
+  jonin: '上忍',
+  kage: '影',
 };

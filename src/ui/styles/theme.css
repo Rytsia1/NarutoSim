@@ -519,6 +519,37 @@ button:disabled {
   color: var(--text-primary);
 }
 
+.log-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.kanji-glyph {
+  font-family: "Yu Mincho", "Noto Serif JP", "Hiragino Mincho ProN", Georgia, serif;
+  font-weight: 700;
+}
+
+.hanko-stamp {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 5px;
+  border: 2px solid var(--accent-seal);
+  border-radius: 4px;
+  color: var(--accent-seal);
+  background: rgba(196, 61, 46, 0.12);
+  font-family: "Yu Mincho", "Noto Serif JP", Georgia, serif;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  transform: rotate(-4deg);
+  flex-shrink: 0;
+}
+
 .chip-row {
   display: flex;
   flex-wrap: wrap;
@@ -1514,6 +1545,62 @@ dialog.battle-dialog::backdrop {
   color: #e69ba6;
 }
 
+/* Hand-seal stagger chips & Jutsu title card (Fase 2) */
+.seal-chain {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.seal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(212, 168, 83, 0.45);
+  background: rgba(212, 168, 83, 0.12);
+  color: var(--accent-gold);
+  font-size: 0.76rem;
+  font-weight: 600;
+  opacity: 0;
+  transform: translateY(4px) scale(0.95);
+  animation: sealPop 240ms ease forwards;
+}
+
+.seal-kanji {
+  font-family: "Yu Mincho", "Noto Serif JP", Georgia, serif;
+  font-size: 0.9rem;
+  color: #f3d28b;
+}
+
+.jutsu-title-card {
+  font-family: var(--font-display);
+  font-size: 1.12rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--accent-gold);
+  padding: 2px 0 6px;
+  border-bottom: 1px solid rgba(212, 168, 83, 0.28);
+  margin-bottom: 2px;
+}
+
+@keyframes sealPop {
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .seal-chip {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .battle-status-line {
   margin: 2px 0 0;
   font-family: var(--font-display);
@@ -1750,6 +1837,70 @@ dialog.battle-dialog::backdrop {
   font-weight: 600;
   font-size: 0.88rem;
   color: #f1e9dc;
+}
+
+.partner-war-card {
+  margin-bottom: 12px;
+  border-color: rgba(214, 163, 74, 0.35);
+}
+
+.battle-od-row {
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(114, 138, 196, 0.35);
+  background: rgba(24, 27, 42, 0.72);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.od-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.od-action-chip {
+  text-align: left;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid #414862;
+  background: #171925;
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.od-action-chip:hover:not(:disabled) {
+  border-color: var(--accent-gold);
+  background: #202336;
+}
+
+.od-action-chip.armed {
+  border-color: var(--accent-gold);
+  background: rgba(214, 163, 74, 0.16);
+  box-shadow: 0 0 0 1px rgba(214, 163, 74, 0.45);
+}
+
+.od-action-chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.od-chip-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 0.84rem;
+}
+
+.od-chip-desc {
+  font-size: 0.76rem;
+  color: #b4aba0;
 }
 
 .battle-minimized-bar {

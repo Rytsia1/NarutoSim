@@ -1,7 +1,8 @@
+import { PARTNER_WAR_SCENES } from '../data/events-partner';
 import { WAR_CROSSROADS } from '../data/events-war';
 import { ELEMENT_NAMES } from '../data/powers';
 import { ARCHETYPE_LABELS, ROSTER, ROSTER_MAP, type RosterShinobiDef } from '../data/roster';
-import { VILLAGE_MAP } from '../data/villages';
+import { kageTitle, VILLAGE_MAP } from '../data/villages';
 import {
   buildShinobiPersona,
   calcAllyAcceptChance,
@@ -33,8 +34,16 @@ import {
   startConvictionRoute,
   syncCrisisCoalitionAllies,
 } from './crises';
-import { addLeaning, clampStats, killCharacter, pushLog } from './life';
+import { addLeaning, clampStats, killCharacter, pushLog, recordMemory } from './life';
 import { generateWarChronicle, recordWarFact } from './narrative';
+import {
+  adjustPartnerTrust,
+  applyResolvePartnerReaction,
+  createPermanentPartnerFromWar,
+  getPartnerTrustTier,
+  selectWarPartner,
+  syncPartnerBackToState,
+} from './partner';
 import { clamp, computeCombatProjection } from './powers';
 import { promoteRank } from './ranks';
 import type { SeededRng } from './rng';
@@ -44,6 +53,7 @@ import type {
   CrisisId,
   GameState,
   LeaningKey,
+  OdActionId,
   PendingDecision,
   StatKey,
   WarBeat,
@@ -318,8 +328,12 @@ export function initWarState(
         : 0.94;
 
   const fallenSet = new Set(state.fallenRosterIds);
+  const partner = selectWarPartner(state, rng, new Set());
+  const excludedRoster = new Set<string>(fallenSet);
+  if (partner.rosterId) excludedRoster.add(partner.rosterId);
+
   const fatedDef =
-    state.fatedRosterId && !fallenSet.has(state.fatedRosterId) ? ROSTER_MAP[state.fatedRosterId] : undefined;
+    state.fatedRosterId && !excludedRoster.has(state.fatedRosterId) ? ROSTER_MAP[state.fatedRosterId] : undefined;
   const enemies: WarCompetitor[] = [];
 
   BASE_ARCHETYPES.forEach((arch, idx) => {
@@ -327,16 +341,19 @@ export function initWarState(
       enemies.push(createCompetitorFromRoster(fatedDef, scaleMult, idx + 1));
       return;
     }
-    const alivePool = ROSTER.filter((r) => r.archetype === arch && !fallenSet.has(r.id));
-    const fallbackPool = ROSTER.filter((r) => r.archetype === arch);
-    const chosen = rng.pick(alivePool.length > 0 ? alivePool : fallbackPool);
+    const alivePool = ROSTER.filter((r) => r.archetype === arch && !excludedRoster.has(r.id));
+    const fallbackPool = ROSTER.filter((r) => r.archetype === arch && r.id !== partner.rosterId);
+    const chosen = rng.pick(alivePool.length > 0 ? alivePool : fallbackPool.length > 0 ? fallbackPool : ROSTER.filter((r) => r.archetype === arch));
     enemies.push(createCompetitorFromRoster(chosen, scaleMult, idx + 1));
   });
 
-  // Special S-Rank slot: Fated Thread S-Rank operative, ex-teammate missing_nin, or 15% S-Rank operative (always on Crisis War)
-  const rogueMate = state.team?.members.find(
-    (m) => m.role === 'teammate' && m.alive && m.specialStatus === 'missing_nin',
-  );
+  // Special S-Rank slot: Fated Thread S-Rank operative, ex-teammate missing_nin (prioritizing Rival!), or 15% S-Rank operative
+  const rogueRival = state.rivalId
+    ? state.team?.members.find((m) => m.id === state.rivalId && m.alive && m.specialStatus === 'missing_nin')
+    : undefined;
+  const rogueMate =
+    rogueRival ??
+    state.team?.members.find((m) => m.role === 'teammate' && m.alive && m.specialStatus === 'missing_nin');
   if (fatedDef && fatedDef.archetype === 'rogue_s') {
     const comp = createCompetitorFromRoster(fatedDef, isCrisisWar ? 1.0 : scaleMult, 8);
     if (isCrisisWar && state.world.crisisClues > 0) {
@@ -399,6 +416,65 @@ export function initWarState(
     enemies.push(comp);
   }
 
+  // Ensure at least 1 same-village comrade is deployed when player serves a village (village-vs-village war)
+  if (state.specialStatus !== 'missing_nin') {
+    const loyalRival =
+      state.rivalId && state.rivalId !== partner.teamMemberId
+        ? state.team?.members.find((m) => m.id === state.rivalId && m.alive && m.specialStatus !== 'missing_nin')
+        : undefined;
+    const hasSameVillage = enemies.some((e) => !e.isExTeammateRogue && e.villageId === state.villageId);
+    if ((loyalRival || !hasSameVillage) && enemies.length > 0) {
+      const swapIdx = enemies.findIndex((e) => !fatedDef || e.rosterId !== fatedDef.id);
+      if (swapIdx >= 0 && loyalRival && !enemies.some((e) => e.id === `en_rival_${loyalRival.id}`)) {
+        const v = VILLAGE_MAP[state.villageId];
+        const base = enemies[swapIdx];
+        enemies[swapIdx] = {
+          ...base,
+          id: `en_rival_${loyalRival.id}`,
+          rosterId: `rival_ally_${loyalRival.id}`,
+          name: loyalRival.name,
+          epithet: `Sworn Rival of ${v.name}`,
+          villageId: state.villageId,
+          element: v.dominantElement,
+          tactic: 'proud',
+          persona: buildShinobiPersona('proud', loyalRival.traits, base.archetype),
+          motive: `Fight beside ${state.name} for ${v.name} and settle your rivalry alive.`,
+          originHint: `Your sworn rival from Team ${state.team?.number ?? ''}.`,
+        };
+      } else if (swapIdx >= 0 && !hasSameVillage) {
+        const sameVillageRoster = ROSTER.filter(
+          (r) =>
+            r.villageId === state.villageId &&
+            r.archetype !== 'rogue_s' &&
+            !excludedRoster.has(r.id) &&
+            !enemies.some((e) => e.rosterId === r.id),
+        );
+        if (sameVillageRoster.length > 0) {
+          const picked = sameVillageRoster[Math.abs(state.rng.seed) % sameVillageRoster.length];
+          enemies[swapIdx] = createCompetitorFromRoster(picked, scaleMult, swapIdx + 1);
+        } else {
+          const v = VILLAGE_MAP[state.villageId];
+          const first = v.maleNames[Math.abs(state.rng.seed) % v.maleNames.length];
+          const last = v.surnames[Math.abs(state.rng.seed + 3) % v.surnames.length];
+          const base = enemies[swapIdx];
+          enemies[swapIdx] = {
+            ...base,
+            id: `en_ally_${state.villageId}_${swapIdx + 1}`,
+            rosterId: `village_comrade_${state.villageId}`,
+            name: `${first} ${last}`,
+            epithet: `${v.name} Vanguard`,
+            villageId: state.villageId,
+            element: v.dominantElement,
+            tactic: 'defensive',
+            persona: buildShinobiPersona('defensive', ['loyalty', 'honor'], base.archetype),
+            motive: `Defend ${v.name} alongside fellow village shinobi.`,
+            originHint: `Wears the forehead protector of ${v.name}.`,
+          };
+        }
+      }
+    }
+  }
+
   const hasBarrier = state.disciplines.some((d) => d.id === 'barrier' || d.id === 'trap_craft');
   const startFort = (approach === 'flank' ? 24 : 16) + (hasBarrier ? 12 : 0);
   const startExposure =
@@ -446,6 +522,8 @@ export function initWarState(
     crossroadsCount: 0,
     usedCrossroads: [],
     loyalInterceptUsed: false,
+    partner,
+    usedPartnerScenes: [],
     facts: [],
     crisis: null,
     conviction: null,
@@ -453,11 +531,27 @@ export function initWarState(
     activeBattle: null,
   };
 
+  const tierInfo = getPartnerTrustTier(partner.trust);
+  pushLog(
+    state,
+    'bond',
+    `War Partner Assigned: ${partner.name} (${partner.epithet}) deploys directly beside you (Trust ${partner.trust} · ${tierInfo.label}, Affinity Fit ${partner.fit}).`,
+    { title: `War Partner: ${partner.name}` },
+  );
+
   if (isCrisisWar) {
     war.crisis = initWarCrisisState(state, war, rng);
   }
 
   initWarRelations(state, war);
+  if (state.specialStatus !== 'missing_nin') {
+    const villageComrade =
+      war.enemies.find((e) => e.alive && e.id.startsWith('en_rival_')) ??
+      war.enemies.find((e) => e.alive && !e.isExTeammateRogue && e.villageId === state.villageId);
+    if (villageComrade) {
+      establishPlayerAlliance(state, war, villageComrade, rng, true);
+    }
+  }
   runDailyStrategicPlanner(state, war, rng);
   return war;
 }
@@ -749,6 +843,40 @@ export function openDayPhase(state: GameState, rng: SeededRng): void {
     }
   }
 
+  // Priority 6.5: War Partner Bond Scene (K2: Trust >= 60, up to 2 per war)
+  if (
+    war.partner &&
+    war.partner.active &&
+    war.partner.trust >= 60 &&
+    war.day >= 3 &&
+    war.usedPartnerScenes.length < 2 &&
+    rng.chance(0.32)
+  ) {
+    const eligibleScenes = PARTNER_WAR_SCENES.filter(
+      (sc) => !war.usedPartnerScenes.includes(sc.id) && (!sc.condition || sc.condition(state, war)),
+    );
+    if (eligibleScenes.length > 0) {
+      const scene = rng.pick(eligibleScenes);
+      war.usedPartnerScenes.push(scene.id);
+      state.pending = {
+        id: `war_ps_${scene.id}_${war.day}`,
+        kind: 'war_partner_scene',
+        eventId: scene.id,
+        title: scene.title,
+        body: scene.body(state, war),
+        manual: false,
+        meta: { sceneId: scene.id },
+        options: scene.options.map((o) => ({
+          id: o.id,
+          label: o.label,
+          sublabel: o.sublabel,
+          autoEligible: o.autoEligible,
+        })),
+      };
+      return;
+    }
+  }
+
   // Priority 7: War Crossroads Dilemma (up to 3 per war)
   if (war.day >= 2 && war.crossroadsCount < 3 && rng.chance(0.35)) {
     const cands = WAR_CROSSROADS.filter((c) => !war.usedCrossroads.includes(c.id));
@@ -841,7 +969,15 @@ export function buildWarDayDecision(state: GameState): PendingDecision {
     });
   }
 
-  if (hasSquadNearby) {
+  if (war.partner?.active) {
+    options.push({
+      id: 'day_kizuna',
+      label: `Kizuna Outing with ${war.partner.name} (Trust ${war.partner.trust})`,
+      sublabel: 'Deepen Partner Trust (+2 to +4 via fit), +4 HP, +14 rival Intel, +3 Exposure.',
+      statHints: ['Bonds', 'Intel'],
+      autoEligible: war.partner.trust < 80,
+    });
+  } else if (hasSquadNearby) {
     options.push({
       id: 'day_kizuna',
       label: `Exchange Coded Signal with ${state.team!.active ? `Team ${state.team!.number}` : 'Former Squadmate'}`,
@@ -924,13 +1060,25 @@ export function buildWarNightDecision(state: GameState): PendingDecision {
     },
   ];
 
-  if (!war.allyId && living.length >= 2) {
+  if (war.partner?.active) {
+    options.push({
+      id: 'night_talk_partner',
+      label: `Talk with Partner: ${war.partner.name} (Trust ${war.partner.trust})`,
+      sublabel: 'Build Partner Trust (+3 to +6 via fit), +5 HP, +8 Partner HP, 70% backstory fragment.',
+      statHints: ['Bonds'],
+      autoEligible: war.partner.trust < 75 || war.partner.hp < 75,
+    });
+  }
+
+  if (living.some((e) => e.id !== war.allyId) && living.length >= 2) {
     options.push({
       id: 'night_ally',
-      label: 'Propose Temporary Alliance (Diplomacy)',
-      sublabel: 'Seek a wartime pact with a rival shinobi (1 ally max; acceptance depends on 6-axis relations).',
+      label: war.allyId ? 'Diplomacy: Negotiate New Coalition Pact' : 'Propose Temporary Alliance (Diplomacy)',
+      sublabel: war.allyId
+        ? 'Seek a new wartime ally from another faction (replaces current active partner).'
+        : 'Seek a wartime pact with a shinobi (1 active partner; acceptance depends on 6-axis relations).',
       statHints: ['Bonds', 'Diplomacy'],
-      autoEligible: war.day <= 7 && war.hp < 75,
+      autoEligible: !war.allyId && war.day <= 7 && war.hp < 75,
     });
   }
 
@@ -1144,6 +1292,8 @@ export function startWarBattle(
   war.beatClock = 0;
   war.statusText = opts.isFinal ? 'Final Night Duel in progress...' : `In solo combat (Round 1)...`;
 
+  const battleOdMax = Math.max(14, Math.round(computeCombatProjection(state).battleChakraPool * 0.42));
+
   war.activeBattle = {
     enemyId,
     round: 1,
@@ -1164,7 +1314,11 @@ export function startWarBattle(
     enemyFieldRounds: 0,
     weaknessExploited: false,
     usedDesperation: false,
+    usedNindoResolve: false,
     resolveBoostThisRound: false,
+    od: battleOdMax,
+    odMax: battleOdMax,
+    odUsedCount: 0,
     rounds: [],
   };
 
@@ -1178,15 +1332,29 @@ export function startWarBattle(
   state.pending = buildBattleRoundDecision(state);
 }
 
-function establishPlayerAlliance(state: GameState, war: WarState, target: WarCompetitor, rng: SeededRng): void {
+function establishPlayerAlliance(
+  state: GameState,
+  war: WarState,
+  target: WarCompetitor,
+  rng: SeededRng,
+  isVillageComrade = false,
+): void {
+  if (war.allyId && war.allyId !== target.id) {
+    const prev = war.enemies.find((e) => e.id === war.allyId);
+    if (prev) prev.allyId = null;
+  }
   war.allyId = target.id;
   war.allyFormedDay = war.day;
   target.allyId = 'player';
   modRel(war, target.id, 'player', { trust: 22, affection: 12, respect: 10 });
   modRel(war, 'player', target.id, { trust: 22, affection: 12, respect: 10 });
 
-  // Confiding: 70% chance ally reveals True Name, Element & Ultimate!
-  if (rng.chance(0.72)) {
+  // Village comrades start fully known (zero RNG); outside allies confide 72% of the time
+  if (isVillageComrade) {
+    target.intel = 100;
+    target.ultimateSeen = true;
+    target.skillsRevealed = true;
+  } else if (rng.chance(0.72)) {
     target.intel = Math.max(target.intel, 85);
     target.ultimateSeen = true;
   }
@@ -1197,8 +1365,20 @@ function establishPlayerAlliance(state: GameState, war: WarState, target: WarCom
     actorName: state.name,
     targetId: target.id,
     targetName: target.name,
-    detail: `Formed a wartime pact with ${target.name}`,
+    detail: isVillageComrade
+      ? `Deployed beside fellow ${VILLAGE_MAP[state.villageId].name} shinobi ${target.name}`
+      : `Formed a wartime pact with ${target.name}`,
   });
+
+  if (isVillageComrade) {
+    pushLog(
+      state,
+      'bond',
+      `Village Deployment: Fellow ${VILLAGE_MAP[state.villageId].name} shinobi ${target.name} (${target.epithet}) deploys alongside you against the rival coalition!`,
+      { title: `${VILLAGE_MAP[state.villageId].name} Allied Partner` },
+    );
+    return;
+  }
 
   pushLog(
     state,
@@ -1411,6 +1591,10 @@ export function runDawnTick(state: GameState, rng: SeededRng): void {
   war.fort = Math.max(0, Math.floor(war.fort * 0.93));
   if (war.fort >= 40) {
     war.exposure = clamp(war.exposure + Math.floor((war.fort - 40) / 10) + 1, 0, 100);
+  }
+
+  if (war.partner && war.partner.active) {
+    war.partner.hp = clamp(war.partner.hp + 5 + (hasMedical ? 4 : 0), 0, war.partner.maxHp);
   }
 
   for (const e of war.enemies) {
@@ -1641,6 +1825,99 @@ export function flushWarUntilDecision(state: GameState, rng: SeededRng): void {
   }
 }
 
+function buildWarFinaleWishDecision(
+  state: GameState,
+  war: WarState,
+  outcome: 'victor' | 'shared',
+): PendingDecision {
+  const leader = kageTitle(state);
+  const villageName = VILLAGE_MAP[state.villageId].name;
+
+  const personalCandidates: { id: string; score: number; label: string; sublabel: string; hints: string[] }[] = [
+    {
+      id: 'wish_peace',
+      score: state.leanings.will_of_fire * 2 + state.stats.bonds * 0.05,
+      label: 'Demand a Five-Nation Peace Accord',
+      sublabel: 'Doubles the war cooldown to 12 years, drops World Tension to 8, +6 Bonds, +4 Will.',
+      hints: ['Bonds', 'Will'],
+    },
+    {
+      id: 'wish_protect',
+      score: state.stats.bonds * 0.08 + state.leanings.will_of_fire * 1.2,
+      label: `Fortify ${villageName} & Shield Your Loved Ones`,
+      sublabel: 'Restores +10 Health, +8 Bonds, +6 Will, and deepens trust with surviving squadmates.',
+      hints: ['Bonds', 'Health'],
+    },
+    {
+      id: 'wish_kage',
+      score: state.leanings.ambition * 2 + (state.nindo === 'become_kage' ? 4 : 0),
+      label: `Claim Council Endorsement for the ${leader} Seat`,
+      sublabel: `Lowers ${leader} Succession requirements, +6 Will, +5 Bonds, +15 Ryo.`,
+      hints: ['Will', 'Bonds'],
+    },
+    {
+      id: 'wish_vengeance',
+      score: state.leanings.vengeance * 2 + (state.nindo === 'avenge_clan' ? 4 : 0),
+      label: 'Place a Continental Bounty on Your Sworn Foes',
+      sublabel: 'Marks a lingering rival target for future reckoning, +6 Chakra, +6 Will, +12 Ryo.',
+      hints: ['Chakra', 'Will'],
+    },
+    {
+      id: 'wish_kinjutsu',
+      score: state.leanings.forbidden * 2 + state.stats.intel * 0.04,
+      label: 'Unseal a Confiscated War Vault Kinjutsu Scroll',
+      sublabel: 'Gain +12 Chakra, +6 Intel, and +15 XP to your main jutsu discipline (-6 Health).',
+      hints: ['Chakra', 'Intel'],
+    },
+    {
+      id: 'wish_dominion',
+      score: state.leanings.ruthless * 2 + state.stats.ryo * 0.03,
+      label: 'Seize Frontier Supply Lines & War Reparations',
+      sublabel: 'Claim +25 Ryo, +6 Chakra, +4 Intel, Ruthless +1.',
+      hints: ['Ryo', 'Intel'],
+    },
+  ];
+
+  personalCandidates.sort((a, b) => b.score - a.score);
+  const topFour = personalCandidates.slice(0, 4);
+
+  const options: PendingDecision['options'] = topFour.map((w) => ({
+    id: w.id,
+    label: w.label,
+    sublabel: w.sublabel,
+    statHints: w.hints,
+    autoEligible: true,
+  }));
+
+  if (war.partner && war.partner.active && war.partner.trust >= 60) {
+    options.push({
+      id: 'wish_partner_dream',
+      label: `Grant ${war.partner.name}'s Wish`,
+      sublabel: `"${war.partner.motive}" (Partner Trust +10, +15 Rel Points, +5 Bonds, +5 Will).`,
+      statHints: ['Bonds'],
+      autoEligible: true,
+    });
+    options.push({
+      id: 'wish_stay_with_me',
+      label: `"Stay With Me" (Keep ${war.partner.name} as Your Permanent Partner)`,
+      sublabel: `${war.partner.name} walks beside you into future wars and retirement epilogues.`,
+      statHints: ['Bonds', 'Will'],
+      autoEligible: war.partner.trust >= 75,
+    });
+  }
+
+  return {
+    id: `war_finale_wish_${war.warNumber}`,
+    kind: 'war_finale_wish',
+    eventId: 'war_finale_wish',
+    title: `War #${war.warNumber} Finale: The Winner's Demand`,
+    body: `Smoke clears over the contested valley. Standing victorious${war.partner?.active ? ` beside ${war.partner.name}` : ''}, your voice carries the weight of the entire front. What demand will you carve into the armistice treaty?`,
+    manual: true,
+    meta: { outcome },
+    options,
+  };
+}
+
 export function concludeWar(
   state: GameState,
   rng: SeededRng,
@@ -1655,8 +1932,16 @@ export function concludeWar(
     return;
   }
 
+  // K4: Winner's Wish Finale on War Victory or Shared Armistice
+  if ((outcome === 'victor' || outcome === 'shared') && !war.finaleWishDone && !war.isCrisisWar) {
+    war.finaleWishDone = true;
+    state.pending = buildWarFinaleWishDecision(state, war, outcome);
+    return;
+  }
+
   const chronicle = generateWarChronicle(state, war, outcome);
   syncFallenFromWar(state, war);
+  syncPartnerBackToState(state, war.partner);
 
   const wear = Math.max(0, Math.round((100 - war.hp) * 0.28));
   state.stats.health = clamp(state.stats.health - wear, 8, 100);
@@ -1685,12 +1970,13 @@ export function concludeWar(
     state.world.crisisStage = 3;
     state.world.truePeace = true;
     if (state.rank === 'jonin' && state.stats.bonds >= 55 && state.specialStatus !== 'missing_nin') {
+      const title = kageTitle(state);
       state.specialStatus = 'kage';
       pushLog(
         state,
         'milestone',
-        `Having shattered the Endgame Crisis in War #${war.warNumber}, the village acclaims you as Kage!`,
-        { title: 'Acclaimed as Kage' },
+        `Having shattered the Endgame Crisis in War #${war.warNumber}, the village acclaims you as ${title}!`,
+        { title: `Acclaimed as ${title}` },
       );
     }
   }
@@ -1724,13 +2010,23 @@ export function concludeWar(
     `Post-War Chronicle: "${chronicle.title}". Eliminations: ${war.kills}. ${fieldPromoted ? 'Earned a Field Promotion to Chunin! ' : ''}${state.world.truePeace ? 'The continent enters a lasting Era of True Peace.' : 'An uneasy ceasefire settles as everyday shinobi life resumes.'}`,
     { title: chronicle.title },
   );
+  recordMemory(
+    state,
+    'war',
+    `Survived Great Shinobi War #${war.warNumber} (${chronicle.title}) fighting for ${VILLAGE_MAP[state.villageId].name}.`,
+  );
 
   if (fieldPromoted && state.team?.active) {
     state.pending = disbandGeninTeam(state, 'player_chunin', [state.name]);
   }
 }
 
-export function handleWarDecision(state: GameState, optionId: string, rng: SeededRng): void {
+export function handleWarDecision(
+  state: GameState,
+  optionId: string,
+  rng: SeededRng,
+  odAction?: OdActionId,
+): void {
   const decision = state.pending!;
   const war = state.war!;
   state.pending = null;
@@ -1773,8 +2069,8 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
         state,
         'crisis',
         war.crisis?.id === 'mastermind'
-          ? 'Unable to break the Shadow Mastermind by dawn, a pale moon illusion washes across the borderlands.'
-          : 'Unchecked at dawn, the Calamity scorches the entire contested valley before retreating beneath the mountains.',
+          ? 'Unable to break Akatsuki by dawn, a pale Infinite Tsukuyomi illusion washes across the borderlands.'
+          : `Unchecked at dawn, ${war.crisis?.bossName ?? 'the unbound Bijuu'} scorches the entire contested valley before vanishing beneath the mountains.`,
         { title: 'Crisis Uncontained' },
       );
       concludeWar(state, rng, 'survived', true);
@@ -1799,6 +2095,18 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       state.flags.crisis_claimed = true;
       addLeaning(state, 'ruthless', 3);
       addLeaning(state, 'forbidden', 2);
+      if (
+        state.nindo === 'never_go_back' ||
+        state.nindo === 'protect_bonds' ||
+        state.nindo === 'become_kage'
+      ) {
+        state.stats.will = Math.max(0, state.stats.will - 5);
+        pushLog(
+          state,
+          'danger',
+          'You betrayed your own Nindo, seizing forbidden power at the expense of the peace you swore to guard (-5 Will).',
+        );
+      }
       clampStats(state);
       pushLog(
         state,
@@ -1952,6 +2260,48 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
     return;
   }
 
+  // === WAR PARTNER BOND SCENE (K2) ===
+  if (decision.kind === 'war_partner_scene') {
+    const scene = PARTNER_WAR_SCENES.find((s) => s.id === decision.meta?.sceneId);
+    const opt = scene?.options.find((o) => o.id === optionId);
+    const partner = war.partner;
+    if (scene && opt && partner && partner.active) {
+      if (opt.hpDelta) war.hp = clamp(war.hp + opt.hpDelta, 1, 100);
+      if (opt.partnerHpDelta) partner.hp = clamp(partner.hp + opt.partnerHpDelta, 1, partner.maxHp);
+      if (opt.cpDelta) war.cp = clamp(war.cp + opt.cpDelta, 0, 100);
+      if (opt.id === 'campfire_drill') war.nextBattleBonus += 4;
+      if (opt.switchTrack && partner.relTrack !== 'mentorship') {
+        const hasSpouse = state.family.some((f) => f.relation === 'spouse' && f.alive);
+        if (opt.switchTrack !== 'romance' || !hasSpouse) {
+          partner.relTrack = opt.switchTrack;
+        }
+      }
+      if (opt.relPointsBonus) {
+        partner.relPoints += opt.relPointsBonus;
+      }
+      const tDelta = adjustPartnerTrust(state, partner, opt.trustDelta, Boolean(opt.unlockFragment));
+      if (opt.stats) {
+        for (const [k, v] of Object.entries(opt.stats) as [StatKey, number][]) {
+          state.stats[k] += v;
+        }
+      }
+      if (opt.leanings) {
+        for (const [k, v] of Object.entries(opt.leanings) as [LeaningKey, number][]) {
+          addLeaning(state, k, v);
+        }
+      }
+      clampStats(state);
+      pushLog(
+        state,
+        'bond',
+        `${opt.resultText} (${partner.name} Trust ${tDelta >= 0 ? `+${tDelta}` : tDelta} · now ${partner.trust}).`,
+        { title: scene.title },
+      );
+    }
+    queueDayDecision(war, 0.5);
+    return;
+  }
+
   // === WAR CROSSROADS DILEMMA ===
   if (decision.kind === 'war_crossroads') {
     const def = WAR_CROSSROADS.find((c) => c.id === decision.meta?.crossroadId);
@@ -1979,8 +2329,19 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       if (opt.allyTrustDelta && war.allyId) {
         modRel(war, war.allyId, 'player', { trust: opt.allyTrustDelta });
       }
+      let partnerReactionNote = '';
+      if (war.partner?.active && opt.reactions) {
+        const rawSum = war.partner.traits.reduce((acc, tr) => acc + (opt.reactions?.[tr] ?? 0), 0);
+        if (rawSum !== 0) {
+          const rawDelta = clamp(Math.round(rawSum * 1.5), -18, 15);
+          const actual = adjustPartnerTrust(state, war.partner, rawDelta);
+          if (actual !== 0) {
+            partnerReactionNote = ` ${war.partner.name} ${actual > 0 ? 'approves of your call' : 'disagrees with your call'} (Trust ${actual > 0 ? `+${actual}` : actual}).`;
+          }
+        }
+      }
       if (opt.squadTrustDelta && state.team) {
-        state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, opt.squadTrustDelta!));
+        state.team.members.forEach((m) => m.alive && m.id !== war.partner?.teamMemberId && adjustMemberTrust(state, m, opt.squadTrustDelta!));
       }
       if (opt.stats) {
         for (const [k, v] of Object.entries(opt.stats) as [StatKey, number][]) {
@@ -1993,7 +2354,7 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
         }
       }
       clampStats(state);
-      pushLog(state, 'war', opt.resultText);
+      pushLog(state, 'war', `${opt.resultText}${partnerReactionNote}`);
     }
     queueDayDecision(war, 0.55);
     return;
@@ -2018,17 +2379,27 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
         state.bodyStrain += 3;
         state.stats.will += 4;
         state.stats.bonds += 4;
+        const rx = applyResolvePartnerReaction(state, war, rng);
         recordWarFact(war, {
           type: 'resolve_burst',
           actorId: 'player',
           actorName: state.name,
           detail: 'Spent Resolve for an instant hostage rescue',
         });
-        pushLog(state, 'bond', 'In a single Body Flicker flash, you sever the ropes and vanish with the scout unharmed!');
+        pushLog(state, 'bond', `In a single Body Flicker flash, you sever the ropes and vanish with the scout unharmed!${rx.note}`);
       } else {
         state.stats.bonds -= 5;
         addLeaning(state, 'ruthless', 2);
-        pushLog(state, 'danger', 'You remain silent in the brush as dusk closes over the ridge.');
+        if (state.nindo === 'never_go_back' || state.nindo === 'protect_bonds') {
+          state.stats.will = Math.max(0, state.stats.will - 4);
+          pushLog(
+            state,
+            'danger',
+            'You betrayed your own Nindo, turning away as dusk closed over a captured comrade (-4 Will).',
+          );
+        } else {
+          pushLog(state, 'danger', 'You remain silent in the brush as dusk closes over the ridge.');
+        }
       }
       clampStats(state);
       queueDayDecision(war, 0.55);
@@ -2169,16 +2540,31 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
     } else if (optionId === 'day_outpost_bounty' && !war.bountyActive) {
       war.bountyActive = true;
       pushLog(state, 'war', 'You accept an outpost elimination bounty: your next rival takedown grants +1 Resolve.');
-    } else if (optionId === 'day_kizuna' && state.team) {
-      const ally = state.team.members.find((m) => m.alive && m.specialStatus !== 'missing_nin');
-      if (ally) {
-        adjustMemberTrust(state, ally, 5);
+    } else if (optionId === 'day_kizuna') {
+      if (war.partner?.active) {
+        const gained = adjustPartnerTrust(state, war.partner, rng.int(3, 5));
+        war.exposure = clamp(war.exposure + 3, 0, 100);
         war.hp = clamp(war.hp + 4, 0, 100);
         if (living.length > 0) {
-          const target = rng.pick(living);
+          const target = [...living].sort((a, b) => a.intel - b.intel)[0];
           addEnemyIntel(target, 14);
         }
-        pushLog(state, 'bond', `You meet ${ally.name} briefly behind a cedar ridge, trading supplies and sector notes (+4 HP, +14 Intel).`);
+        pushLog(
+          state,
+          'bond',
+          `You share a quiet daylight patrol and rations with ${war.partner.name} (Trust ${gained >= 0 ? `+${gained}` : gained}, +4 HP, +14 Intel, +3 Exposure).`,
+        );
+      } else if (state.team) {
+        const ally = state.team.members.find((m) => m.alive && m.specialStatus !== 'missing_nin');
+        if (ally) {
+          adjustMemberTrust(state, ally, 5);
+          war.hp = clamp(war.hp + 4, 0, 100);
+          if (living.length > 0) {
+            const target = rng.pick(living);
+            addEnemyIntel(target, 14);
+          }
+          pushLog(state, 'bond', `You meet ${ally.name} briefly behind a cedar ridge, trading supplies and sector notes (+4 HP, +14 Intel).`);
+        }
       }
     }
 
@@ -2222,6 +2608,27 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
       war.hp = clamp(war.hp + 7, 0, 100);
       war.cp = clamp(war.cp + 10, 0, 100);
       pushLog(state, 'war', 'You suppress your chakra signature completely and rest out of sight (+7 HP, +10 CP).');
+    } else if (optionId === 'night_talk_partner' && war.partner?.active) {
+      const prevFrags = war.partner.fragments;
+      const unlockFrag = rng.chance(0.7);
+      const gained = adjustPartnerTrust(state, war.partner, rng.int(4, 7), unlockFrag);
+      war.hp = clamp(war.hp + 3, 0, 100);
+      war.partner.hp = clamp(war.partner.hp + 6, 0, war.partner.maxHp);
+      const fragUnlocked = war.partner.fragments > prevFrags;
+      const fragNote =
+        fragUnlocked && war.partner.fragments === 1
+          ? ` Fragment 1/3 unlocked: ${war.partner.motive}`
+          : fragUnlocked && war.partner.fragments === 2
+            ? ` Fragment 2/3 unlocked: ${war.partner.originHint}`
+            : fragUnlocked
+              ? ` Fragment 3/3 unlocked: ${war.partner.name} speaks candidly about the burden they carry into this war.`
+              : '';
+      pushLog(
+        state,
+        'bond',
+        `You spend a quiet night watch talking beside ${war.partner.name} (Trust ${gained >= 0 ? `+${gained}` : gained}, +5 HP, +8 Partner HP).${fragNote}`,
+        { title: `Night Watch with ${war.partner.name}` },
+      );
     } else if (optionId === 'night_workshop') {
       state.stats.ryo = Math.max(0, state.stats.ryo - 4);
       war.workshop = clamp(war.workshop + 35, 0, 100);
@@ -2408,11 +2815,161 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
     return;
   }
 
+  // === WAR FINALE: WINNER'S WISH (K4) ===
+  if (decision.kind === 'war_finale_wish') {
+    const finaleOutcome = (decision.meta?.outcome === 'shared' ? 'shared' : 'victor') as 'victor' | 'shared';
+    const leader = kageTitle(state);
+    const partner = war.partner;
+
+    if (optionId === 'wish_peace') {
+      state.world.peaceAccordUntilAge = state.age + 12;
+      state.world.tension = 8;
+      state.stats.bonds += 6;
+      state.stats.will += 4;
+      pushLog(
+        state,
+        'milestone',
+        `Armistice Decree: You compel the five border commanders to ratify a Twelve-Year Peace Accord (War cooldown doubled).`,
+        { title: 'Winner’s Wish: Peace Accord' },
+      );
+      recordMemory(state, 'war', `Ratified a twelve-year Peace Accord after Great Shinobi War #${war.warNumber}.`);
+    } else if (optionId === 'wish_protect') {
+      state.stats.health += 10;
+      state.stats.bonds += 8;
+      state.stats.will += 6;
+      if (state.team) {
+        state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 8));
+      }
+      pushLog(
+        state,
+        'bond',
+        `Armistice Decree: War reparations go straight toward barrier towers, clinics, and pensions for the families of ${VILLAGE_MAP[state.villageId].name}.`,
+        { title: 'Winner’s Wish: Shield the Village' },
+      );
+    } else if (optionId === 'wish_kage') {
+      state.flags.kage_endorsed = true;
+      state.stats.will += 6;
+      state.stats.bonds += 5;
+      state.stats.ryo += 15;
+      pushLog(
+        state,
+        'milestone',
+        `Armistice Decree: The frontline elders formally endorse your name for future ${leader} succession.`,
+        { title: `Winner’s Wish: ${leader} Endorsement` },
+      );
+      recordMemory(state, 'promotion', `Won formal council endorsement for ${leader} after War #${war.warNumber}.`);
+    } else if (optionId === 'wish_vengeance') {
+      const target = war.enemies.find((e) => e.alive) ?? war.enemies[0];
+      state.world.vengeanceTargetId = target?.rosterId ?? null;
+      state.stats.chakra += 6;
+      state.stats.will += 6;
+      state.stats.ryo += 12;
+      pushLog(
+        state,
+        'war',
+        `Armistice Decree: You post an open bounty across the five borders, swearing unfinished blood debts will be settled.`,
+        { title: 'Winner’s Wish: Oath of Reckoning' },
+      );
+    } else if (optionId === 'wish_kinjutsu') {
+      state.stats.chakra += 12;
+      state.stats.intel += 6;
+      state.stats.health = Math.max(10, state.stats.health - 6);
+      if (state.disciplines.length > 0) {
+        const main = state.disciplines.find((d) => d.isMain) ?? state.disciplines[0];
+        main.xp += 15;
+      }
+      pushLog(
+        state,
+        'crisis',
+        `Armistice Decree: You claim a sealed Kinjutsu war scroll from the surrendered vault, burning forbidden insight into your coils.`,
+        { title: 'Winner’s Wish: Sealed War Vault' },
+      );
+    } else if (optionId === 'wish_dominion') {
+      state.stats.ryo += 25;
+      state.stats.chakra += 6;
+      state.stats.intel += 4;
+      addLeaning(state, 'ruthless', 1);
+      pushLog(
+        state,
+        'war',
+        `Armistice Decree: You strip the contested passes of every supply depot and silver chest before marching home.`,
+        { title: 'Winner’s Wish: Frontier Tribute' },
+      );
+    } else if (optionId === 'wish_partner_dream' && partner) {
+      partner.relPoints += 15;
+      adjustPartnerTrust(state, partner, 10, true);
+      state.stats.bonds += 5;
+      state.stats.will += 5;
+      pushLog(
+        state,
+        'bond',
+        `Armistice Decree: You spend your victory to honor ${partner.name}’s deepest wish (${partner.motive}).`,
+        { title: `Winner’s Wish: ${partner.name}’s Dream` },
+      );
+      recordMemory(state, 'war', `Granted ${partner.name}'s wish at the end of Great Shinobi War #${war.warNumber}.`);
+    } else if (optionId === 'wish_stay_with_me' && partner) {
+      partner.relPoints += 12;
+      adjustPartnerTrust(state, partner, 8, true);
+      state.permanentPartner = createPermanentPartnerFromWar(state, partner);
+      state.stats.bonds += 6;
+      pushLog(
+        state,
+        'bond',
+        `You ask for neither silver nor titles, only that ${partner.name} remain at your side beyond this war. ${partner.name} nods softly and clasps your hand: they will walk with you into every dawn ahead.`,
+        { title: `Permanent Partner: ${partner.name}` },
+      );
+      recordMemory(state, 'war', `Asked ${partner.name} to remain permanently beside you after War #${war.warNumber}.`);
+    }
+
+    clampStats(state);
+    concludeWar(state, rng, finaleOutcome, true);
+    return;
+  }
+
+  // === PARTNER DOWNED CHOICE (K1) ===
+  if (decision.kind === 'war_partner_down') {
+    const wasDefense = Boolean(decision.meta?.wasDefense);
+    const startedInDay = Boolean(decision.meta?.startedInDay);
+    if (optionId === 'partner_withdraw') {
+      pushLog(
+        state,
+        'bond',
+        `You shoulder ${war.partner?.name ?? 'your fallen partner'} out of the smoking ravine, withdrawing from War #${war.warNumber} rather than leaving them behind.`,
+        { title: 'Withdrew to Carry Fallen Partner' },
+      );
+      concludeWar(state, rng, 'withdrew', true);
+      return;
+    }
+    pushLog(
+      state,
+      'war',
+      `With ${war.partner?.name ?? 'your partner'} out of the fight, you tighten your headband and resolve to see the rest of War #${war.warNumber} through alone.`,
+    );
+    if (startedInDay) {
+      war.subPhase = 'day';
+      queueNightDecision(war);
+    } else if (wasDefense) {
+      war.subPhase = 'night';
+      war.beatQueue = [];
+      war.beatClock = 0;
+      enqueueWarBeat(war, {
+        kind: 'dawn_tick',
+        delay: Number((baseWarGap(war) * 0.75).toFixed(2)),
+        label: 'Securing the battered perimeter until first light...',
+        timeOfDay: 'dawn',
+      });
+    } else {
+      war.subPhase = 'night';
+      queueNightSequence(war);
+    }
+    return;
+  }
+
   // === BATTLE ROUND ===
   if (decision.kind === 'war_battle_round') {
     const battle = war.activeBattle!;
     const enemy = war.enemies.find((e) => e.id === battle.enemyId)!;
-    const { status, summary } = resolveBattleRound(state, optionId, rng);
+    const { status, summary } = resolveBattleRound(state, optionId, rng, odAction);
 
     pushLog(
       state,
@@ -2482,6 +3039,41 @@ export function handleWarDecision(state: GameState, optionId: string, rng: Seede
     const wasDefense = battle.isDefense;
     const startedInDay = battle.startedInPhase === 'day';
     war.activeBattle = null;
+
+    if (war.partner && !war.partner.active && !war.partner.defected && !war.partner.downHandled) {
+      war.partner.downHandled = true;
+      state.pending = {
+        id: `war_partner_down_${war.warNumber}_${war.day}`,
+        kind: 'war_partner_down',
+        eventId: 'war_partner_down',
+        title: war.partner.died
+          ? `Partner Fallen: ${war.partner.name}`
+          : `Partner Incapacitated: ${war.partner.name}`,
+        body: war.partner.died
+          ? `${war.partner.name} gave their life shielding you from the enemy's strike. The valley still burns around you.`
+          : `${war.partner.name} took grievous wounds intercepting blows meant for you and cannot continue fighting. What will you do?`,
+        manual: true,
+        meta: { wasDefense, startedInDay },
+        options: [
+          {
+            id: 'partner_continue_solo',
+            label: 'Continue the war solo without a partner',
+            sublabel: 'Stay in the sector and finish the campaign alone.',
+            statHints: ['Will'],
+            autoEligible: true,
+          },
+          {
+            id: 'partner_withdraw',
+            label: `Withdraw from War #${war.warNumber} to evacuate ${war.partner.name}`,
+            sublabel: 'Ends the war immediately (Outcome: Withdrew) and preserves your own life.',
+            statHints: ['Bonds'],
+            autoEligible: false,
+          },
+        ],
+      };
+      return;
+    }
+
     if (startedInDay) {
       war.subPhase = 'day';
       queueNightDecision(war);

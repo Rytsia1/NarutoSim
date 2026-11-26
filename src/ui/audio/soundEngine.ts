@@ -3,19 +3,49 @@ import type { UserSettings } from '../settings';
 export type AudioScene = 'lobby' | 'life' | 'war' | 'crisis' | 'epilogue';
 export type SfxKind = 'click' | 'milestone' | 'clash' | 'resolve' | 'bloodline' | 'achievement' | 'death';
 
-// Traditional Japanese Hirajoshi / In-sen pentatonic frequencies (Hz)
+// Traditional Japanese Yo (warm) and In-sen (tense/tragic) pentatonic scales (Hz)
 const SCENE_SCALES: Record<AudioScene, readonly number[]> = {
-  lobby: [146.83, 164.81, 196.0, 220.0, 261.63, 293.66], // D minor pentatonic calm
-  life: [196.0, 220.0, 246.94, 293.66, 329.63, 392.0], // G pentatonic warm
-  war: [110.0, 116.54, 146.83, 164.81, 174.61, 220.0], // A In-sen tense
-  crisis: [98.0, 103.83, 130.81, 146.83, 155.56, 196.0], // G dark phrygian/In-sen
-  epilogue: [130.81, 146.83, 164.81, 196.0, 220.0, 261.63], // C reflective
+  lobby: [293.66, 329.63, 392.0, 440.0, 523.25, 587.33], // D Yo pentatonic (serene night village)
+  life: [261.63, 293.66, 349.23, 392.0, 440.0, 523.25], // C Yo pentatonic (warm daytime)
+  war: [220.0, 233.08, 293.66, 329.63, 392.0, 440.0], // A In-sen (urgent shinobi front)
+  crisis: [196.0, 207.65, 261.63, 293.66, 349.23, 392.0], // G In-sen (ominous crisis)
+  epilogue: [246.94, 261.63, 329.63, 369.99, 440.0, 493.88], // B In-sen reflective
+};
+
+// Short melodic motifs (indices into SCENE_SCALES, -1 = rest)
+const SCENE_PHRASES: Record<AudioScene, readonly (readonly number[])[]> = {
+  lobby: [
+    [0, 2, 3, -1, 2, 0],
+    [3, 4, 2, -1, 1, 0],
+    [2, 3, 5, 4, 3, -1],
+  ],
+  life: [
+    [0, 1, 3, 2, -1, 0],
+    [2, 3, 4, 3, 1, -1],
+    [3, 5, 4, 2, 1, 0],
+  ],
+  war: [
+    [0, 1, 0, 2, 3, 1],
+    [3, 2, 1, 0, 2, 0],
+    [0, 2, 4, 3, 1, 0],
+  ],
+  crisis: [
+    [0, 1, 3, 1, 0, 1],
+    [4, 3, 1, 0, 1, 0],
+    [0, 1, 2, 4, 1, 0],
+  ],
+  epilogue: [
+    [0, 2, 3, -1, 1, 0],
+    [3, 2, 1, 0, -1, 0],
+    [2, 4, 3, 2, 1, -1],
+  ],
 };
 
 class ProceduralSoundEngine {
   private ctx: AudioContext | null = null;
   private bgmGain: GainNode | null = null;
   private sfxGain: GainNode | null = null;
+  private noiseBuffer: AudioBuffer | null = null;
   private scene: AudioScene = 'lobby';
   private settings: UserSettings = {
     soundEnabled: true,
@@ -25,7 +55,7 @@ class ProceduralSoundEngine {
     lobbyAnimationEnabled: true,
   };
   private timerId: number | null = null;
-  private stepIndex = 0;
+  private phraseIndex = 0;
   private tabId = `tab_${Math.random().toString(36).slice(2)}`;
   private channel: BroadcastChannel | null = null;
   private ownsAudio = true;
@@ -70,6 +100,7 @@ class ProceduralSoundEngine {
       this.sfxGain = this.ctx.createGain();
       this.bgmGain.connect(this.ctx.destination);
       this.sfxGain.connect(this.ctx.destination);
+      this.noiseBuffer = this.buildNoiseBuffer(this.ctx);
       this.updateGains();
     }
     if (this.ctx.state === 'suspended') {
@@ -77,6 +108,16 @@ class ProceduralSoundEngine {
     }
     this.claimActiveTab();
     return this.ctx;
+  }
+
+  private buildNoiseBuffer(ctx: AudioContext): AudioBuffer {
+    const len = Math.floor(ctx.sampleRate * 1.2);
+    const buf = ctx.createBuffer(1, len, ctx.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      data[i] = Math.random() * 2 - 1;
+    }
+    return buf;
   }
 
   private claimActiveTab(): void {
@@ -96,7 +137,6 @@ class ProceduralSoundEngine {
       this.stopLoop();
       return;
     }
-    // If user previously interacted while muted and now unmutes, bootstrap AudioContext + BGM immediately!
     if (this.userHasInteracted) {
       this.ensureContext();
       this.startLoop();
@@ -108,17 +148,12 @@ class ProceduralSoundEngine {
     if (!this.ctx || !this.bgmGain || !this.sfxGain) return;
     const active = this.settings.soundEnabled && this.ownsAudio;
     const now = this.ctx.currentTime;
-    // Cancel any scheduled duckBgm restoration ramps so muting always holds cleanly
     this.bgmGain.gain.cancelScheduledValues(now);
     this.sfxGain.gain.cancelScheduledValues(now);
     this.bgmGain.gain.setTargetAtTime(active ? this.settings.bgmVolume * 0.28 : 0, now, 0.1);
     this.sfxGain.gain.setTargetAtTime(active ? this.settings.sfxVolume * 0.55 : 0, now, 0.05);
   }
 
-  /**
-   * Called on user interaction: records gesture permission, re-claims multi-tab audio focus,
-   * and starts BGM if enabled.
-   */
   unlock(): void {
     this.userHasInteracted = true;
     if (!this.settings.soundEnabled) return;
@@ -131,31 +166,51 @@ class ProceduralSoundEngine {
   setScene(scene: AudioScene): void {
     if (this.scene === scene) return;
     this.scene = scene;
-    this.stepIndex = 0;
+    this.phraseIndex = 0;
   }
 
+  /**
+   * Plays a multi-note Japanese pentatonic phrase using a procedural shakuhachi flute
+   * (sine + subtle vibrato LFO + bandpass-filtered breath noise) and taiko drums during war.
+   */
   private startLoop(): void {
     if (this.timerId !== null || typeof window === 'undefined') return;
     if (typeof document !== 'undefined' && document.hidden) return;
-    const tick = () => {
+
+    const schedulePhrase = () => {
       if (!this.settings.soundEnabled || !this.ownsAudio || !this.ctx || !this.bgmGain) return;
       if (this.ctx.state !== 'running') return;
 
       const scale = SCENE_SCALES[this.scene];
-      const now = this.ctx.currentTime;
+      const phrases = SCENE_PHRASES[this.scene];
+      const motif = phrases[this.phraseIndex % phrases.length];
       const isWar = this.scene === 'war' || this.scene === 'crisis';
+      const stepSec = isWar ? 0.34 : 0.48;
+      const now = this.ctx.currentTime;
 
-      const freq = scale[(this.stepIndex * 2 + (this.stepIndex % 3)) % scale.length];
-      this.playTone(freq, isWar ? 'triangle' : 'sine', now, isWar ? 0.55 : 1.15, 0.4, this.bgmGain);
+      // Grounding shamisen/koto low drone on beat 0
+      this.playTone(scale[0] * 0.5, 'triangle', now, stepSec * motif.length * 0.9, 0.2, this.bgmGain);
 
-      if (isWar && this.stepIndex % 2 === 0) {
-        this.playDrum(now, this.scene === 'crisis' ? 68 : 82, 0.28, this.bgmGain);
-      }
+      motif.forEach((noteIdx, i) => {
+        const t0 = now + i * stepSec;
+        if (noteIdx >= 0) {
+          const freq = scale[noteIdx % scale.length];
+          if (isWar) {
+            this.playShakuhachi(freq, t0, stepSec * 0.9, 0.32, this.bgmGain!);
+          } else {
+            this.playShakuhachi(freq, t0, stepSec * 1.25, 0.26, this.bgmGain!);
+          }
+        }
+        if (isWar && (i % 2 === 0 || (this.scene === 'crisis' && i === 5))) {
+          this.playDrum(t0, this.scene === 'crisis' ? 68 : 84, 0.24, this.bgmGain!);
+        }
+      });
 
-      this.stepIndex += 1;
+      this.phraseIndex += 1;
     };
 
-    this.timerId = window.setInterval(tick, 950);
+    schedulePhrase();
+    this.timerId = window.setInterval(schedulePhrase, 2850);
   }
 
   private stopLoop(): void {
@@ -163,6 +218,74 @@ class ProceduralSoundEngine {
       window.clearInterval(this.timerId);
       this.timerId = null;
     }
+  }
+
+  private playShakuhachi(
+    freq: number,
+    startTime: number,
+    duration: number,
+    peak: number,
+    dest: AudioNode,
+  ): void {
+    if (!this.ctx) return;
+    const osc = this.ctx.createOscillator();
+    const lfo = this.ctx.createOscillator();
+    const lfoGain = this.ctx.createGain();
+    const env = this.ctx.createGain();
+
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(freq, startTime);
+
+    // Gentle 5.2Hz vibrato for bamboo flute warmth
+    lfo.type = 'sine';
+    lfo.frequency.setValueAtTime(5.2, startTime);
+    lfoGain.gain.setValueAtTime(freq * 0.008, startTime);
+    lfo.connect(lfoGain);
+    lfoGain.connect(osc.frequency);
+
+    env.gain.setValueAtTime(0.0001, startTime);
+    env.gain.exponentialRampToValueAtTime(Math.max(0.001, peak), startTime + 0.06);
+    env.gain.exponentialRampToValueAtTime(Math.max(0.001, peak * 0.7), startTime + duration * 0.65);
+    env.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
+
+    osc.connect(env);
+    env.connect(dest);
+
+    // Filtered breath noise layer
+    let noiseSrc: AudioBufferSourceNode | null = null;
+    let noiseFilter: BiquadFilterNode | null = null;
+    let noiseGain: GainNode | null = null;
+    if (this.noiseBuffer) {
+      noiseSrc = this.ctx.createBufferSource();
+      noiseSrc.buffer = this.noiseBuffer;
+      noiseFilter = this.ctx.createBiquadFilter();
+      noiseFilter.type = 'bandpass';
+      noiseFilter.frequency.setValueAtTime(freq * 2.2, startTime);
+      noiseFilter.Q.setValueAtTime(5.5, startTime);
+      noiseGain = this.ctx.createGain();
+      noiseGain.gain.setValueAtTime(0.0001, startTime);
+      noiseGain.gain.exponentialRampToValueAtTime(peak * 0.14, startTime + 0.05);
+      noiseGain.gain.exponentialRampToValueAtTime(0.0001, startTime + duration * 0.9);
+      noiseSrc.connect(noiseFilter);
+      noiseFilter.connect(noiseGain);
+      noiseGain.connect(dest);
+      noiseSrc.start(startTime);
+      noiseSrc.stop(startTime + duration + 0.03);
+    }
+
+    osc.onended = () => {
+      osc.disconnect();
+      lfo.disconnect();
+      lfoGain.disconnect();
+      env.disconnect();
+      noiseSrc?.disconnect();
+      noiseFilter?.disconnect();
+      noiseGain?.disconnect();
+    };
+    lfo.start(startTime);
+    osc.start(startTime);
+    lfo.stop(startTime + duration + 0.04);
+    osc.stop(startTime + duration + 0.04);
   }
 
   private playTone(
@@ -201,7 +324,7 @@ class ProceduralSoundEngine {
     osc.frequency.setValueAtTime(startFreq, startTime);
     osc.frequency.exponentialRampToValueAtTime(32, startTime + duration);
 
-    env.gain.setValueAtTime(0.55, startTime);
+    env.gain.setValueAtTime(0.5, startTime);
     env.gain.exponentialRampToValueAtTime(0.0001, startTime + duration);
 
     osc.connect(env);
