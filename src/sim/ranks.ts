@@ -1,3 +1,4 @@
+import { VILLAGE_MAP } from '../data/villages';
 import { computeCombatProjection } from './powers';
 import type { SeededRng } from './rng';
 import type { ChuninExamStage, GameState, PendingDecision, ShinobiRank } from './types';
@@ -57,14 +58,21 @@ export function canTakeGraduationExam(state: GameState): boolean {
 
 export function buildGraduationExamDecision(state: GameState): PendingDecision {
   const isEarly = state.age < 12;
+  const vDef = VILLAGE_MAP[state.villageId];
+  const bloodyMist = Boolean(state.worldSim?.villages[state.villageId]?.academy.bloodyMistActive ?? vDef.institutions.bloodlineSuspicion);
+  const doctrineBody = bloodyMist
+    ? `Under ${vDef.name}'s brutal ${vDef.institutions.academyLabel}, examiners test lethal composure in a fog-shrouded proving ring. Passing is harder, yet survivors forge iron Will.`
+    : `Three senior instructors of the ${vDef.institutions.academyLabel} sit behind a desk lined with metal forehead protectors. You must demonstrate Clone control, target precision, and composure under pressure.`;
   return {
     id: `grad_exam_${state.age}`,
     kind: 'graduation_exam',
     eventId: 'graduation_exam',
-    title: isEarly ? 'Early Academy Graduation Trial' : 'Shinobi Academy Graduation Exam',
+    title: isEarly
+      ? `Early Trial: ${vDef.institutions.academyLabel}`
+      : `${vDef.institutions.academyLabel} Graduation Exam`,
     body: isEarly
-      ? 'Instructors have flagged your unusually sharp progress. You may sit the Graduation Exam early to claim your forehead protector ahead of your peers.'
-      : 'Three senior instructors sit behind a desk lined with metal forehead protectors. You must demonstrate Clone control, target precision, and composure under pressure.',
+      ? `Instructors at ${vDef.institutions.academyLabel} have flagged your unusually sharp progress. You may sit the Graduation Exam early to claim your forehead protector ahead of your peers.`
+      : doctrineBody,
     manual: true,
     options: [
       {

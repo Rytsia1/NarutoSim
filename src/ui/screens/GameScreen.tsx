@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { CLAN_MAP } from '../../data/clans';
 import { t } from '../../data/i18n';
 import { NINDO_MAP } from '../../data/nindo';
 import { ORIGIN_MAP } from '../../data/origins';
@@ -19,6 +20,7 @@ import { getRelStageLabel, getTrustTier } from '../../sim/team';
 import type { FocusId, GameState } from '../../sim/types';
 import { canCallDiplomaticSummit, getTensionLabel, MAX_CRISIS_CLUES } from '../../sim/world';
 import { DecisionDialog } from '../components/DecisionDialog';
+import { WorldSimulationPanel } from '../components/WorldSimulationPanel';
 
 interface GameScreenProps {
   state: GameState;
@@ -55,7 +57,7 @@ export function GameScreen({
   onOpenSettings,
   onBackToLobby,
 }: GameScreenProps) {
-  const [tab, setTab] = useState<'status' | 'squad' | 'wars'>('status');
+  const [tab, setTab] = useState<'status' | 'squad' | 'world' | 'wars'>('status');
   const logFeedRef = useRef<HTMLDivElement | null>(null);
   const nearTopRef = useRef(true);
 
@@ -238,7 +240,7 @@ export function GameScreen({
         </section>
 
         <aside className="side-column" aria-label="Shinobi Dossier">
-          <div className="tab-strip" role="tablist" aria-label="Dossier Sections">
+          <div className="tab-strip tab-strip-4" role="tablist" aria-label="Dossier Sections">
             <button
               type="button"
               role="tab"
@@ -246,7 +248,7 @@ export function GameScreen({
               className="tab-btn"
               onClick={() => setTab('status')}
             >
-              Status & Build
+              Status
             </button>
             <button
               type="button"
@@ -255,7 +257,16 @@ export function GameScreen({
               className="tab-btn"
               onClick={() => setTab('squad')}
             >
-              Squad & Kizuna
+              Squad
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'world'}
+              className="tab-btn"
+              onClick={() => setTab('world')}
+            >
+              World
             </button>
             <button
               type="button"
@@ -273,12 +284,19 @@ export function GameScreen({
               <section className="panel">
                 <h2 className="panel-title">Core Attributes</h2>
                 <div className="history-sub" style={{ marginBottom: 10 }}>
-                  {origin.name} | Element:{' '}
+                  {origin.name}
+                  {state.clanId && CLAN_MAP[state.clanId] ? ` | ${CLAN_MAP[state.clanId].name}` : ''} | Element:{' '}
                   <span className="kanji-glyph">{ELEMENT_KANJI[state.element]}</span> {ELEMENT_NAMES[state.element]} |
                   Capacity Tier {state.capacity}/5
                   {state.hasClanLegacy ? ' | Clan Hiden Inherited' : ''}
                   <br />
                   Village Trait ({village.name}): {village.perk.label}
+                  {state.clanId && CLAN_MAP[state.clanId] && (
+                    <>
+                      <br />
+                      Clan Trait ({CLAN_MAP[state.clanId].name}): {CLAN_MAP[state.clanId].yearlyBonus.label}
+                    </>
+                  )}
                 </div>
                 <div className="stat-list tabular">
                   <div className="stat-row">
@@ -608,6 +626,8 @@ export function GameScreen({
               </div>
             </section>
           )}
+
+          {tab === 'world' && <WorldSimulationPanel state={state} />}
 
           {tab === 'wars' && (
             <section className="panel">

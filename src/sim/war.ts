@@ -36,6 +36,7 @@ import {
 } from './crises';
 import { addLeaning, clampStats, killCharacter, pushLog, recordMemory } from './life';
 import { generateWarChronicle, recordWarFact } from './narrative';
+import { applyPlayerActionToWorldSim } from './world-sim';
 import {
   adjustPartnerTrust,
   applyResolvePartnerReaction,
@@ -2010,6 +2011,9 @@ export function concludeWar(
   state.world.lastWarAge = state.age;
   state.world.tension = state.world.truePeace ? 5 : rng.int(10, 24);
   state.world.omenActive = false;
+  if (state.worldSim) {
+    applyPlayerActionToWorldSim(state, { type: 'war_ended', outcome });
+  }
 
   pushLog(
     state,

@@ -1927,8 +1927,68 @@ dialog.battle-dialog::backdrop {
   gap: 2px;
 }
 
+/* Autonomous World & 9-Component NPC Dossier Modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 85;
+  background: rgba(8, 7, 10, 0.78);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.modal-card.npc-dossier-modal {
+  width: min(720px, 100%);
+  max-height: 88dvh;
+  overflow-y: auto;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  padding: 18px 20px;
+  box-shadow: 0 22px 54px rgba(0, 0, 0, 0.78);
+}
+
+.npc-dossier-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.npc-card-btn {
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease;
+}
+
+.npc-card-btn:hover {
+  border-color: var(--accent-gold);
+  background: var(--bg-elevated);
+}
+
+.npc-card-btn.fallen {
+  opacity: 0.72;
+}
+
+.npc-list-scroll {
+  max-height: 52dvh;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.npc-memory-list {
+  max-height: 190px;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
 /* Mobile Responsive */
 @media (max-width: 860px) {
+  .npc-dossier-grid {
+    grid-template-columns: 1fr;
+  }
   .tab-strip-4 {
     grid-template-columns: repeat(2, 1fr);
   }

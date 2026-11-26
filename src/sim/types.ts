@@ -79,6 +79,7 @@ export interface CustomBuildConfig {
   mode: 'points' | 'free';
   originId: OriginId;
   villageId: VillageId;
+  clanId?: string;
   sex: 'M' | 'F';
   name: string;
   capacity: 1 | 2 | 3 | 4 | 5;
@@ -560,6 +561,260 @@ export interface WorldState {
   crisisClues: number;
 }
 
+// ============================================================
+// AUTONOMOUS 3-LAYER WORLD SIMULATION TYPES
+// ============================================================
+
+export type DiplomacyStatus = 'allied' | 'treaty' | 'neutral' | 'strained' | 'hostile' | 'at_war';
+export type VillagePolicy = 'diplomatic' | 'defensive' | 'expansionist' | 'isolationist' | 'shadow_ops';
+export type AcademyDoctrine = 'teamwork' | 'bloody_mist' | 'thunder_drills' | 'austerity_craft' | 'fortress_stone';
+export type DaimyoStance = 'generous' | 'balanced' | 'austerity' | 'hawkish';
+export type ShadowAgenda = 'stabilize' | 'sabotage_rival' | 'coup_watch' | 'bloodline_hunt';
+export type ClanStatus = 'thriving' | 'strained' | 'declining' | 'exiled';
+export type EconomyTrend = 'boom' | 'stable' | 'slump' | 'crisis';
+export type DisasterKind = 'drought' | 'plague' | 'famine' | 'quake' | 'storm' | 'syndicate_raid';
+
+export interface DiplomacyEdge {
+  a: VillageId;
+  b: VillageId;
+  score: number; // -100..100
+  status: DiplomacyStatus;
+  lastChangedYear: number;
+}
+
+export interface WorldTerritory {
+  id: string;
+  name: string;
+  controller: VillageId;
+  contestedBy: VillageId | null;
+  wealth: number; // 1..10
+  strategicValue: number; // 1..10
+  flashpoint: number; // 0..100
+}
+
+export interface WorldDisaster {
+  id: string;
+  kind: DisasterKind;
+  title: string;
+  villageId: VillageId;
+  severity: number; // 1..3
+  yearsLeft: number;
+}
+
+export interface VillageClanState {
+  clanId: string;
+  power: number; // 0..100
+  loyalty: number; // 0..100
+  reputation: number; // 0..100
+  status: ClanStatus;
+  headNpcId: string | null;
+}
+
+export interface VillageSimState {
+  villageId: VillageId;
+  kageNpcId: string | null; // WorldNpc id or 'player'
+  daimyo: {
+    funding: number; // 0..100
+    favor: number; // 0..100
+    stance: DaimyoStance;
+  };
+  anbu: {
+    strength: number; // 0..100
+    readiness: number; // 0..100
+    activeOp: string | null;
+  };
+  shadowOrg: {
+    name: string;
+    influence: number; // 0..100
+    secrecy: number; // 0..100
+    agenda: ShadowAgenda;
+  };
+  academy: {
+    quality: number; // 0..100
+    doctrine: AcademyDoctrine;
+    bloodyMistActive: boolean;
+  };
+  hospital: {
+    capacity: number; // 0..100
+    readiness: number; // 0..100
+  };
+  clans: VillageClanState[];
+  treasury: number; // 0..100
+  military: number; // 0..100
+  morale: number; // 0..100
+  stability: number; // 0..100
+  policy: VillagePolicy;
+}
+
+export interface NpcPersonality {
+  loyal: number; // 0..100
+  ambitious: number; // 0..100
+  cautious: number; // 0..100
+  cruel: number; // 0..100
+  compassionate: number; // 0..100
+}
+
+export type NpcMotivation =
+  | 'protect_village'
+  | 'attain_kage'
+  | 'restore_clan'
+  | 'seek_power'
+  | 'avenge_loss'
+  | 'peace_reformer'
+  | 'shadow_control'
+  | 'wanderer_freedom';
+
+export type NpcSchedule =
+  | 'academy_drills'
+  | 'training_ground'
+  | 'border_patrol'
+  | 'anbu_covert'
+  | 'hospital_ward'
+  | 'clan_council'
+  | 'diplomatic_envoy'
+  | 'kage_office'
+  | 'forbidden_research'
+  | 'wandering_exile';
+
+export type NpcRelationKind =
+  | 'family'
+  | 'spouse'
+  | 'mentor'
+  | 'student'
+  | 'friend'
+  | 'rival'
+  | 'enemy'
+  | 'ally';
+
+export interface NpcRelationship {
+  targetId: string; // WorldNpc id or 'player'
+  targetName: string;
+  kind: NpcRelationKind;
+  affinity: number; // -100..100
+  trust: number; // 0..100
+  grudge: number; // 0..100
+}
+
+export type NpcMemoryTag =
+  | 'exam'
+  | 'promotion'
+  | 'marriage'
+  | 'loss'
+  | 'betrayal'
+  | 'war'
+  | 'defection'
+  | 'politics'
+  | 'secret'
+  | 'bond';
+
+export interface NpcMemory {
+  year: number;
+  age: number;
+  tag: NpcMemoryTag;
+  summary: string;
+  actorId?: string;
+  impact: number; // -10..10
+}
+
+export type NpcKnowledgeTopic =
+  | 'root_plot'
+  | 'clan_unrest'
+  | 'missing_nin_loc'
+  | 'kage_health'
+  | 'border_raid'
+  | 'bloodline_purge'
+  | 'crisis_intel';
+
+export interface NpcKnowledge {
+  id: string;
+  topic: NpcKnowledgeTopic;
+  detail: string;
+  secret: boolean;
+  learnedYear: number;
+  subjectId?: string;
+}
+
+export type NpcGoalType =
+  | 'pass_chunin'
+  | 'reach_jonin'
+  | 'seek_kage'
+  | 'marry_partner'
+  | 'avenge_loss'
+  | 'defect_village'
+  | 'hunt_missing_nin'
+  | 'broker_peace'
+  | 'protect_clan'
+  | 'shadow_scheme'
+  | 'master_art';
+
+export interface NpcGoal {
+  type: NpcGoalType;
+  label: string;
+  targetId?: string;
+  progress: number; // 0..100
+  startedAge: number;
+}
+
+export interface WorldNpcIdentity {
+  id: string;
+  name: string;
+  sex: 'M' | 'F';
+  age: number;
+  villageId: VillageId;
+  homeVillageId: VillageId;
+  clanId: string | null;
+  rank: ShinobiRank;
+  specialStatus: SpecialStatus;
+  roleTitle: string;
+  element: ChakraElement;
+  specialty: string;
+  powerScore: number;
+  alive: boolean;
+  deathAge?: number;
+  deathCause?: string;
+  linkedTeamMemberId?: string;
+  linkedRosterId?: string;
+}
+
+export interface WorldNpc {
+  identity: WorldNpcIdentity;
+  personality: NpcPersonality;
+  motivation: NpcMotivation;
+  nindo: {
+    id: NindoId;
+    maxim: string;
+  };
+  relationships: Record<string, NpcRelationship>;
+  memory: NpcMemory[];
+  schedule: NpcSchedule;
+  knowledge: NpcKnowledge[];
+  currentGoal: NpcGoal;
+}
+
+export interface WorldHistoryEntry {
+  id: string;
+  year: number;
+  layer: 'world' | 'village' | 'npc';
+  title: string;
+  summary: string;
+  villageId?: VillageId;
+  npcId?: string;
+  tone: 'normal' | 'milestone' | 'danger' | 'bond' | 'war' | 'crisis';
+}
+
+export interface WorldSimState {
+  economy: number; // 0..100
+  economyTrend: EconomyTrend;
+  diplomacy: Record<string, DiplomacyEdge>;
+  territories: WorldTerritory[];
+  activeDisasters: WorldDisaster[];
+  villages: Record<VillageId, VillageSimState>;
+  npcs: WorldNpc[];
+  history: WorldHistoryEntry[];
+  nextNpcSeq: number;
+  lastEmergentAge: number;
+}
+
 export interface StatDeltaChip {
   stat: StatKey | 'trust' | 'tension' | 'clues';
   label: string;
@@ -611,6 +866,7 @@ export type DecisionKind =
   | 'team_event'
   | 'mission_board'
   | 'mission_event'
+  | 'world_emergent'
   | 'crisis_whisper'
   | 'war_prelude'
   | 'war_day'
@@ -706,6 +962,7 @@ export interface GameState {
   sex: 'M' | 'F';
   originId: OriginId;
   villageId: VillageId;
+  clanId?: string | null;
   capacity: 1 | 2 | 3 | 4 | 5;
   element: ChakraElement;
 
@@ -739,6 +996,7 @@ export interface GameState {
   memories?: ShinobiMemory[];
   missions: MissionRecord;
   world: WorldState;
+  worldSim?: WorldSimState;
   war: WarState | null;
   warHistory: WarSummary[];
   fallenRosterIds: string[];

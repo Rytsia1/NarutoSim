@@ -6,6 +6,7 @@ import { advanceYear, createNewLife, finalizeLifeRecord, pushLog, resolvePending
 import { SeededRng } from './rng';
 import type { FocusId, GameState, LifeRecord, OdActionId, ScenarioConfig } from './types';
 import { canCallDiplomaticSummit, runDiplomaticSummit } from './world';
+import { ensureWorldSimDefaults } from './world-sim';
 import {
   advanceWarBeat,
   ensureWarClockDefaults,
@@ -46,6 +47,7 @@ export class ShinobiSim {
 
   load(snapshot: GameState): GameState {
     this.state = structuredClone(snapshot);
+    ensureWorldSimDefaults(this.state);
     if (this.state.war) {
       ensureWarClockDefaults(this.state.war);
     }

@@ -1,0 +1,225 @@
+import { useEffect } from 'react';
+import { CLAN_MAP } from '../../data/clans';
+import { t } from '../../data/i18n';
+import { DISCIPLINE_MAP, ELEMENT_NAMES } from '../../data/powers';
+import { VILLAGE_MAP } from '../../data/villages';
+import {
+  getMotivationLabel,
+  getPrimaryPersonalityTags,
+  getScheduleLabel,
+} from '../../sim/npc-sim';
+import type { WorldNpc } from '../../sim/types';
+
+interface NpcDossierModalProps {
+  npc: WorldNpc | null;
+  onClose: () => void;
+  onSelectNpcId?: (npcId: string) => void;
+}
+
+export function NpcDossierModal({ npc, onClose, onSelectNpcId }: NpcDossierModalProps) {
+  useEffect(() => {
+    if (!npc) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [npc, onClose]);
+
+  if (!npc) return null;
+
+  const { identity, personality, motivation, nindo, relationships, memory, schedule, knowledge, currentGoal } = npc;
+  const village = VILLAGE_MAP[identity.villageId];
+  const homeVillage = VILLAGE_MAP[identity.homeVillageId];
+  const clan = identity.clanId ? CLAN_MAP[identity.clanId] : null;
+  const primaryTags = getPrimaryPersonalityTags(personality);
+  const relList = Object.values(relationships);
+  const newestMemories = [...memory].reverse();
+
+  const personalityRows: { label: string; value: number }[] = [
+    { label: 'Loyal', value: personality.loyal },
+    { label: 'Ambitious', value: personality.ambitious },
+    { label: 'Cautious', value: personality.cautious },
+    { label: 'Cruel', value: personality.cruel },
+    { label: 'Compassionate', value: personality.compassionate },
+  ];
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="modal-card npc-dossier-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="npc-dossier-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="disc-head" style={{ marginBottom: 8 }}>
+          <div>
+            <h2 id="npc-dossier-title" className="panel-title" style={{ margin: 0 }}>
+              {identity.name}
+            </h2>
+            <div className="disc-sub tabular">
+              {identity.roleTitle} | {village.name}
+              {identity.homeVillageId !== identity.villageId ? ` (Origin: ${homeVillage.name})` : ''}
+              {clan ? ` | ${clan.name}` : ''}
+            </div>
+          </div>
+          <button type="button" className="btn btn-sm btn-ghost" onClick={onClose}>
+            Close
+          </button>
+        </div>
+
+        {/* 1. IDENTITY */}
+        <div className="chip-row tabular" style={{ marginBottom: 12 }}>
+          <span className={`chip ${!identity.alive ? 'neg' : identity.specialStatus === 'missing_nin' ? 'neg' : 'pos'}`}>
+            {!identity.alive
+              ? `Fallen (Age ${identity.deathAge ?? identity.age})`
+              : identity.specialStatus === 'missing_nin'
+                ? 'Missing-Nin'
+                : identity.specialStatus === 'kage'
+                  ? village.kageTitle
+                  : identity.specialStatus === 'anbu'
+                    ? 'ANBU / Shadow'
+                    : t(`rank.${identity.rank}`)}
+          </span>
+          <span className="chip">Age {identity.age}</span>
+          <span className="chip">Power {identity.powerScore}</span>
+          <span className="chip">{ELEMENT_NAMES[identity.element]}</span>
+          <span className="chip">{DISCIPLINE_MAP[identity.specialty]?.name ?? identity.specialty}</span>
+          {primaryTags.map((tag) => (
+            <span key={tag} className="chip">
+              {tag}
+            </span>
+          ))}
+        </div>
+
+        {!identity.alive && identity.deathCause && (
+          <div className="disc-item" style={{ marginBottom: 10, borderColor: 'var(--accent-crimson)' }}>
+            <div className="disc-sub">Cause of Death: {identity.deathCause}</div>
+          </div>
+        )}
+
+        <div className="npc-dossier-grid">
+          {/* 2. PERSONALITY */}
+          <section className="disc-item">
+            <div className="disc-head">
+              <span>Personality</span>
+              <span className="disc-sub">{primaryTags.join(' / ')}</span>
+            </div>
+            <div className="stat-list tabular" style={{ marginTop: 6 }}>
+              {personalityRows.map((row) => (
+                <div key={row.label} className="stat-row">
+                  <span>{row.label}</span>
+                  <div className="bar-track">
+                    <div className="bar-fill" style={{ width: `${row.value}%` }} />
+                  </div>
+                  <span>{row.value}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          {/* 3. MOTIVATION, 4. NINDO, 7. SCHEDULE, 9. CURRENT GOAL */}
+          <section className="disc-item">
+            <div className="disc-head">
+              <span>Drive, Nindo &amp; Routine</span>
+            </div>
+            <div className="disc-sub" style={{ marginTop: 4 }}>
+              <strong>Motivation:</strong> {getMotivationLabel(motivation)}
+            </div>
+            <div className="disc-sub" style={{ marginTop: 4, fontStyle: 'italic' }}>
+              <strong>Nindo:</strong> &ldquo;{nindo.maxim}&rdquo;
+            </div>
+            <div className="disc-sub" style={{ marginTop: 4 }}>
+              <strong>Schedule:</strong> {getScheduleLabel(schedule)}
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <div className="disc-head">
+                <span className="disc-sub">
+                  <strong>Current Goal:</strong> {currentGoal.label}
+                </span>
+                <span className="disc-sub tabular">{currentGoal.progress}%</span>
+              </div>
+              <div className="bar-track" style={{ marginTop: 4 }}>
+                <div className="bar-fill chakra" style={{ width: `${currentGoal.progress}%` }} />
+              </div>
+            </div>
+          </section>
+        </div>
+
+        {/* 5. RELATIONSHIPS */}
+        <section className="disc-item" style={{ marginTop: 10 }}>
+          <div className="disc-head">
+            <span>Relationships ({relList.length})</span>
+          </div>
+          {relList.length === 0 ? (
+            <div className="disc-sub">No prominent recorded ties yet.</div>
+          ) : (
+            <div className="chip-row" style={{ marginTop: 6 }}>
+              {relList.map((rel) => {
+                const clickable = rel.targetId !== 'player' && Boolean(onSelectNpcId);
+                return clickable ? (
+                  <button
+                    key={rel.targetId}
+                    type="button"
+                    className={`chip chip-btn ${rel.kind === 'enemy' ? 'neg' : rel.kind === 'spouse' || rel.kind === 'friend' || rel.kind === 'mentor' ? 'pos' : ''}`}
+                    onClick={() => onSelectNpcId?.(rel.targetId)}
+                    title={`Trust ${rel.trust} | Affinity ${rel.affinity} | Grudge ${rel.grudge}`}
+                  >
+                    {rel.targetName} ({rel.kind}, Trust {rel.trust})
+                  </button>
+                ) : (
+                  <span
+                    key={rel.targetId}
+                    className={`chip ${rel.kind === 'enemy' ? 'neg' : rel.trust >= 60 ? 'pos' : ''}`}
+                    title={`Trust ${rel.trust} | Affinity ${rel.affinity} | Grudge ${rel.grudge}`}
+                  >
+                    {rel.targetName} ({rel.kind}, Trust {rel.trust})
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </section>
+
+        {/* 8. KNOWLEDGE */}
+        <section className="disc-item" style={{ marginTop: 10 }}>
+          <div className="disc-head">
+            <span>Known Intelligence &amp; Secrets ({knowledge.length})</span>
+          </div>
+          {knowledge.length === 0 ? (
+            <div className="disc-sub">No classified intel or rumors recorded.</div>
+          ) : (
+            <div className="stat-list" style={{ marginTop: 6 }}>
+              {knowledge.map((k) => (
+                <div key={k.id} className="disc-sub">
+                  <span className={`chip ${k.secret ? 'neg' : ''}`} style={{ marginRight: 6 }}>
+                    {k.secret ? 'SECRET' : 'INTEL'}
+                  </span>
+                  {k.detail} <span className="tabular">(Year {k.learnedYear})</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        {/* 6. MEMORY */}
+        <section className="disc-item" style={{ marginTop: 10 }}>
+          <div className="disc-head">
+            <span>Lived Memories ({newestMemories.length})</span>
+          </div>
+          <div className="stat-list npc-memory-list" style={{ marginTop: 6 }}>
+            {newestMemories.map((m, idx) => (
+              <div key={`${m.year}_${idx}`} className="disc-sub">
+                <span className="tabular">
+                  <strong>Age {m.age} (Yr {m.year})</strong> [{m.tag}]:
+                </span>{' '}
+                {m.summary}
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}

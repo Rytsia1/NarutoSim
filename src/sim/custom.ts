@@ -1,3 +1,4 @@
+import { CLAN_MAP } from '../data/clans';
 import { ORIGIN_MAP } from '../data/origins';
 import { BLOODLINE_MAP, DISCIPLINE_MAP } from '../data/powers';
 import { clampStats, getChakraCap } from './powers_bridge';
@@ -97,6 +98,11 @@ export function applyCustomBuild(state: GameState, cfg: CustomBuildConfig): void
   state.flags.custom_run = true;
   state.originId = cfg.originId;
   state.villageId = cfg.villageId;
+  if (cfg.clanId && CLAN_MAP[cfg.clanId]?.villageId === cfg.villageId) {
+    state.clanId = cfg.clanId;
+  } else if (cfg.clanId === '') {
+    state.clanId = null;
+  }
   state.sex = cfg.sex;
   if (cfg.name.trim()) state.name = cfg.name.trim();
   state.capacity = cfg.capacity;

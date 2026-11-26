@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { getClansForVillage } from '../../data/clans';
 import { ORIGIN_MAP, ORIGINS } from '../../data/origins';
 import {
   BLOODLINES,
@@ -8,7 +9,7 @@ import {
   DISCIPLINE_TIER_NAMES,
   ELEMENT_NAMES,
 } from '../../data/powers';
-import { VILLAGES } from '../../data/villages';
+import { VILLAGES, VILLAGE_MAP } from '../../data/villages';
 import { CUSTOM_BUDGET, evaluateCustomBuild } from '../../sim/custom';
 import type {
   BloodlineStage,
@@ -81,6 +82,7 @@ export function CustomBuilderPanel({
   const [sex, setSex] = useState<'M' | 'F'>('M');
   const [originId, setOriginId] = useState<OriginId>('clan_heir');
   const [villageId, setVillageId] = useState<VillageId>('konoha');
+  const [clanId, setClanId] = useState<string>('');
   const [capacity, setCapacity] = useState<1 | 2 | 3 | 4 | 5>(3);
   const [element, setElement] = useState<ChakraElement>('fire');
   const [startDisciplineId, setStartDisciplineId] = useState('');
@@ -120,12 +122,16 @@ export function CustomBuilderPanel({
     chakra: Math.min(directStats.chakra, chakraCap),
   };
 
+  const villageClans = getClansForVillage(villageId);
+  const safeClanId = villageClans.some((c) => c.id === clanId) ? clanId : '';
+
   const cfg: CustomBuildConfig = {
     mode,
     name,
     sex,
     originId,
     villageId,
+    clanId: safeClanId || undefined,
     capacity,
     element,
     statOffsets,
@@ -199,6 +205,18 @@ export function CustomBuilderPanel({
         </button>
       </div>
 
+      <div className="disc-item" style={{ marginBottom: 14 }}>
+        <div className="disc-head">
+          <span>{VILLAGE_MAP[villageId].name} Doctrine</span>
+          <span className="status-tag">
+            {VILLAGE_MAP[villageId].militaryPolicy.replace('_', ' ')} | {VILLAGE_MAP[villageId].institutions.shadowOrgName}
+          </span>
+        </div>
+        <div className="disc-sub" style={{ marginTop: 4 }}>
+          {VILLAGE_MAP[villageId].culture}
+        </div>
+      </div>
+
       <div className="form-grid">
         <div className="field">
           <label htmlFor="cb-name">Shinobi Name</label>
@@ -230,10 +248,28 @@ export function CustomBuilderPanel({
         </div>
         <div className="field">
           <label htmlFor="cb-village">Hidden Village</label>
-          <select id="cb-village" value={villageId} onChange={(e) => setVillageId(e.target.value as VillageId)}>
+          <select
+            id="cb-village"
+            value={villageId}
+            onChange={(e) => {
+              setVillageId(e.target.value as VillageId);
+              setClanId('');
+            }}
+          >
             {VILLAGES.map((v) => (
               <option key={v.id} value={v.id}>
                 {v.name} ({v.region})
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="field">
+          <label htmlFor="cb-clan">Village Clan Lineage (Optional)</label>
+          <select id="cb-clan" value={safeClanId} onChange={(e) => setClanId(e.target.value)}>
+            <option value="">Origin Default / No Specific Clan</option>
+            {villageClans.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name} ({c.yearlyBonus.label})
               </option>
             ))}
           </select>

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { ACHIEVEMENTS } from '../src/data/achievements';
+import { CLANS } from '../src/data/clans';
 import { RETIREMENT_EVENTS } from '../src/data/events-epilogue';
 import { DANGEROUS_MISSIONS, FLAVOR_LINES, GROWTH_EVENTS, LIFE_EVENTS } from '../src/data/events-life';
 import { CRISIS_WHISPERS, SENSEI_ARCHETYPES, TEAMMATE_ARCHETYPES, TEAM_EVENTS } from '../src/data/events-team';
 import { WAR_CROSSROADS } from '../src/data/events-war';
+import { EMERGENT_TEMPLATES, VILLAGE_CRISIS_COPY } from '../src/data/events-world';
 import { EN_DICT } from '../src/data/i18n';
 import { ORIGINS } from '../src/data/origins';
 import { BLOODLINES, DISCIPLINES } from '../src/data/powers';
@@ -22,6 +24,8 @@ describe('Content pack data integrity', () => {
   it('has zero duplicate IDs across every data pack', () => {
     assertUniqueIds('ORIGINS', ORIGINS);
     assertUniqueIds('VILLAGES', VILLAGES);
+    assertUniqueIds('CLANS', CLANS);
+    assertUniqueIds('EMERGENT_TEMPLATES', EMERGENT_TEMPLATES);
     assertUniqueIds('DISCIPLINES', DISCIPLINES);
     assertUniqueIds('BLOODLINES', BLOODLINES);
     assertUniqueIds('LIFE_EVENTS', LIFE_EVENTS);
@@ -41,6 +45,24 @@ describe('Content pack data integrity', () => {
   it('contains no em-dash characters in UI dictionary or event prose', () => {
     const allStrings: string[] = [
       ...Object.values(EN_DICT),
+      ...CLANS.flatMap((c) => [c.name, c.ethos, c.historyNote, c.yearlyBonus.label]),
+      ...VILLAGES.flatMap((v) => [
+        v.name,
+        v.flavor,
+        v.history,
+        v.culture,
+        v.politicalInterests,
+        v.institutions.shadowOrgName,
+        v.institutions.shadowOrgDesc,
+        v.institutions.academyLabel,
+      ]),
+      ...Object.values(VILLAGE_CRISIS_COPY).flatMap((c) => [
+        c.title,
+        c.body,
+        c.reformLabel,
+        c.hardlineLabel,
+        c.shadowLabel,
+      ]),
       ...ACHIEVEMENTS.flatMap((a) => [a.title, a.desc]),
       ...LIFE_EVENTS.flatMap((e) => [e.title, e.body, ...e.options.map((o) => o.label)]),
       ...GROWTH_EVENTS.flatMap((e) => [e.title, e.body]),

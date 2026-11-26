@@ -2,6 +2,7 @@ import { CRISIS_WHISPERS } from '../data/events-team';
 import { clamp } from './powers';
 import type { SeededRng } from './rng';
 import type { CrisisId, GameState, PendingDecision, ScenarioConfig } from './types';
+import { applyPlayerActionToWorldSim } from './world-sim';
 
 export const MAX_CRISIS_CLUES = 5;
 
@@ -95,7 +96,11 @@ export function runDiplomaticSummit(
     state.world.omenActive = false;
     omenCleared = true;
   }
-  return { drop: before - state.world.tension, omenCleared };
+  const actualDrop = before - state.world.tension;
+  if (state.worldSim) {
+    applyPlayerActionToWorldSim(state, { type: 'diplomatic_summit', drop: actualDrop });
+  }
+  return { drop: actualDrop, omenCleared };
 }
 
 export function tickWorldTension(state: GameState, rng: SeededRng): TensionTickResult {

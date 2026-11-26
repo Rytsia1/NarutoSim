@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react';
 import { ACHIEVEMENTS } from '../../data/achievements';
+import { getClansForVillage } from '../../data/clans';
 import { t } from '../../data/i18n';
 import { ROSTER, ROSTER_MAP } from '../../data/roster';
 import { getKageTitle, VILLAGES, VILLAGE_MAP } from '../../data/villages';
@@ -271,6 +272,30 @@ export function LobbyScreen({
                 </select>
               </div>
             </div>
+
+            {village && VILLAGE_MAP[village] && (
+              <div className="disc-item" style={{ marginTop: 12 }}>
+                <div className="disc-head">
+                  <span>{VILLAGE_MAP[village].name} Identity</span>
+                  <span className="status-tag">
+                    Policy: {VILLAGE_MAP[village].militaryPolicy.replace('_', ' ')}
+                  </span>
+                </div>
+                <div className="disc-sub" style={{ marginTop: 4 }}>
+                  {VILLAGE_MAP[village].culture}
+                </div>
+                <div className="disc-sub" style={{ marginTop: 4 }}>
+                  <strong>Shadow Division:</strong> {VILLAGE_MAP[village].institutions.shadowOrgName} |{' '}
+                  <strong>Academy:</strong> {VILLAGE_MAP[village].institutions.academyLabel}
+                </div>
+                <div className="disc-sub" style={{ marginTop: 4 }}>
+                  <strong>Major Clans:</strong>{' '}
+                  {getClansForVillage(village)
+                    .map((c) => c.name)
+                    .join(', ')}
+                </div>
+              </div>
+            )}
 
             <div className="lobby-actions">
               <button type="button" className="btn btn-primary" onClick={handleStart}>

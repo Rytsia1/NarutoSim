@@ -1,3 +1,4 @@
+import { CLAN_MAP, getClansForVillage } from '../data/clans';
 import { RETIREMENT_EVENTS } from '../data/events-epilogue';
 import {
   DANGEROUS_MISSIONS,
@@ -82,6 +83,15 @@ import {
 } from './world';
 import { handleWarDecision, initWarState, queueWarStart } from './war';
 import { applyCustomBuild } from './custom';
+import { syncTeamMembersToWorldNpcs } from './npc-sim';
+import {
+  applyPlayerActionToWorldSim,
+  getVillageInstitutionalModifiers,
+  initWorldSim,
+  pickEmergentWorldDecision,
+  resolveEmergentWorldDecision,
+  tickAutonomousWorldYear,
+} from './world-sim';
 
 const STAT_LABELS: Record<StatKey, string> = {
   chakra: 'Chakra',
@@ -358,7 +368,8 @@ export function yearlyMortalityChance(state: GameState): number {
   const base = baseMortality(state.age);
   const healthFactor = Math.exp((50 - state.stats.health) / 16);
   const trainingHazard = state.focus === 'training' && state.age > 12 ? 0.001 : 0;
-  return Math.min(0.65, base * healthFactor + trainingHazard);
+  const hospitalMult = getVillageInstitutionalModifiers(state).hospitalMortalityMult;
+  return Math.min(0.65, (base * healthFactor + trainingHazard) * hospitalMult);
 }
 
 function causeOfNaturalDeath(state: GameState, rng: SeededRng): string {
@@ -404,15 +415,34 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
     : scenario?.preferredVillage
       ? VILLAGE_MAP[scenario.preferredVillage]
       : rng.pick(VILLAGES);
+  const villageClans = getClansForVillage(village.id);
+  let clanId: string | null = null;
+  if (customCfg?.clanId && CLAN_MAP[customCfg.clanId]?.villageId === village.id) {
+    clanId = customCfg.clanId;
+  } else if (
+    (origin.id === 'clan_heir' || origin.id === 'clan_branch' || origin.id === 'fallen_clan') &&
+    villageClans.length > 0
+  ) {
+    clanId = rng.pick(villageClans).id;
+  }
+  const chosenClan = clanId ? CLAN_MAP[clanId] : null;
   const sex: 'M' | 'F' = customCfg?.sex ?? scenario?.preferredSex ?? (rng.chance(0.5) ? 'M' : 'F');
   const customTrim = (customCfg?.name ?? scenario?.customName)?.trim();
-  const name = customTrim && customTrim.length > 0 ? customTrim : generateNameForVillage(village.id, sex, rng);
+  const generatedName = chosenClan
+    ? `${rng.pick(sex === 'M' ? village.maleNames : village.femaleNames)} ${chosenClan.surname}`
+    : generateNameForVillage(village.id, sex, rng);
+  const name = customTrim && customTrim.length > 0 ? customTrim : generatedName;
 
   const [minCap, maxCap] = origin.capacityRange;
   const capacity = (customCfg?.capacity ?? rng.int(minCap, maxCap)) as 1 | 2 | 3 | 4 | 5;
   const elements: ChakraElement[] = ['fire', 'wind', 'lightning', 'earth', 'water'];
   const element: ChakraElement =
-    customCfg?.element ?? (rng.chance(0.55) ? village.dominantElement : rng.pick(elements));
+    customCfg?.element ??
+    (chosenClan?.preferredElement && rng.chance(0.65)
+      ? chosenClan.preferredElement
+      : rng.chance(0.55)
+        ? village.dominantElement
+        : rng.pick(elements));
 
   const birthYear = rng.int(1968, 2004);
   const [minRyo, maxRyo] = origin.ryoRange;
@@ -478,6 +508,7 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
     sex,
     originId: origin.id,
     villageId: village.id,
+    clanId,
     capacity,
     element,
 
@@ -555,20 +586,24 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
     record: null,
   };
 
-  // Save RNG snapshot AFTER all birth rolls so Year 1 never replays birth RNG draws
-  state.rng = rng.snapshot();
-
   if (customCfg) {
     applyCustomBuild(state, customCfg);
   }
 
+  // Initialize the 3-Layer Autonomous World Simulation (World, Villages/Orgs, Living NPCs)
+  state.worldSim = initWorldSim(state, rng);
+
+  // Save RNG snapshot AFTER all birth & world-seeding rolls so Year 1 never replays birth RNG draws
+  state.rng = rng.snapshot();
+
   clampStats(state);
   const resolvedVillage = VILLAGE_MAP[state.villageId];
   const resolvedOrigin = ORIGIN_MAP[state.originId];
+  const resolvedClan = state.clanId ? CLAN_MAP[state.clanId] : null;
   pushLog(
     state,
     'milestone',
-    `Born in ${resolvedVillage.name} (${resolvedVillage.region}) as ${state.name}. ${resolvedOrigin.name}: ${resolvedOrigin.shortDesc} ${resolvedVillage.flavor}${customCfg ? ' (Custom Shinobi Build)' : ''}`,
+    `Born in ${resolvedVillage.name} (${resolvedVillage.region}) as ${state.name}${resolvedClan ? ` of the ${resolvedClan.name}` : ''}. ${resolvedOrigin.name}: ${resolvedOrigin.shortDesc} ${resolvedVillage.culture}${customCfg ? ' (Custom Shinobi Build)' : ''}`,
     { title: `Year ${birthYear}: A New Shinobi Life` },
   );
   const actualStartDisc = state.disciplines[0];
@@ -749,7 +784,7 @@ function applyYearlyGrowth(state: GameState, rng: SeededRng): void {
     state.stats.intel += rng.int(0, 2);
   }
 
-  // Village identity perk (Fase 5)
+  // Village & Clan institutional perks
   const vPerk = VILLAGE_MAP[state.villageId]?.perk;
   if (vPerk) {
     if (vPerk.stat) {
@@ -759,6 +794,20 @@ function applyYearlyGrowth(state: GameState, rng: SeededRng): void {
       const disc = state.disciplines.find((d) => d.id === vPerk.disciplineId);
       if (disc) disc.xp += 2;
     }
+  }
+  const instMods = getVillageInstitutionalModifiers(state);
+  if (instMods.clanBonus) {
+    if (instMods.clanBonus.stat) {
+      state.stats[instMods.clanBonus.stat] += 1;
+    }
+    if (instMods.clanBonus.disciplineId) {
+      const cDisc = state.disciplines.find((d) => d.id === instMods.clanBonus!.disciplineId);
+      if (cDisc) cDisc.xp += 1;
+    }
+  }
+  if (instMods.academyXpBonus > 0 && state.disciplines.length > 0 && (state.rank === 'academy' || state.rank === 'genin')) {
+    const main = state.disciplines.find((d) => d.isMain) ?? state.disciplines[0];
+    main.xp += instMods.academyXpBonus;
   }
 
   // Upkeep & aging wear
@@ -1080,6 +1129,12 @@ export function advanceYear(state: GameState): void {
         pushLog(state, 'bond', notice);
       }
       tickFamilyYear(state, rng);
+      if (i === 0) {
+        const retWorld = tickAutonomousWorldYear(state, rng);
+        for (const d of retWorld.dispatches.slice(0, 1)) {
+          pushLog(state, d.tone, d.text, { title: d.title });
+        }
+      }
       if (state.stats.health <= 0 || state.age >= 102 || rng.chance(yearlyMortalityChance(state))) {
         killCharacter(state, state.age >= 60 ? 'old age in peaceful retirement' : causeOfNaturalDeath(state, rng));
         state.rng = rng.snapshot();
@@ -1110,6 +1165,15 @@ export function advanceYear(state: GameState): void {
 
   // Log annual flavor line
   logAnnualFlavor(state, rng);
+
+  // 3-Layer Autonomous World Simulation tick (World -> Villages/Orgs -> Independent NPCs)
+  const autoWorld = tickAutonomousWorldYear(state, rng);
+  if (autoWorld.tensionDelta !== 0 && !state.world.truePeace) {
+    state.world.tension = clamp(state.world.tension + autoWorld.tensionDelta, 5, 100);
+  }
+  for (const d of autoWorld.dispatches) {
+    pushLog(state, d.tone, d.text, { title: d.title });
+  }
 
   // Check natural mortality before events
   if (state.stats.health <= 0 || state.age >= 104 || rng.chance(yearlyMortalityChance(state))) {
@@ -1290,6 +1354,11 @@ export function advanceYear(state: GameState): void {
     nextDecision = worldTick.whisperDecision;
   }
 
+  // Priority 10.5: Emergent Autonomous World / NPC / Village Crisis Decision
+  if (!nextDecision) {
+    nextDecision = pickEmergentWorldDecision(state, rng);
+  }
+
   // Priority 11: Milestone Reflections (ages 5, 15, 30, 50, 70)
   if (!nextDecision) {
     const prompt = REFLECTION_PROMPTS.find((r) => r.age === state.age);
@@ -1403,21 +1472,23 @@ export function resolvePendingDecision(
         break;
       }
       const isEarly = state.age < 12;
+      const acadMods = getVillageInstitutionalModifiers(state);
       const passed =
         optionId === 'chakra_form'
-          ? state.stats.chakra + state.stats.intel + rng.int(0, 28) > (isEarly ? 82 : 46)
-          : state.stats.health + state.stats.will + rng.int(0, 28) > (isEarly ? 128 : 88);
+          ? state.stats.chakra + state.stats.intel + rng.int(0, 28) > (isEarly ? 82 : 46 + acadMods.academyGradOffset)
+          : state.stats.health + state.stats.will + rng.int(0, 28) > (isEarly ? 128 : 88 + acadMods.academyGradOffset);
       checks.push({ label: optionId === 'chakra_form' ? 'Clone & Chakra Exam' : 'Taijutsu & Target Exam', passed });
 
       if (passed) {
         promoteRank(state, 'genin');
         state.geninSinceAge = state.age;
         ensureAcademyElementDiscipline(state);
-        state.stats.will += 4;
-        state.stats.bonds += 3;
+        state.stats.will += acadMods.bloodyMistActive ? 7 : 4;
+        state.stats.bonds += acadMods.bloodyMistActive ? 1 : 3;
         clampStats(state);
 
         state.team = formGeninTeam(state, rng);
+        syncTeamMembersToWorldNpcs(state, rng);
         const sensei = state.team.members[0];
         const mates = state.team.members.slice(1);
         state.rivalId = mates[0]?.id ?? null;
@@ -1646,6 +1717,16 @@ export function resolvePendingDecision(
         }
 
         clampStats(state);
+        applyPlayerActionToWorldSim(state, { type: 'kage_ascend' });
+        applyPlayerActionToWorldSim(state, {
+          type: 'kage_decree',
+          decree:
+            optionId === 'decree_peace' ||
+            optionId === 'decree_academy' ||
+            optionId === 'decree_fortress'
+              ? optionId
+              : 'decree_shadow',
+        });
         const chips = [...diffStats(before, state.stats)];
         if (tensionDelta !== 0) {
           chips.push({ stat: 'tension', label: 'World Tension', delta: tensionDelta });
@@ -2467,12 +2548,14 @@ export function resolvePendingDecision(
             state.world.omenActive = false;
           }
           state.missions.b += 1;
-          state.stats.ryo += 10;
+          const ryoMult = getVillageInstitutionalModifiers(state).missionRyoMult;
+          state.stats.ryo += Math.max(6, Math.round(10 * ryoMult));
           state.stats.bonds += 4;
           state.stats.intel += 2;
           addLeaning(state, 'will_of_fire', 1);
           clampStats(state);
           const actualDelta = state.world.tension - prevT;
+          applyPlayerActionToWorldSim(state, { type: 'diplomatic_mission', drop: Math.abs(actualDelta) });
           pushLog(
             state,
             'bond',
@@ -2546,7 +2629,8 @@ export function resolvePendingDecision(
       if (succeeded) {
         const rankKey = mission.rank.toLowerCase() as keyof GameState['missions'];
         state.missions[rankKey] += 1;
-        state.stats.ryo += mission.ryoReward;
+        const ryoMult = getVillageInstitutionalModifiers(state).missionRyoMult;
+        state.stats.ryo += Math.max(3, Math.round(mission.ryoReward * ryoMult));
         state.stats.will += rankLetter === 'S' ? 3 : 2;
         if (passedStages < stageCount) {
           state.stats.health = Math.max(8, state.stats.health - Math.round(mission.failHealthLoss * 0.35));
@@ -2630,6 +2714,38 @@ export function resolvePendingDecision(
           { deltas: diffStats(before, state.stats), checks },
         );
       }
+      break;
+    }
+
+    case 'world_emergent': {
+      const outcome = resolveEmergentWorldDecision(state, optionId, decision.meta, rng);
+      if (outcome.tensionDelta) {
+        state.world.tension = clamp(state.world.tension + outcome.tensionDelta, 5, 100);
+        if (state.world.omenActive && state.world.tension < 65) state.world.omenActive = false;
+      }
+      if (outcome.cluesDelta) {
+        state.world.crisisClues = clamp(state.world.crisisClues + outcome.cluesDelta, 0, MAX_CRISIS_CLUES);
+      }
+      clampStats(state);
+      if (state.stats.health <= 0) {
+        killCharacter(state, 'fatal injuries sustained during a village crisis');
+        break;
+      }
+      if (outcome.checkLabel !== undefined && outcome.checkPassed !== undefined) {
+        checks.push({ label: outcome.checkLabel, passed: outcome.checkPassed });
+      }
+      const chips: StatDeltaChip[] = [...diffStats(before, state.stats)];
+      if (outcome.tensionDelta) {
+        chips.push({ stat: 'tension', label: 'World Tension', delta: outcome.tensionDelta });
+      }
+      if (outcome.cluesDelta) {
+        chips.push({ stat: 'clues', label: 'Crisis Clues', delta: outcome.cluesDelta });
+      }
+      pushLog(state, outcome.tone, outcome.text, {
+        title: outcome.title,
+        deltas: chips,
+        checks: checks.length > 0 ? checks : undefined,
+      });
       break;
     }
 
@@ -2751,6 +2867,7 @@ export function resolvePendingDecision(
         state.world.lastWarAge = state.age;
         state.world.tension = rng.int(18, 32);
         state.world.omenActive = false;
+        applyPlayerActionToWorldSim(state, { type: 'player_defect' });
         pushLog(
           state,
           'danger',
