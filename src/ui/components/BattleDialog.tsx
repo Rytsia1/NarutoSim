@@ -11,7 +11,7 @@ import {
   type JutsuDefinition,
 } from '../../data/jutsu';
 import { BLOODLINE_MAP, ELEMENT_KANJI, ELEMENT_NAMES } from '../../data/powers';
-import { ARCHETYPE_LABELS } from '../../data/roster';
+import { ARCHETYPE_LABELS } from '../../data/characters';
 import { VILLAGE_MAP } from '../../data/villages';
 import {
   canToggleBattleMode,

@@ -30,6 +30,15 @@ import {
 } from './life/imperfect-life';
 import { computeAffinityWeights } from './partner';
 import {
+  generateCharacter,
+  generateUniquePersonName,
+  getPerson,
+  getPersonTraits,
+  isPersonAlive,
+  killPerson,
+  personName,
+} from './people';
+import {
   applyEternalMangekyo,
   awakenMangekyoSharingan,
   awardYearlyDisciplineXp,
@@ -116,7 +125,7 @@ import {
   generateMissionContract,
   tickMissionConsequences,
 } from './missions';
-import { syncTeamMembersToWorldNpcs } from './npc-sim';
+import { setPlayerRelation } from './npc-sim';
 import { pickPoliticsDecision } from './politics';
 import {
   applyPlayerActionToWorldSim,
@@ -248,10 +257,16 @@ export function buildKageSuccessionDecision(
     };
   }
 
+  const livingSquadComrade = state.team?.members.find((m) => {
+    const p = getPerson(state, m.personId);
+    return Boolean(p && p.identity.alive && p.identity.specialStatus !== 'missing_nin');
+  });
   const comradeName =
-    state.permanentPartner?.alive
-      ? state.permanentPartner.name
-      : state.team?.members.find((m) => m.alive && m.specialStatus !== 'missing_nin')?.name ?? 'a trusted senior Jonin';
+    state.permanentPartner && isPersonAlive(state, state.permanentPartner.personId)
+      ? personName(state, state.permanentPartner.personId)
+      : livingSquadComrade
+        ? personName(state, livingSquadComrade.personId)
+        : 'a trusted senior Jonin';
 
   const bodyByReason: Record<KageOfferReason, string> = {
     council: `After years of Jonin service, ${state.missions.s} S-Rank operations, and the deep trust of your peers (Bonds ${state.stats.bonds}), the Daimyo and elder council summon you to the tower and formally offer you the ${title} hat of ${vName}.`,
@@ -359,10 +374,7 @@ export function killCharacter(state: GameState, cause: string): void {
 }
 
 function generateNameForVillage(villageId: GameState['villageId'], sex: 'M' | 'F', rng: SeededRng): string {
-  const v = VILLAGE_MAP[villageId];
-  const first = rng.pick(sex === 'M' ? v.maleNames : v.femaleNames);
-  const last = rng.pick(v.surnames);
-  return `${first} ${last}`;
+  return generateUniquePersonName(villageId, null, sex, new Set(), rng);
 }
 
 export function createNewLife(seed: number, scenario?: ScenarioConfig): GameState {
@@ -410,34 +422,6 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
   const [minRyo, maxRyo] = origin.ryoRange;
 
   const family: FamilyMember[] = [];
-  if (!origin.isOrphan) {
-    const surname = name.split(' ').slice(1).join(' ') || rng.pick(village.surnames);
-    family.push({
-      relation: 'father',
-      name: `${rng.pick(village.maleNames)} ${surname}`,
-      sex: 'M',
-      age: rng.int(24, 39),
-      alive: true,
-    });
-    family.push({
-      relation: 'mother',
-      name: `${rng.pick(village.femaleNames)} ${surname}`,
-      sex: 'F',
-      age: rng.int(22, 36),
-      alive: true,
-    });
-    if (origin.alwaysSibling || rng.chance(0.5)) {
-      const sibSex: 'M' | 'F' = rng.chance(0.5) ? 'M' : 'F';
-      family.push({
-        relation: 'sibling',
-        name: `${rng.pick(sibSex === 'M' ? village.maleNames : village.femaleNames)} ${surname}`,
-        sex: sibSex,
-        age: origin.alwaysSibling ? rng.int(2, 5) : rng.int(0, 4),
-        alive: true,
-        isHeirRival: origin.alwaysSibling,
-      });
-    }
-  }
 
   const bloodline = rollBirthBloodline(seed, origin.id, clanId);
   const startDisc = pickStartingDiscipline(seed, origin.id, element, clanId);
@@ -456,6 +440,7 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
 
   const state: GameState = {
     version: 1,
+    saveVersion: 3,
     phase: 'life',
     rng: rng.snapshot(),
     birthYear,
@@ -530,8 +515,6 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
     },
     war: null,
     warHistory: [],
-    fallenRosterIds: [],
-    fatedRosterId: scenario?.fatedRosterId ?? null,
 
     usedEvents: [],
     usedGrowth: [],
@@ -560,6 +543,86 @@ export function createNewLife(seed: number, scenario?: ScenarioConfig): GameStat
   state.missionConsequences = [];
   ensurePlayerLegacy(state);
   state.worldSim = initWorldSim(state, rng);
+
+  // Register birth family members as canonical WorldNpcs in `state.worldSim.npcs`
+  const finalOrigin = ORIGIN_MAP[state.originId];
+  const finalVillage = VILLAGE_MAP[state.villageId];
+  if (!finalOrigin.isOrphan) {
+    const familyUsedNames = new Set<string>([state.name]);
+    for (const n of state.worldSim.npcs) familyUsedNames.add(n.identity.name);
+    const surname = state.name.split(' ').slice(1).join(' ') || rng.pick(finalVillage.surnames);
+    const parentRank = finalOrigin.isShinobiHouse ? 'chunin' : 'civilian';
+    const civilianParentOccs = ['merchant', 'blacksmith', 'farmer', 'artisan', 'medic', 'teacher'] as const;
+    const combatOcc = state.villageId === 'iron' ? 'samurai' : 'shinobi';
+    const fatherOcc = finalOrigin.isShinobiHouse ? combatOcc : rng.pick(civilianParentOccs);
+    const motherOcc = finalOrigin.isShinobiHouse ? combatOcc : rng.pick(civilianParentOccs);
+    const fatherNpc = generateCharacter(
+      state,
+      {
+        sex: 'M',
+        age: rng.int(24, 39),
+        villageId: state.villageId,
+        clanId: state.clanId ?? null,
+        occupation: fatherOcc,
+        rank: parentRank,
+        roleTitle: finalOrigin.isShinobiHouse ? 'Household Shinobi' : undefined,
+        surnameOverride: surname,
+        lodTier: 'L1',
+        observed: true,
+        usedNames: familyUsedNames,
+      },
+      rng,
+    );
+    setPlayerRelation(fatherNpc, state.name, 'family', 45, 78, 0);
+    state.family.push({ personId: fatherNpc.identity.id, relation: 'father' });
+
+    const motherNpc = generateCharacter(
+      state,
+      {
+        sex: 'F',
+        age: rng.int(22, 36),
+        villageId: state.villageId,
+        clanId: state.clanId ?? null,
+        occupation: motherOcc,
+        rank: parentRank,
+        roleTitle: finalOrigin.isShinobiHouse ? 'Household Shinobi' : undefined,
+        surnameOverride: surname,
+        lodTier: 'L1',
+        observed: true,
+        usedNames: familyUsedNames,
+      },
+      rng,
+    );
+    setPlayerRelation(motherNpc, state.name, 'family', 48, 80, 0);
+    state.family.push({ personId: motherNpc.identity.id, relation: 'mother' });
+
+    if (finalOrigin.alwaysSibling || rng.chance(0.5)) {
+      const sibSex: 'M' | 'F' = rng.chance(0.5) ? 'M' : 'F';
+      const sibNpc = generateCharacter(
+        state,
+        {
+          sex: sibSex,
+          age: finalOrigin.alwaysSibling ? rng.int(2, 5) : rng.int(0, 4),
+          villageId: state.villageId,
+          clanId: state.clanId ?? null,
+          occupation: finalOrigin.isShinobiHouse ? combatOcc : rng.pick(civilianParentOccs),
+          rank: 'civilian',
+          roleTitle: finalOrigin.alwaysSibling ? 'Clan Sibling' : 'Sibling',
+          surnameOverride: surname,
+          lodTier: 'L1',
+          observed: true,
+          usedNames: familyUsedNames,
+        },
+        rng,
+      );
+      setPlayerRelation(sibNpc, state.name, 'family', finalOrigin.alwaysSibling ? 20 : 40, 68, 0);
+      state.family.push({
+        personId: sibNpc.identity.id,
+        relation: 'sibling',
+        isHeirRival: finalOrigin.alwaysSibling,
+      });
+    }
+  }
 
   // Save RNG snapshot AFTER all birth & world-seeding rolls so Year 1 never replays birth RNG draws
   state.rng = rng.snapshot();
@@ -624,7 +687,7 @@ function applySimpleEffect(
   if (effect.trustAllTeam && state.team) {
     let total = 0;
     for (const m of state.team.members) {
-      if (m.alive) total += adjustMemberTrust(state, m, effect.trustAllTeam);
+      if (isPersonAlive(state, m.personId)) total += adjustMemberTrust(state, m, effect.trustAllTeam);
     }
     if (total !== 0) {
       extraChips.push({ stat: 'trust', label: 'Squad Kizuna', delta: Math.round(total / Math.max(1, state.team.members.length)) });
@@ -637,38 +700,73 @@ function applySimpleEffect(
       } else if (fl === 'keep_fit') {
         state.keepFit = true;
       } else if (fl === 'trigger_marry') {
-        const romanticMate = state.team?.members.find(
-          (m) => m.role === 'teammate' && m.alive && m.relTrack === 'romance' && m.specialStatus !== 'missing_nin',
-        );
+        const romanticMate = state.team?.members.find((m) => {
+          const p = getPerson(state, m.personId);
+          return (
+            m.role === 'teammate' &&
+            m.relTrack === 'romance' &&
+            Boolean(p && p.identity.alive && p.identity.specialStatus !== 'missing_nin')
+          );
+        });
         if (romanticMate) {
+          const mateNpc = getPerson(state, romanticMate.personId);
+          if (mateNpc) {
+            setPlayerRelation(mateNpc, state.name, 'spouse', 35, 25, 0);
+          }
           state.family.push({
+            personId: romanticMate.personId,
             relation: 'spouse',
-            name: romanticMate.name,
-            sex: romanticMate.sex,
-            age: romanticMate.age,
-            alive: true,
           });
         } else {
           const spouseSex: 'M' | 'F' = state.sex === 'M' ? 'F' : 'M';
+          const spouseNpc = generateCharacter(
+            state,
+            {
+              sex: spouseSex,
+              age: Math.max(18, state.age + rng.int(-3, 3)),
+              villageId: state.villageId,
+              occupation:
+                state.rank === 'civilian'
+                  ? rng.pick(['merchant', 'artisan', 'medic', 'teacher'] as const)
+                  : state.villageId === 'iron'
+                    ? 'samurai'
+                    : 'shinobi',
+              rank: state.rank === 'civilian' ? 'civilian' : 'chunin',
+              roleTitle: 'Spouse',
+              lodTier: 'L1',
+              observed: true,
+            },
+            rng,
+          );
+          setPlayerRelation(spouseNpc, state.name, 'spouse', 55, 82, 0);
           state.family.push({
+            personId: spouseNpc.identity.id,
             relation: 'spouse',
-            name: generateNameForVillage(state.villageId, spouseSex, rng),
-            sex: spouseSex,
-            age: Math.max(18, state.age + rng.int(-3, 3)),
-            alive: true,
           });
         }
       } else if (fl === 'trigger_child') {
         const childSex: 'M' | 'F' = rng.chance(0.5) ? 'M' : 'F';
         const surname = state.name.split(' ').slice(1).join(' ') || 'Shinobi';
-        const v = VILLAGE_MAP[state.villageId];
-        const first = rng.pick(childSex === 'M' ? v.maleNames : v.femaleNames);
+        const childNpc = generateCharacter(
+          state,
+          {
+            sex: childSex,
+            age: 0,
+            villageId: state.villageId,
+            clanId: state.clanId ?? null,
+            occupation: state.rank === 'civilian' ? 'artisan' : state.villageId === 'iron' ? 'samurai' : 'shinobi',
+            rank: 'civilian',
+            roleTitle: 'Child',
+            surnameOverride: surname,
+            lodTier: 'L1',
+            observed: true,
+          },
+          rng,
+        );
+        setPlayerRelation(childNpc, state.name, 'family', 60, 85, 0);
         state.family.push({
+          personId: childNpc.identity.id,
           relation: 'child',
-          name: `${first} ${surname}`,
-          sex: childSex,
-          age: 0,
-          alive: true,
           capacity: clamp(rng.int(1, Math.min(5, state.capacity + 1)), 1, 5),
         });
       } else {
@@ -802,13 +900,15 @@ function tickFamilyYear(state: GameState, rng: SeededRng): { parentDied: boolean
   const origin = ORIGIN_MAP[state.originId];
 
   for (const member of state.family) {
-    if (!member.alive) continue;
-    member.age += 1;
+    const person = getPerson(state, member.personId);
+    if (!person || !person.identity.alive) continue;
+    const fAge = person.identity.age;
+    const fName = person.identity.name;
 
     if (member.relation === 'father' || member.relation === 'mother') {
-      const q = Math.min(0.5, baseMortality(member.age) * 1.15 + (origin.isShinobiHouse ? 0.004 : 0));
-      if (rng.chance(q) || member.age >= 98) {
-        member.alive = false;
+      const q = Math.min(0.5, baseMortality(fAge) * 1.15 + (origin.isShinobiHouse ? 0.004 : 0));
+      if (rng.chance(q) || fAge >= 98) {
+        killPerson(state, member.personId, fAge, fAge >= 65 ? 'old age' : 'illness or shinobi duty');
         parentDied = true;
         state.stats.bonds -= 5;
         state.stats.will -= 2;
@@ -817,7 +917,7 @@ function tickFamilyYear(state: GameState, rng: SeededRng): { parentDied: boolean
         pushLog(
           state,
           'danger',
-          `Your ${member.relation}, ${member.name}, passed away at age ${member.age}.`,
+          `Your ${member.relation}, ${fName}, passed away at age ${fAge}.`,
         );
 
         if (
@@ -832,7 +932,7 @@ function tickFamilyYear(state: GameState, rng: SeededRng): { parentDied: boolean
             kind: 'clan_legacy',
             eventId: 'clan_legacy',
             title: 'Inheritance of the Clan Hiden Scroll',
-            body: `Before passing, ${member.name} leaves behind the sealed Hiden technique of your house. Binding its chakra imprint grants formidable reserves, though your body will bear the strain.`,
+            body: `Before passing, ${fName} leaves behind the sealed Hiden technique of your house. Binding its chakra imprint grants formidable reserves, though your body will bear the strain.`,
             manual: true,
             options: [
               {
@@ -852,12 +952,19 @@ function tickFamilyYear(state: GameState, rng: SeededRng): { parentDied: boolean
         }
       }
     } else if (member.relation === 'spouse') {
-      if (rng.chance(baseMortality(member.age)) || member.age >= 98) {
-        member.alive = false;
+      if (rng.chance(baseMortality(fAge)) || fAge >= 98) {
+        killPerson(state, member.personId, fAge, fAge >= 65 ? 'old age' : 'illness');
         state.stats.bonds -= 10;
         state.stats.will -= 4;
         state.stats.health -= 3;
-        pushLog(state, 'danger', `Your spouse, ${member.name}, passed away at age ${member.age}.`);
+        pushLog(state, 'danger', `Your spouse, ${fName}, passed away at age ${fAge}.`);
+      }
+    } else if (member.relation === 'sibling' || member.relation === 'child') {
+      // Siblings & children also experience natural old-age mortality in addition to autonomous NPC risks
+      if (fAge >= 65 && (rng.chance(baseMortality(fAge)) || fAge >= 98)) {
+        killPerson(state, member.personId, fAge, 'old age');
+        state.stats.bonds -= 6;
+        pushLog(state, 'danger', `Your ${member.relation}, ${fName}, passed away at age ${fAge}.`);
       }
     }
   }
@@ -1000,7 +1107,7 @@ function rollPoolDecision(state: GameState, rng: SeededRng): PendingDecision | n
   // 3. Life events weighted by leanings (positive feedback loop evW)
   const lifeChance = state.age < 6 ? 0.25 : 0.55;
   if (rng.chance(lifeChance)) {
-    const hasSpouse = state.family.some((f) => f.relation === 'spouse' && f.alive);
+    const hasSpouse = state.family.some((f) => f.relation === 'spouse' && isPersonAlive(state, f.personId));
     const childCount = state.family.filter((f) => f.relation === 'child').length;
 
     const villageDutyIds = new Set([
@@ -1524,22 +1631,21 @@ export function resolvePendingDecision(
         clampStats(state);
 
         state.team = formGeninTeam(state, rng);
-        syncTeamMembersToWorldNpcs(state, rng);
         const sensei = state.team.members[0];
         const mates = state.team.members.slice(1);
-        state.rivalId = mates[0]?.id ?? null;
+        state.rivalId = mates[0]?.personId ?? null;
         if (mates[0]) {
           mates[0].fateNote += ' Your sworn rival since Academy graduation.';
         }
         recordMemory(
           state,
           'graduation',
-          `Tied on the ${VILLAGE_MAP[state.villageId].name} headband and joined Team ${state.team.number} with ${mates[0]?.name ?? 'squadmates'}.`,
+          `Tied on the ${VILLAGE_MAP[state.villageId].name} headband and joined Team ${state.team.number} with ${mates[0] ? personName(state, mates[0].personId) : 'squadmates'}.`,
         );
         pushLog(
           state,
           'milestone',
-          `You pass the Graduation Exam and receive your forehead protector as a Genin! You are assigned to Team ${state.team.number} under Jonin Sensei ${sensei.name}, alongside your rival ${mates[0].name} and ${mates[1].name}.`,
+          `You pass the Graduation Exam and receive your forehead protector as a Genin! You are assigned to Team ${state.team.number} under Jonin Sensei ${personName(state, sensei.personId)}, alongside your rival ${personName(state, mates[0].personId)} and ${personName(state, mates[1].personId)}.`,
           { title: `Promoted to Genin (Team ${state.team.number})`, deltas: diffStats(before, state.stats), checks },
         );
         // Immediately queue the induction Bell Test
@@ -1580,6 +1686,7 @@ export function resolvePendingDecision(
     case 'bell_test': {
       const team = state.team!;
       const sensei = team.members[0];
+      const senseiName = personName(state, sensei.personId);
       const mates = team.members.slice(1);
       team.bellTestPassed = true;
 
@@ -1592,7 +1699,7 @@ export function resolvePendingDecision(
         pushLog(
           state,
           'bond',
-          `Your squad’s coordinated trap forces ${sensei.name} onto the defensive. "You passed," Sensei smiles. "Teamwork comes before individual glory."`,
+          `Your squad’s coordinated trap forces ${senseiName} onto the defensive. "You passed," Sensei smiles. "Teamwork comes before individual glory."`,
           { title: `Team ${team.number} Passed the Bell Test`, deltas: diffStats(before, state.stats) },
         );
       } else if (optionId === 'share_lunch') {
@@ -1605,7 +1712,7 @@ export function resolvePendingDecision(
         pushLog(
           state,
           'bond',
-          `Defying orders to feed a bound squadmate wins ${sensei.name}’s rare approval: "Those who break rules are scum, but those who abandon comrades are worse than scum."`,
+          `Defying orders to feed a bound squadmate wins ${senseiName}’s rare approval: "Those who break rules are scum, but those who abandon comrades are worse than scum."`,
           { title: `Team ${team.number} Passed the Bell Test`, deltas: diffStats(before, state.stats) },
         );
       } else {
@@ -1626,15 +1733,15 @@ export function resolvePendingDecision(
           state,
           'normal',
           passed
-            ? `You actually graze a bell with a fearless rush before ${sensei.name} reminds you that lone wolves die early. Still, Team ${team.number} is cleared for active missions.`
-            : `${sensei.name} traps you in a rope snare effortlessly, lecturing the squad on teamwork before clearing Team ${team.number} for D-Rank duty.`,
+            ? `You actually graze a bell with a fearless rush before ${senseiName} reminds you that lone wolves die early. Still, Team ${team.number} is cleared for active missions.`
+            : `${senseiName} traps you in a rope snare effortlessly, lecturing the squad on teamwork before clearing Team ${team.number} for D-Rank duty.`,
           { deltas: diffStats(before, state.stats), checks },
         );
       }
       recordMemory(
         state,
         'bell_test',
-        `Passed ${sensei.name}'s Bell Test with Team ${team.number}.`,
+        `Passed ${senseiName}'s Bell Test with Team ${team.number}.`,
       );
       if (!state.nindo) {
         state.pending = buildNindoChoiceDecision(state);
@@ -1740,7 +1847,7 @@ export function resolvePendingDecision(
           state.stats.intel += 5;
           addLeaning(state, 'will_of_fire', 1);
           if (state.team) {
-            state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 8));
+            state.team.members.forEach((m) => isPersonAlive(state, m.personId) && adjustMemberTrust(state, m, 8));
           }
           decreeSummary = `Your first decree reforms the Shinobi Academy and raises safety standards for young Genin squads.`;
         } else if (optionId === 'decree_fortress') {
@@ -1835,9 +1942,9 @@ export function resolvePendingDecision(
         state.stats.bonds += 10;
         state.stats.will += 6;
         if (state.team) {
-          state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 8));
+          state.team.members.forEach((m) => isPersonAlive(state, m.personId) && adjustMemberTrust(state, m, 8));
         }
-        if (state.permanentPartner?.alive) {
+        if (state.permanentPartner && isPersonAlive(state, state.permanentPartner.personId)) {
           state.permanentPartner.trust = clamp(state.permanentPartner.trust + 8, 0, 100);
         }
         clampStats(state);
@@ -1945,7 +2052,7 @@ export function resolvePendingDecision(
           state.stats.will += 2;
           state.stats.health = Math.max(1, state.stats.health - 3);
           if (state.team?.active) {
-            state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 3));
+            state.team.members.forEach((m) => isPersonAlive(state, m.personId) && adjustMemberTrust(state, m, 3));
           }
           clampStats(state);
           const tNotes = advanceChuninTournamentStage(state, 2, rng);
@@ -1960,7 +2067,7 @@ export function resolvePendingDecision(
           state.stats.health -= optionId === 'ambush_hunt' ? 14 : 8;
           clampStats(state);
           const loyalMate = state.team?.active
-            ? state.team.members.find((m) => m.role === 'teammate' && m.alive && m.trust >= 65)
+            ? state.team.members.find((m) => m.role === 'teammate' && isPersonAlive(state, m.personId) && m.trust >= 65)
             : undefined;
           const fatalRisk = optionId === 'ambush_hunt' && state.stats.health < 30 && !loyalMate;
           if (state.stats.health <= 0 || (fatalRisk && rng.chance(0.14))) {
@@ -1971,7 +2078,7 @@ export function resolvePendingDecision(
           pushLog(
             state,
             'danger',
-            `${loyalMate ? `Rival Genin shatter your guard in the Forest of Death, and only ${loyalMate.name} dragging you clear saves your life. Your exam run ends here.` : 'An enemy squad seizes your scroll in the Forest of Death, ending your Chunin Exam run with harsh bruises.'}${fin.summary ? ` ${fin.summary}` : ''}`,
+            `${loyalMate ? `Rival Genin shatter your guard in the Forest of Death, and only ${personName(state, loyalMate.personId)} dragging you clear saves your life. Your exam run ends here.` : 'An enemy squad seizes your scroll in the Forest of Death, ending your Chunin Exam run with harsh bruises.'}${fin.summary ? ` ${fin.summary}` : ''}`,
             { deltas: diffStats(before, state.stats), checks },
           );
           const matesPassed = evaluateTeammatesChuninPass(state, rng);
@@ -1998,7 +2105,7 @@ export function resolvePendingDecision(
           state.stats.will += 3;
           state.stats.health = Math.max(1, state.stats.health - 3);
           if (state.team?.active) {
-            state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, optionId === 'protect_teammate' ? 6 : 3));
+            state.team.members.forEach((m) => isPersonAlive(state, m.personId) && adjustMemberTrust(state, m, optionId === 'protect_teammate' ? 6 : 3));
           }
           clampStats(state);
           const tNotes = advanceChuninTournamentStage(state, 3, rng);
@@ -2107,7 +2214,7 @@ export function resolvePendingDecision(
           state.stats.bonds += 4;
           state.stats.will += 2;
           if (state.team?.active) {
-            state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 5));
+            state.team.members.forEach((m) => isPersonAlive(state, m.personId) && adjustMemberTrust(state, m, 5));
           }
           prepBonus = 7;
           prepMsg = 'Daily spars beside your comrades fill you with calm fire heading into the stadium.';
@@ -2216,13 +2323,14 @@ export function resolvePendingDecision(
     case 'team_disband': {
       const team = state.team!;
       const sensei = team.members[0];
+      const senseiName = personName(state, sensei.personId);
       const mates = team.members.slice(1);
 
       if (optionId === 'promise_comrades') {
         state.stats.bonds += 5;
         state.stats.will += 3;
         mates.forEach((m) => {
-          if (m.alive) {
+          if (isPersonAlive(state, m.personId)) {
             m.promiseMade = true;
             adjustMemberTrust(state, m, 9, true);
           }
@@ -2237,7 +2345,7 @@ export function resolvePendingDecision(
       } else if (optionId === 'thank_sensei') {
         state.stats.will += 4;
         state.stats.intel += 2;
-        if (sensei.alive) {
+        if (isPersonAlive(state, sensei.personId)) {
           sensei.promiseMade = true;
           adjustMemberTrust(state, sensei, 12, true);
         }
@@ -2245,15 +2353,16 @@ export function resolvePendingDecision(
         pushLog(
           state,
           'bond',
-          `${sensei.name} rests a warm hand on your shoulder as dusk falls. "You are no longer my student. Watch your own back out there."`,
+          `${senseiName} rests a warm hand on your shoulder as dusk falls. "You are no longer my student. Watch your own back out there."`,
           { title: `Farewell, Team ${team.number}`, deltas: diffStats(before, state.stats) },
         );
       } else if (optionId.startsWith('confess_')) {
         const targetId = optionId.replace('confess_', '');
-        const target = mates.find((m) => m.id === targetId);
-        if (target && target.alive) {
+        const target = mates.find((m) => m.personId === targetId);
+        if (target && isPersonAlive(state, target.personId)) {
+          const targetName = personName(state, target.personId);
           const ok = state.stats.bonds + target.trust + rng.int(0, 30) > 108;
-          checks.push({ label: `Confess to ${target.name}`, passed: ok });
+          checks.push({ label: `Confess to ${targetName}`, passed: ok });
           if (ok) {
             target.relTrack = 'romance';
             target.relStage = Math.max(1, target.relStage) as 0 | 1 | 2 | 3;
@@ -2264,7 +2373,7 @@ export function resolvePendingDecision(
             pushLog(
               state,
               'bond',
-              `${target.name} listens in stunned quiet, then holds your hand beneath the lantern light. Team ${team.number} ends tonight, yet something deeper begins.`,
+              `${targetName} listens in stunned quiet, then holds your hand beneath the lantern light. Team ${team.number} ends tonight, yet something deeper begins.`,
               { title: 'A Promise Beyond the Squad', deltas: diffStats(before, state.stats), checks },
             );
           } else {
@@ -2274,7 +2383,7 @@ export function resolvePendingDecision(
             pushLog(
               state,
               'bond',
-              `${target.name} smiles gently and asks to remain trusted comrades while wars still loom ahead.`,
+              `${targetName} smiles gently and asks to remain trusted comrades while wars still loom ahead.`,
               { deltas: diffStats(before, state.stats), checks },
             );
           }
@@ -2282,7 +2391,7 @@ export function resolvePendingDecision(
       } else {
         state.stats.will += 3;
         addLeaning(state, 'ruthless', 1);
-        team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, -4));
+        team.members.forEach((m) => isPersonAlive(state, m.personId) && adjustMemberTrust(state, m, -4));
         clampStats(state);
         pushLog(
           state,
@@ -2588,10 +2697,10 @@ export function resolvePendingDecision(
 
       let avgTrust = 0;
       for (const m of state.team.members) {
-        if (!m.alive) continue;
+        if (!isPersonAlive(state, m.personId)) continue;
         let delta = m.role === 'sensei' ? opt.trustSensei : opt.trustTeammates;
         if (opt.traitBonus) {
-          for (const tr of m.traits) {
+          for (const tr of getPersonTraits(state, m.personId)) {
             delta += opt.traitBonus[tr] ?? 0;
           }
         }
@@ -2893,7 +3002,7 @@ export function resolvePendingDecision(
           state.team.disbandedAge = state.age;
           state.team.disbandReason = 'tragedy';
           for (const m of state.team.members) {
-            if (m.alive) adjustMemberTrust(state, m, -20);
+            if (isPersonAlive(state, m.personId)) adjustMemberTrust(state, m, -20);
           }
         }
         clampStats(state);
@@ -2951,7 +3060,7 @@ export function resolvePendingDecision(
         }
       }
       if (opt.trustAllTeam && state.team) {
-        state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, opt.trustAllTeam!));
+        state.team.members.forEach((m) => isPersonAlive(state, m.personId) && adjustMemberTrust(state, m, opt.trustAllTeam!));
       }
       clampStats(state);
       if (state.stats.health <= 0) {

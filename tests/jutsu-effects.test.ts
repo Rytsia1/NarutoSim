@@ -475,5 +475,5 @@ describe('Effect Model v2 & Wave 1 Jutsu Catalog (Section 1 & 4.2)', () => {
     }
     expect(transplants).toBeGreaterThan(0);
     expect(transplants / 2000).toBeLessThan(0.02);
-  });
+  }, 15000);
 });

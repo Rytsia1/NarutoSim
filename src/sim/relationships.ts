@@ -137,9 +137,9 @@ export function adjustBidirectionalPlayerRel(
   };
   npc.relationships.player = updated;
 
-  // Mirror back to KizunaMember if linked
-  if (npc.identity.linkedTeamMemberId && state.team) {
-    const member = state.team.members.find((m) => m.id === npc.identity.linkedTeamMemberId);
+  // Update role-local bond cache on KizunaMember if this person is in the player's squad
+  if (state.team) {
+    const member = state.team.members.find((m) => m.personId === npc.identity.id);
     if (member) {
       member.trust = newNpcVec.trust;
       member.rel6 = { ...newNpcVec };
@@ -155,7 +155,7 @@ export function adjustBidirectionalPlayerRel(
 export function ensureRel6Defaults(state: GameState): void {
   if (state.team) {
     for (const m of state.team.members) {
-      syncKizunaMemberRel6(m, state.rivalId === m.id);
+      syncKizunaMemberRel6(m, state.rivalId === m.personId);
     }
   }
   if (state.worldSim) {

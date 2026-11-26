@@ -5,7 +5,7 @@ import {
   MISSION_THREATS,
 } from '../data/mission-templates';
 import { addNpcMemory } from './npc-sim';
-import { clamp } from './powers';
+import { getPerson, isPersonAlive, personName } from './people';
 import { adjustBidirectionalPlayerRel } from './relationships';
 import type { SeededRng } from './rng';
 import { recordTimelineEvent, revealTimelineTruth } from './timeline';
@@ -52,10 +52,12 @@ export function generateMissionContract(
 
   let squadLabel = 'Solo Operative';
   if (state.team?.active) {
-    const aliveNames = state.team.members.filter((m) => m.alive).map((m) => m.name);
+    const aliveNames = state.team.members
+      .filter((m) => isPersonAlive(state, m.personId))
+      .map((m) => personName(state, m.personId));
     squadLabel = `Team ${state.team.number} (${aliveNames.length + 1}-man cell: ${aliveNames.join(', ')})`;
-  } else if (state.permanentPartner?.alive) {
-    squadLabel = `2-Man Cell with ${state.permanentPartner.name}`;
+  } else if (state.permanentPartner && isPersonAlive(state, state.permanentPartner.personId)) {
+    squadLabel = `2-Man Cell with ${personName(state, state.permanentPartner.personId)}`;
   } else if (state.rank === 'jonin') {
     squadLabel = 'Jonin Strike Lead + 2 Village Escorts';
   }
@@ -313,26 +315,22 @@ export function resolveProceduralMissionStage(
     state.stats.health = Math.max(10, state.stats.health - 6);
     if (state.team) {
       for (const m of state.team.members) {
-        if (!m.alive) continue;
-        const npc = worldSim?.npcs.find((n) => n.identity.linkedTeamMemberId === m.id);
-        if (npc) {
-          adjustBidirectionalPlayerRel(
-            state,
-            npc,
-            { trust: 20, affection: 18, respect: 16, resentment: -15 },
-            { trust: 14, affection: 14 },
-          );
-          addNpcMemory(npc, {
-            year: state.birthYear + state.age,
-            age: npc.identity.age,
-            tag: 'bond',
-            summary: `${state.name} abandoned a ${mission.rank}-Rank objective to pull us out alive.`,
-            actorId: 'player',
-            impact: 9,
-          });
-        } else {
-          m.trust = clamp(m.trust + 16, 0, 100);
-        }
+        const npc = getPerson(state, m.personId);
+        if (!npc || !npc.identity.alive) continue;
+        adjustBidirectionalPlayerRel(
+          state,
+          npc,
+          { trust: 20, affection: 18, respect: 16, resentment: -15 },
+          { trust: 14, affection: 14 },
+        );
+        addNpcMemory(npc, {
+          year: state.birthYear + state.age,
+          age: npc.identity.age,
+          tag: 'bond',
+          summary: `${state.name} abandoned a ${mission.rank}-Rank objective to pull us out alive.`,
+          actorId: 'player',
+          impact: 9,
+        });
       }
     }
     pushConsequence(state, {

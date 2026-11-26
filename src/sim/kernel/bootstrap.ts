@@ -103,6 +103,16 @@ export function ensureKernelBootstrapped(
     },
   });
 
+  defaultMigrationRegistry.register({
+    id: 'save_version_3_generator',
+    order: 60,
+    apply: (state) => {
+      if (state.saveVersion === undefined) {
+        state.saveVersion = 3;
+      }
+    },
+  });
+
   // 2. Domain Decision Handlers registered cleanly per Engine!
   defaultDecisionRouter.register('academy_event', ({ state, decision, optionId, rng }) => {
     const before = snapshotStats(state);

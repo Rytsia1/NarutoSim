@@ -5,7 +5,6 @@ import {
   recordWorldHistory,
   seedInitialWorldNpcs,
   setPlayerRelation,
-  syncTeamMembersToWorldNpcs,
   tickAutonomousNpcs,
   triggerNpcDefection,
   type WorldDispatch,
@@ -129,9 +128,6 @@ export function ensureWorldSimDefaults(state: GameState): WorldSimState {
     if (state.specialStatus === 'kage') {
       state.worldSim.villages[state.villageId].kageNpcId = 'player';
     }
-    if (state.team) {
-      syncTeamMembersToWorldNpcs(state, rng);
-    }
   }
   for (const v of Object.values(state.worldSim.villages)) {
     ensureVillagePolitics(v);
@@ -159,9 +155,6 @@ export function tickAutonomousWorldYear(
 ): { dispatches: WorldDispatch[]; tensionDelta: number } {
   const worldSim = ensureWorldSimDefaults(state);
 
-  if (state.team) {
-    syncTeamMembersToWorldNpcs(state, rng);
-  }
   if (state.specialStatus === 'kage') {
     worldSim.villages[state.villageId].kageNpcId = 'player';
   }
@@ -172,10 +165,6 @@ export function tickAutonomousWorldYear(
   const layer3 = tickAutonomousNpcs(state, worldSim, rng);
   const timelineDispatches = tickLivingTimeline(state, worldSim, rng);
 
-  // Sync back any autonomous changes to team members
-  if (state.team) {
-    syncTeamMembersToWorldNpcs(state, rng);
-  }
   ensureRel6Defaults(state);
 
   const allDispatches = [...layer1.dispatches, ...layer2, ...layer3, ...timelineDispatches];

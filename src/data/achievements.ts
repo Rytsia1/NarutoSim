@@ -290,8 +290,9 @@ export const ACHIEVEMENTS: readonly AchievementDef[] = [
     id: 'ach_meta_codex12',
     category: 'meta',
     title: 'Master of the Bingo Book',
-    desc: 'Encounter or defeat at least 12 distinct rival shinobi in the Bingo Book Codex.',
-    check: (_s, m) => Object.keys(m.codexRoster).length >= 12,
+    desc: 'Encounter rival shinobi across all 8 combat archetypes across your lives.',
+    check: (_s, m) =>
+      Object.values(m.codexStats?.byArchetype ?? {}).filter((entry) => (entry?.encountered ?? 0) > 0).length >= 8,
   },
   {
     id: 'ach_meta_both_crises',

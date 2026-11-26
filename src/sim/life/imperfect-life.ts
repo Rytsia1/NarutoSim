@@ -4,6 +4,7 @@ import { recordMemory } from '../history/chronicle';
 import { recordEpisodicNpcMemory } from '../npc/cognition';
 import { ensureNpcCognitionState } from '../npc/lod-population';
 import { addNpcMemory, recordWorldHistory, triggerNpcDefection } from '../npc-sim';
+import { getPerson, isPersonAlive, killPerson, personName } from '../people';
 import { clamp } from '../powers';
 import { adjustBidirectionalPlayerRel } from '../relationships';
 import type { SeededRng } from '../rng';
@@ -136,12 +137,13 @@ export function buildUnwantedMissionDecision(state: GameState): PendingDecision 
 
   // If none defected yet during a tense era, organically trigger a strained classmate/peer's defection
   if (!target && state.world.tension >= 42) {
+    const teamIds = new Set(state.team?.members.map((m) => m.personId) ?? []);
     const peer = ws.npcs.find(
       (n) =>
         n.identity.alive &&
         n.identity.villageId === state.villageId &&
         n.identity.specialStatus === 'none' &&
-        !n.identity.linkedTeamMemberId &&
+        !teamIds.has(n.identity.id) &&
         (state.academy?.classmateNpcIds.includes(n.identity.id) || Boolean(n.relationships.player)) &&
         n.personality.loyal <= 62,
     );
@@ -211,33 +213,36 @@ export function buildAbandonedSquadDecision(state: GameState): PendingDecision |
   if (!state.team || !state.team.active || state.age < 13) return null;
   if (state.world.tension < 38) return null;
 
-  const sensei = state.team.members.find((m) => m.role === 'sensei' && m.alive);
-  const livingMates = state.team.members.filter((m) => m.role === 'teammate' && m.alive);
+  const sensei = state.team.members.find((m) => m.role === 'sensei' && isPersonAlive(state, m.personId));
+  const livingMates = state.team.members.filter((m) => m.role === 'teammate' && isPersonAlive(state, m.personId));
   if (!sensei || livingMates.length < 2) return null;
 
   const fallenMate = livingMates[0];
   const survivorMate = livingMates[1];
+  const senseiName = personName(state, sensei.personId);
+  const fallenMateName = personName(state, fallenMate.personId);
+  const survivorMateName = personName(state, survivorMate.personId);
 
   return {
     id: `imp_abandoned_squad_${state.age}`,
     kind: 'imperfect_life',
     eventId: 'abandoned_squad',
     title: `The Abandoned Squad: Rain Over the Frontier`,
-    body: `An intelligence leak drops an enemy kill-squad straight onto Team ${state.team.number} in a rain-drenched ravine. ${sensei.name} throws up a desperate barrier while ${fallenMate.name} drags you clear of a paper-bomb blast, vanishing into the smoke behind them. Bleeding and pinned down beside a broken bridge, ${survivorMate.name} grabs your collar in panic, screaming at you to go back into the fire as enemy footsteps close in.`,
+    body: `An intelligence leak drops an enemy kill-squad straight onto Team ${state.team.number} in a rain-drenched ravine. ${senseiName} throws up a desperate barrier while ${fallenMateName} drags you clear of a paper-bomb blast, vanishing into the smoke behind them. Bleeding and pinned down beside a broken bridge, ${survivorMateName} grabs your collar in panic, screaming at you to go back into the fire as enemy footsteps close in.`,
     manual: true,
     meta: {
       scenario: 'abandoned_squad',
-      senseiId: sensei.id,
-      senseiName: sensei.name,
-      fallenMateId: fallenMate.id,
-      fallenMateName: fallenMate.name,
-      survivorMateId: survivorMate.id,
-      survivorMateName: survivorMate.name,
+      senseiId: sensei.personId,
+      senseiName,
+      fallenMateId: fallenMate.personId,
+      fallenMateName,
+      survivorMateId: survivorMate.personId,
+      survivorMateName,
     },
     options: [
       {
         id: 'pull_survivor_out',
-        label: `Drag ${survivorMate.name} out of the ravine alive while the rear guard falls`,
+        label: `Drag ${survivorMateName} out of the ravine alive while the rear guard falls`,
         sublabel: 'You save the last living teammate, though survivor guilt turns their grief into blame against you.',
         statHints: ['Will', 'Health'],
         autoEligible: true,
@@ -937,12 +942,20 @@ export function resolveImperfectLifeDecision(
     const fallenMateName = String(meta?.fallenMateName ?? 'your teammate');
     const survivorMateName = String(meta?.survivorMateName ?? 'your surviving teammate');
 
-    // Mark sensei & fallen teammate dead in TeamState and linked WorldNpcs
+    // Mark sensei & fallen teammate dead via canonical killPerson (zero mirror syncing!)
+    const senseiNpc = getPerson(state, senseiId);
+    const fallenMateNpc = getPerson(state, fallenMateId);
+    if (senseiNpc) {
+      killPerson(state, senseiId, senseiNpc.identity.age, 'fell covering the retreat during a frontier ravine ambush');
+    }
+    if (fallenMateNpc) {
+      killPerson(state, fallenMateId, fallenMateNpc.identity.age, 'fell covering the retreat during a frontier ravine ambush');
+    }
     if (state.team) {
       for (const m of state.team.members) {
-        if (m.id === senseiId || m.id === fallenMateId) {
-          m.alive = false;
-          m.fateNote = `Fell during the frontier ravine ambush at age ${m.age}.`;
+        if (m.personId === senseiId || m.personId === fallenMateId) {
+          const p = getPerson(state, m.personId);
+          m.fateNote = `Fell during the frontier ravine ambush at age ${p?.identity.age ?? state.age}.`;
         }
       }
       state.team.active = false;
@@ -950,19 +963,7 @@ export function resolveImperfectLifeDecision(
       state.team.disbandReason = 'tragedy';
     }
 
-    let survivorNpc: WorldNpc | undefined;
-    if (ws) {
-      for (const npc of ws.npcs) {
-        if (npc.identity.linkedTeamMemberId === senseiId || npc.identity.linkedTeamMemberId === fallenMateId) {
-          npc.identity.alive = false;
-          npc.identity.deathAge = npc.identity.age;
-          npc.identity.deathCause = 'fell covering the retreat during a frontier ravine ambush';
-        }
-        if (npc.identity.linkedTeamMemberId === survivorMateId) {
-          survivorNpc = npc;
-        }
-      }
-    }
+    const survivorNpc: WorldNpc | undefined = getPerson(state, survivorMateId) ?? undefined;
 
     const resentmentGain = optionId === 'charge_back_smoke' ? 32 : optionId === 'protocol_retreat' ? 62 : 52;
     const trustDrop = optionId === 'charge_back_smoke' ? -22 : optionId === 'protocol_retreat' ? -45 : -36;

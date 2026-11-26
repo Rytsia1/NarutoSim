@@ -216,8 +216,9 @@ export function determineNpcLodTier(npc: WorldNpc, state: GameState, worldSim: W
   const id = npc.identity;
   if (!id.alive) return 'L2';
 
-  // Always L1: Active/former squad, Academy sensei/classmates, rival, imperfect-life key actors
-  if (id.linkedTeamMemberId) return 'L1';
+  // Always L1: Active/former squad, family, Academy sensei/classmates, rival, imperfect-life key actors
+  if (state.team?.members.some((m) => m.personId === id.id)) return 'L1';
+  if (state.family.some((f) => f.personId === id.id)) return 'L1';
   if (state.academy?.senseiNpcId === id.id) return 'L1';
   if (state.academy?.classmateNpcIds.includes(id.id)) return 'L1';
   if (state.rivalId === id.id) return 'L1';

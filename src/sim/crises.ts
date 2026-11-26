@@ -1,6 +1,7 @@
 import { getPlayerRanks, getPlayerSignatureUltimate } from './combat';
 import { addLeaning, clampStats, pushLog } from './life';
 import { recordWarFact } from './narrative';
+import { getPersonTraits, isPersonAlive, personName } from './people';
 import { getJutsuBasePower, getKnownJutsu } from '../data/jutsu';
 import { clamp } from './powers';
 import type { SeededRng } from './rng';
@@ -410,7 +411,7 @@ export function canTriggerConvictionRoute(state: GameState, war: WarState): bool
   if (war.conviction !== null) return false;
   if (state.flags.entered_conviction) return false;
   if (!findDominantExtremeLeaning(state)) return false;
-  const livingSquad = state.team?.members.filter((m) => m.alive) ?? [];
+  const livingSquad = state.team?.members.filter((m) => isPersonAlive(state, m.personId)) ?? [];
   return livingSquad.length > 0;
 }
 
@@ -420,18 +421,20 @@ export function startConvictionRoute(
   triggerOutcome: 'victor' | 'shared' = 'victor',
 ): PendingDecision {
   const leaning = findDominantExtremeLeaning(state)!;
-  const livingSquad = state.team!.members.filter((m) => m.alive);
-  const rivalOpp = state.rivalId ? livingSquad.find((m) => m.id === state.rivalId) : undefined;
+  const livingSquad = state.team!.members.filter((m) => isPersonAlive(state, m.personId));
+  const rivalOpp = state.rivalId ? livingSquad.find((m) => m.personId === state.rivalId) : undefined;
   const opponent = rivalOpp ?? [...livingSquad].sort((a, b) => b.trust - a.trust)[0];
+  const oppTraits = getPersonTraits(state, opponent.personId);
+  const oppName = personName(state, opponent.personId);
 
   // Clear any leftover activeBattle when transitioning into Conviction Route
   war.activeBattle = null;
 
   // Initial Resolve R (0..100) from traits, trust, and relationship stage
   let r = 48;
-  if (opponent.traits.includes('honor')) r += 10;
-  if (opponent.traits.includes('compassion')) r += 12;
-  if (opponent.traits.includes('ambition')) r -= 10;
+  if (oppTraits.includes('honor')) r += 10;
+  if (oppTraits.includes('compassion')) r += 12;
+  if (oppTraits.includes('ambition')) r -= 10;
   if (opponent.trust >= 80) r -= 10;
   else if (opponent.trust < 40) r += 12;
   r += opponent.relStage * 5;
@@ -440,8 +443,7 @@ export function startConvictionRoute(
   war.conviction = {
     leaning,
     wishTitle: CONVICTION_WISHES[leaning],
-    opponentId: opponent.id,
-    opponentName: opponent.name,
+    opponentPersonId: opponent.personId,
     opponentRole: opponent.role,
     triggerOutcome,
     resolveR: clamp(r, 15, 95),
@@ -455,7 +457,7 @@ export function startConvictionRoute(
   pushLog(
     state,
     'crisis',
-    `EXTREME CONVICTION ROUTE: As the dust of War #${war.warNumber} settles, your overwhelming conviction ("${CONVICTION_WISHES[leaning]}") reaches its tipping point. Waiting beside the waterfall at the Valley of the End stands ${opponent.name}.`,
+    `EXTREME CONVICTION ROUTE: As the dust of War #${war.warNumber} settles, your overwhelming conviction ("${CONVICTION_WISHES[leaning]}") reaches its tipping point. Waiting beside the waterfall at the Valley of the End stands ${oppName}.`,
     { title: 'The Valley of the End' },
   );
 
@@ -464,16 +466,17 @@ export function startConvictionRoute(
 
 export function buildConvictionBeatDecision(state: GameState): PendingDecision {
   const conv = state.war!.conviction!;
+  const oppName = personName(state, conv.opponentPersonId);
   const mem = state.memories && state.memories.length > 0 ? state.memories[0] : null;
   const memQuote = mem ? ` A memory flashes back from Age ${mem.age}: "${mem.text}"` : '';
   const prompts: Record<1 | 2 | 3, { title: string; body: string }> = {
     1: {
-      title: `Valley of the End (1/3): ${conv.opponentName} Blocks Your Path`,
-      body: `"I saw what this war turned you into," ${conv.opponentName} says quietly over the roar of the falls. "If you pursue '${conv.wishTitle}', I cannot stand aside." (Their Resolve: ${conv.resolveR}/100)`,
+      title: `Valley of the End (1/3): ${oppName} Blocks Your Path`,
+      body: `"I saw what this war turned you into," ${oppName} says quietly over the roar of the falls. "If you pursue '${conv.wishTitle}', I cannot stand aside." (Their Resolve: ${conv.resolveR}/100)`,
     },
     2: {
       title: 'Valley of the End (2/3): Echo of Team Memories',
-      body: `Rain begins falling over the carved stone statues. ${conv.opponentName} tightens their grip on a familiar kunai, asking whether the Genin days you shared meant nothing at all.${memQuote} (Their Resolve: ${conv.resolveR}/100)`,
+      body: `Rain begins falling over the carved stone statues. ${oppName} tightens their grip on a familiar kunai, asking whether the Genin days you shared meant nothing at all.${memQuote} (Their Resolve: ${conv.resolveR}/100)`,
     },
     3: {
       title: 'Valley of the End (3/3): The Final Step',
@@ -515,14 +518,15 @@ export function buildConvictionBeatDecision(state: GameState): PendingDecision {
 export function buildConvictionDuelDecision(state: GameState): PendingDecision {
   const war = state.war!;
   const conv = war.conviction!;
+  const oppName = personName(state, conv.opponentPersonId);
   const ult = getCrisisSignatureStrike(state);
 
   return {
     id: `conv_duel_${conv.round}`,
     kind: 'war_conviction_duel',
     eventId: 'war_conviction_duel',
-    title: `Final Valley Ideological Duel (Round ${conv.round}): vs ${conv.opponentName}`,
-    body: `Your HP ${war.hp}/100, CP ${war.cp}/100 | ${conv.opponentName} HP ${conv.opponentHp}/100, Resolve ${conv.resolveR}/100. Lowering their Resolve makes them hesitate mid-clash.`,
+    title: `Final Valley Ideological Duel (Round ${conv.round}): vs ${oppName}`,
+    body: `Your HP ${war.hp}/100, CP ${war.cp}/100 | ${oppName} HP ${conv.opponentHp}/100, Resolve ${conv.resolveR}/100. Lowering their Resolve makes them hesitate mid-clash.`,
     manual: true,
     options: [
       {
@@ -557,6 +561,7 @@ export function resolveConvictionBeat(
   optionId: string,
 ): 'next_beat' | 'start_duel' | 'end_turned_away' | 'end_together' {
   const conv = state.war!.conviction!;
+  const oppName = personName(state, conv.opponentPersonId);
 
   if (optionId === 'turn_away') {
     conv.endingKey = 'conv_turned_away';
@@ -567,7 +572,7 @@ export function resolveConvictionBeat(
     pushLog(
       state,
       'bond',
-      `You lower your kunai in the rain. ${conv.opponentName} exhales shakily and walks back toward the village beside you.`,
+      `You lower your kunai in the rain. ${oppName} exhales shakily and walks back toward the village beside you.`,
       { title: 'Conviction Ending: Turned Away' },
     );
     return 'end_turned_away';
@@ -575,12 +580,12 @@ export function resolveConvictionBeat(
 
   if (optionId === 'invoke_memory') {
     conv.resolveR = clamp(conv.resolveR - 16, 0, 100);
-    pushLog(state, 'bond', `Memories of old drills flicker behind ${conv.opponentName}’s eyes (Resolve ${conv.resolveR}/100).`);
+    pushLog(state, 'bond', `Memories of old drills flicker behind ${oppName}’s eyes (Resolve ${conv.resolveR}/100).`);
   } else {
     conv.resolveR = clamp(conv.resolveR + 10, 0, 100);
     state.stats.will += 3;
     clampStats(state);
-    pushLog(state, 'crisis', `Your unyielding resolve forces ${conv.opponentName} into a combat stance (Resolve ${conv.resolveR}/100).`);
+    pushLog(state, 'crisis', `Your unyielding resolve forces ${oppName} into a combat stance (Resolve ${conv.resolveR}/100).`);
   }
 
   if (conv.beat < 3) {
@@ -595,7 +600,7 @@ export function resolveConvictionBeat(
     pushLog(
       state,
       'milestone',
-      `Unable to strike you down, ${conv.opponentName} steps beside you at the edge of the falls. Together, you will reshape the shinobi world.`,
+      `Unable to strike you down, ${oppName} steps beside you at the edge of the falls. Together, you will reshape the shinobi world.`,
       { title: 'Conviction Ending: Walk Together' },
     );
     return 'end_together';
@@ -612,12 +617,13 @@ export function resolveConvictionDuelRound(
 ): 'continue' | 'player_won' | 'opponent_won' | 'opponent_won_dead' | 'turned_away' {
   const war = state.war!;
   const conv = war.conviction!;
+  const oppName = personName(state, conv.opponentPersonId);
   const ult = getCrisisSignatureStrike(state);
 
   if (optionId === 'duel_sheathe') {
     conv.endingKey = 'conv_turned_away';
     state.flags.conv_turned_away = true;
-    pushLog(state, 'bond', `Mid-clash, you drop your weapon and yield your dark obsession to ${conv.opponentName}.`, {
+    pushLog(state, 'bond', `Mid-clash, you drop your weapon and yield your dark obsession to ${oppName}.`, {
       title: 'Conviction Ending: Turned Away',
     });
     return 'turned_away';
@@ -634,7 +640,7 @@ export function resolveConvictionDuelRound(
     pushLog(
       state,
       'bond',
-      `Your words cut through the rain, dropping ${conv.opponentName}’s Resolve to ${conv.resolveR}/100!`,
+      `Your words cut through the rain, dropping ${oppName}’s Resolve to ${conv.resolveR}/100!`,
     );
   } else if (optionId === 'duel_ultimate') {
     war.cp = Math.max(0, war.cp - ult.cost);
@@ -651,7 +657,7 @@ export function resolveConvictionDuelRound(
   pushLog(
     state,
     'crisis',
-    `Final Valley Clash (R${conv.round - 1}): You deal ${pDmg} damage${hesitates ? ` (${conv.opponentName} hesitated!)` : ''} and take ${eDmg} damage.`,
+    `Final Valley Clash (R${conv.round - 1}): You deal ${pDmg} damage${hesitates ? ` (${oppName} hesitated!)` : ''} and take ${eDmg} damage.`,
   );
 
   if (conv.opponentHp <= 0) {
@@ -663,7 +669,7 @@ export function resolveConvictionDuelRound(
     pushLog(
       state,
       'crisis',
-      `${conv.opponentName} collapses onto the wet stone as you stand alone above the falls. Your radical vision ("${conv.wishTitle}") reshapes the continent.`,
+      `${oppName} collapses onto the wet stone as you stand alone above the falls. Your radical vision ("${conv.wishTitle}") reshapes the continent.`,
       { title: 'Conviction Ending: Unbroken Will' },
     );
     return 'player_won';
@@ -672,13 +678,13 @@ export function resolveConvictionDuelRound(
   if (war.hp <= 0) {
     conv.endingKey = 'conv_bond_stopped';
     state.flags.conv_bond_stopped = true;
-    const member = state.team?.members.find((m) => m.id === conv.opponentId);
+    const member = state.team?.members.find((m) => m.personId === conv.opponentPersonId);
     if (member && member.trust >= 70) {
       war.hp = 12;
       pushLog(
         state,
         'bond',
-        `${conv.opponentName} pins your blade beneath the waterfall and refuses to strike the killing blow, pulling you back from the abyss alive.`,
+        `${oppName} pins your blade beneath the waterfall and refuses to strike the killing blow, pulling you back from the abyss alive.`,
         { title: 'Conviction Ending: Saved by Kizuna' },
       );
       return 'opponent_won';

@@ -2,6 +2,7 @@ import { RETIREMENT_EVENTS } from '../data/events-epilogue';
 import { BLOODLINE_MAP, DISCIPLINE_MAP } from '../data/powers';
 import { ORIGIN_MAP } from '../data/origins';
 import { kageTitle, VILLAGE_MAP } from '../data/villages';
+import { getPerson, isPersonAlive, personName } from './people';
 import { computeCombatProjection } from './powers';
 import type { SeededRng } from './rng';
 import type { EpilogueBeat, GameState, LifeRecord, PendingDecision } from './types';
@@ -14,8 +15,8 @@ export function canEnterRetirement(state: GameState): boolean {
 }
 
 export function buildRetirementEventDecision(state: GameState, rng: SeededRng): PendingDecision | null {
-  const hasSpouse = state.family.some((f) => f.relation === 'spouse' && f.alive);
-  const hasLivingPartner = Boolean(state.permanentPartner && state.permanentPartner.alive);
+  const hasSpouse = state.family.some((f) => f.relation === 'spouse' && isPersonAlive(state, f.personId));
+  const hasLivingPartner = Boolean(state.permanentPartner && isPersonAlive(state, state.permanentPartner.personId));
   const candidates = RETIREMENT_EVENTS.filter((ev) => {
     if (state.usedRetirement.includes(ev.id)) return false;
     if (ev.requiresJonin && state.rank !== 'jonin') return false;
@@ -32,7 +33,7 @@ export function buildRetirementEventDecision(state: GameState, rng: SeededRng): 
 
   const leaderTitle = kageTitle(state);
   const p = state.permanentPartner;
-  const partnerName = p?.name ?? 'your war partner';
+  const partnerName = p ? personName(state, p.personId) : 'your war partner';
   const partnerRelLine =
     p?.relTrack === 'romance'
       ? 'Their fingers brush yours gently, carrying decades of quiet devotion forged under fire.'
@@ -99,23 +100,26 @@ export function buildPosthumousEpilogue(state: GameState): EpilogueBeat[] {
 
   // Beat 2: Those Left Behind (Genin Squad Kizuna & Family)
   const team = state.team;
-  const livingSquad = team ? team.members.filter((m) => m.alive) : [];
-  const livingSpouse = state.family.find((f) => f.relation === 'spouse' && f.alive);
-  const livingChildren = state.family.filter((f) => f.relation === 'child' && f.alive);
+  const livingSquad = team ? team.members.filter((m) => isPersonAlive(state, m.personId)) : [];
+  const livingSpouse = state.family.find((f) => f.relation === 'spouse' && isPersonAlive(state, f.personId));
+  const livingChildren = state.family.filter((f) => f.relation === 'child' && isPersonAlive(state, f.personId));
+  const livingSpouseName = livingSpouse ? personName(state, livingSpouse.personId) : null;
 
   if (livingSquad.length > 0) {
     const closest = [...livingSquad].sort((a, b) => b.trust - a.trust)[0];
+    const closestPerson = getPerson(state, closest.personId);
+    const closestName = closestPerson?.identity.name ?? personName(state, closest.personId);
     const teamText =
-      closest.specialStatus === 'missing_nin'
-        ? `Far from ${village}, your former squadmate ${closest.name} hears the rumor in a roadside inn and stands silently in the rain long after the lantern goes out.`
+      closestPerson?.identity.specialStatus === 'missing_nin'
+        ? `Far from ${village}, your former squadmate ${closestName} hears the rumor in a roadside inn and stands silently in the rain long after the lantern goes out.`
         : closest.role === 'sensei'
-          ? `Your former Sensei, ${closest.name}, lingers by the stone long after everyone leaves, resting a hand on the cold slate and whispering that students were never meant to go before their teacher.`
+          ? `Your former Sensei, ${closestName}, lingers by the stone long after everyone leaves, resting a hand on the cold slate and whispering that students were never meant to go before their teacher.`
           : closest.relTrack === 'romance'
-            ? `${closest.name} stays until dusk beside your grave, holding tightly to the promise you made when Team ${team!.number} parted ways.`
-            : `${closest.name} of old Team ${team!.number} places two wooden training sticks beside the flowers, swearing to carry your share of the road forward.`;
+            ? `${closestName} stays until dusk beside your grave, holding tightly to the promise you made when Team ${team!.number} parted ways.`
+            : `${closestName} of old Team ${team!.number} places two wooden training sticks beside the flowers, swearing to carry your share of the road forward.`;
 
-    const familyLine = livingSpouse
-      ? ` Beside them stands ${livingSpouse.name}${livingChildren.length > 0 ? ` with your ${livingChildren.length === 1 ? 'child' : `${livingChildren.length} children`}` : ''}, keeping your memory alive at home.`
+    const familyLine = livingSpouseName
+      ? ` Beside them stands ${livingSpouseName}${livingChildren.length > 0 ? ` with your ${livingChildren.length === 1 ? 'child' : `${livingChildren.length} children`}` : ''}, keeping your memory alive at home.`
       : '';
 
     beats.push({
@@ -123,36 +127,39 @@ export function buildPosthumousEpilogue(state: GameState): EpilogueBeat[] {
       tone: 'bond',
       body: `${teamText}${familyLine}`,
     });
-  } else if (livingSpouse || livingChildren.length > 0) {
+  } else if (livingSpouseName || livingChildren.length > 0) {
     beats.push({
       title: 'The Empty Sandals by the Door',
       tone: 'bond',
-      body: `At home, ${livingSpouse ? livingSpouse.name : 'your children'} keep your worn headband in a cedar box, retelling stories of your courage whenever winter rain hammers the roof.`,
+      body: `At home, ${livingSpouseName ?? 'your children'} keep your worn headband in a cedar box, retelling stories of your courage whenever winter rain hammers the roof.`,
     });
   }
 
   // Beat 2.5: Permanent War Partner / Fallen Partner Memorial Stone Beat (K5)
   const permPartner = state.permanentPartner;
+  const permPerson = permPartner ? getPerson(state, permPartner.personId) : null;
+  const permAlive = Boolean(permPartner && isPersonAlive(state, permPartner.personId));
+  const permName = permPartner ? personName(state, permPartner.personId) : 'your war partner';
   const fallenPartnerMemory = state.memories?.find((m) => m.tag === 'loss' && m.text.includes('fell shielding you'));
-  if (permPartner && permPartner.alive) {
+  if (permPartner && permAlive) {
     const partnerFarewell =
       permPartner.relTrack === 'romance'
-        ? `${permPartner.name} lingers at the stone long after the last lantern fades, resting your worn headband against their chest where your promise first took root.`
+        ? `${permName} lingers at the stone long after the last lantern fades, resting your worn headband against their chest where your promise first took root.`
         : permPartner.relTrack === 'mentorship'
-          ? `${permPartner.name} bows low before the carved slate, vowing to pass down the resolve you forged together on the battlefield.`
-          : `${permPartner.name} sets two cracked tea cups before the monument, raising a final silent toast to the finest partner they ever fought beside.`;
+          ? `${permName} bows low before the carved slate, vowing to pass down the resolve you forged together on the battlefield.`
+          : `${permName} sets two cracked tea cups before the monument, raising a final silent toast to the finest partner they ever fought beside.`;
     beats.push({
-      title: `Beside Your War Partner: ${permPartner.name}`,
+      title: `Beside Your War Partner: ${permName}`,
       tone: 'bond',
       body: partnerFarewell,
     });
-  } else if ((permPartner && !permPartner.alive) || fallenPartnerMemory) {
-    const fallenName = permPartner?.name ?? 'your fallen war partner';
+  } else if ((permPartner && !permAlive) || fallenPartnerMemory) {
+    const fallenName = permPartner ? permName : 'your fallen war partner';
     beats.push({
       title: 'Two Names Carved Side by Side',
       tone: 'bond',
       body: permPartner
-        ? `On the rain-slick Memorial Stone of ${village}, your name is chiseled directly beside ${fallenName}, who ${permPartner.causeOfDeath ?? 'fell protecting you in war'}. At last, neither stands watch alone.`
+        ? `On the rain-slick Memorial Stone of ${village}, your name is chiseled directly beside ${fallenName}, who ${permPerson?.identity.deathCause ?? 'fell protecting you in war'}. At last, neither stands watch alone.`
         : `On the Memorial Stone of ${village}, your name now rests beside the war partner who gave their life shielding you in battle (${fallenPartnerMemory!.text}).`,
     });
   }
@@ -221,7 +228,12 @@ export function buildLifeRecord(state: GameState): LifeRecord {
 
   let teamSummary = 'Never assigned to a Genin squad.';
   if (state.team) {
-    const names = state.team.members.map((m) => `${m.name} (${m.role === 'sensei' ? 'Sensei' : m.rank})`).join(', ');
+    const names = state.team.members
+      .map((m) => {
+        const p = getPerson(state, m.personId);
+        return `${p?.identity.name ?? personName(state, m.personId)} (${m.role === 'sensei' ? 'Sensei' : p?.identity.rank ?? 'genin'})`;
+      })
+      .join(', ');
     teamSummary = `Team ${state.team.number} (${state.team.active ? 'Active at death' : `Disbanded at age ${state.team.disbandedAge}`}): ${names}`;
   }
 

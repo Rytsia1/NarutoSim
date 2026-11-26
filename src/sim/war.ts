@@ -1,10 +1,9 @@
 import { PARTNER_WAR_SCENES } from '../data/events-partner';
 import { WAR_CROSSROADS } from '../data/events-war';
 import { ELEMENT_NAMES } from '../data/powers';
-import { ARCHETYPE_LABELS, ROSTER, ROSTER_MAP, type RosterShinobiDef } from '../data/roster';
-import { kageTitle, VILLAGE_MAP } from '../data/villages';
+import { ARCHETYPE_LABELS } from '../data/characters';
+import { kageTitle, VILLAGES, VILLAGE_MAP } from '../data/villages';
 import {
-  buildShinobiPersona,
   calcAllyAcceptChance,
   computeBetrayScore,
   evaluateAllyFinalIntent,
@@ -13,6 +12,16 @@ import {
   modRel,
   runDailyStrategicPlanner,
 } from './ai';
+import {
+  applyPermanentNpcInjury,
+  competitorFromPerson,
+  generateCharacter,
+  getCompetitorLines,
+  getPerson,
+  isPersonAlive,
+  killPerson,
+  personName,
+} from './people';
 import {
   buildBattleRoundDecision,
   initBattleV2State,
@@ -111,18 +120,41 @@ export function markEnemyDead(war: WarState, victim: WarCompetitor): void {
   }
 }
 
-function syncFallenFromWar(state: GameState, war: WarState): void {
+export function applyWarResultsToPeople(state: GameState, war: WarState): void {
+  const year = state.birthYear + state.age;
   for (const e of war.enemies) {
-    if (!e.alive && !e.isExTeammateRogue && !state.fallenRosterIds.includes(e.rosterId)) {
-      state.fallenRosterIds.push(e.rosterId);
-    }
-    if (!e.alive && e.isExTeammateRogue && state.team) {
-      const mate = state.team.members.find((m) => `ex_mate_${m.id}` === e.rosterId);
-      if (mate) {
-        mate.alive = false;
-        mate.fateNote = `Fell during Great Shinobi War #${war.warNumber} at age ${mate.age}.`;
+    const person = getPerson(state, e.personId);
+    if (person) {
+      if (e.kills > 0) {
+        person.identity.kills = (person.identity.kills ?? 0) + e.kills;
+      }
+      if (!e.alive && person.identity.alive) {
+        killPerson(
+          state,
+          person.identity.id,
+          person.identity.age,
+          `fell during Great Shinobi War #${war.warNumber}`,
+        );
+      } else if (e.alive && e.hp > 0 && e.hp <= 25 && person.identity.alive) {
+        // G4 Permanent Injury: surviving war with critical wounds scars future potential
+        applyPermanentNpcInjury(person, year, `critical wounds from Great Shinobi War #${war.warNumber}`);
       }
     }
+    if (!e.alive && state.team) {
+      const mate = state.team.members.find((m) => m.personId === e.personId);
+      if (mate) {
+        mate.fateNote = `Fell during Great Shinobi War #${war.warNumber} at age ${person?.identity.age ?? state.age}.`;
+      }
+    }
+  }
+  if (war.partner?.died) {
+    const partnerPerson = getPerson(state, war.partner.personId);
+    killPerson(
+      state,
+      war.partner.personId,
+      partnerPerson?.identity.age ?? state.age,
+      `fell fighting beside ${state.name} in Great Shinobi War #${war.warNumber}`,
+    );
   }
 }
 
@@ -161,51 +193,10 @@ const BASE_ARCHETYPES: readonly CombatArchetype[] = [
   'juggernaut',
 ];
 
-function createCompetitorFromRoster(
-  def: RosterShinobiDef,
-  index: number,
-): WarCompetitor {
-  const ranks = [...def.ranks] as [number, number, number, number, number];
-  const persona = buildShinobiPersona(def.tactic, def.traits, def.archetype);
-  return {
-    id: `en_${index}_${def.id}`,
-    rosterId: def.id,
-    name: def.name,
-    epithet: def.epithet,
-    villageId: def.villageId,
-    archetype: def.archetype,
-    tactic: def.tactic,
-    element: def.element,
-    officialRank: def.officialRank,
-    formerShinobi: def.formerShinobi,
-    threatClass: def.threatClass,
-    ranks,
-    skills: def.skills.map((s) => ({ ...s })),
-    ultimate: { ...def.ultimate },
-    motive: def.motive,
-    originHint: def.originHint,
-    persona,
-    longGoal: def.archetype === 'artificer' ? 'territory' : def.tactic === 'defensive' ? 'outlast' : 'topple_apex',
-    shortGoal: 'gather_intel',
-    planTargetId: null,
-    allyId: null,
-    hp: 100,
-    cp: 100,
-    fort: def.archetype === 'artificer' ? 32 : 14,
-    alive: true,
-    intel: 0,
-    ultimateSeen: false,
-    skillsRevealed: false,
-    knowPlayer: 0,
-    kills: 0,
-    survivedOnce: false,
-    isExTeammateRogue: false,
-  };
-}
-
 /**
  * Initializes a full 14-day autonomous Shinobi Warfront (uniform 14 days at all ranks).
- * Every roster shinobi spawns at full unscaled strength regardless of player rank.
+ * Every competitor is drawn from living world combatants or generated via CharacterGenerator,
+ * then materialized through `competitorFromPerson` (which permanently marks them observed).
  */
 export function initWarState(
   state: GameState,
@@ -213,161 +204,181 @@ export function initWarState(
   isCrisisWar: boolean,
   approach: 'front' | 'flank',
 ): WarState {
-  const fallenSet = new Set(state.fallenRosterIds);
   const partner = selectWarPartner(state, rng, new Set());
-  const excludedRoster = new Set<string>(fallenSet);
-  if (partner.rosterId) excludedRoster.add(partner.rosterId);
-
-  const fatedDef =
-    state.fatedRosterId && !excludedRoster.has(state.fatedRosterId) ? ROSTER_MAP[state.fatedRosterId] : undefined;
+  const excludedPersonIds = new Set<string>([partner.personId]);
+  const familyIds = new Set(state.family.map((f) => f.personId));
+  const foreignVillages = VILLAGES.filter((v) => v.id !== state.villageId);
   const enemies: WarCompetitor[] = [];
 
   BASE_ARCHETYPES.forEach((arch, idx) => {
-    if (fatedDef && fatedDef.archetype === arch) {
-      enemies.push(createCompetitorFromRoster(fatedDef, idx + 1));
-      return;
-    }
-    const alivePool = ROSTER.filter((r) => r.archetype === arch && !excludedRoster.has(r.id));
-    const fallbackPool = ROSTER.filter((r) => r.archetype === arch && r.id !== partner.rosterId);
-    const chosen = rng.pick(alivePool.length > 0 ? alivePool : fallbackPool.length > 0 ? fallbackPool : ROSTER.filter((r) => r.archetype === arch));
-    enemies.push(createCompetitorFromRoster(chosen, idx + 1));
+    // 1. Prefer an existing living combatant from another village matching this archetype
+    const worldCandidates = (state.worldSim?.npcs ?? []).filter((n) => {
+      const id = n.identity;
+      if (!id.alive) return false;
+      if (id.occupation !== 'shinobi' && id.occupation !== 'samurai') return false;
+      if (id.age < 16 || (id.rank !== 'chunin' && id.rank !== 'jonin')) return false;
+      if (id.specialStatus === 'kage') return false;
+      if (id.villageId === state.villageId) return false;
+      if (id.archetype !== arch) return false;
+      if (excludedPersonIds.has(id.id) || familyIds.has(id.id)) return false;
+      return true;
+    });
+
+    const person =
+      worldCandidates.length > 0
+        ? rng.pick(worldCandidates)
+        : (() => {
+            const foreignV = foreignVillages.length > 0 ? rng.pick(foreignVillages) : VILLAGE_MAP[state.villageId];
+            return generateCharacter(
+              state,
+              {
+                villageId: foreignV.id,
+                occupation: foreignV.id === 'iron' ? 'samurai' : 'shinobi',
+                age: Math.max(17, state.age + rng.int(1, 14)),
+                rank: rng.chance(0.75) ? 'jonin' : 'chunin',
+                archetype: arch,
+                lodTier: 'L1',
+                observed: true,
+              },
+              rng,
+            );
+          })();
+
+    excludedPersonIds.add(person.identity.id);
+    enemies.push(competitorFromPerson(state, person, idx + 1));
   });
 
-  // Special S-Rank slot: Fated Thread S-Rank operative, ex-teammate missing_nin (prioritizing Rival!), or 15% S-Rank operative
+  // Special S-Rank slot: ex-teammate missing_nin (prioritizing Rival!), or 15% (100% crisis) S-Rank rogue operative
   const rogueRival = state.rivalId
-    ? state.team?.members.find((m) => m.id === state.rivalId && m.alive && m.specialStatus === 'missing_nin')
+    ? state.team?.members.find((m) => {
+        const p = getPerson(state, m.personId);
+        return m.personId === state.rivalId && Boolean(p && p.identity.alive && p.identity.specialStatus === 'missing_nin');
+      })
     : undefined;
   const rogueMate =
     rogueRival ??
-    state.team?.members.find((m) => m.role === 'teammate' && m.alive && m.specialStatus === 'missing_nin');
-  if (fatedDef && fatedDef.archetype === 'rogue_s') {
-    const comp = createCompetitorFromRoster(fatedDef, 8);
-    if (isCrisisWar && state.world.crisisClues > 0) {
-      addEnemyIntel(comp, Math.min(80, state.world.crisisClues * 16));
-    }
-    enemies.push(comp);
-  } else if (rogueMate && rng.chance(0.55)) {
-    enemies.push({
-      id: `en_rogue_${rogueMate.id}`,
-      rosterId: `ex_mate_${rogueMate.id}`,
-      name: rogueMate.name,
-      epithet: 'Former Squadmate (Missing-Nin)',
-      villageId: state.villageId,
-      archetype: 'rogue_s',
-      tactic: 'hunter',
-      element: state.element,
-      officialRank: 'chunin',
-      formerShinobi: true,
-      threatClass: 'A',
-      ranks: [4.2, 4.4, 3.9, 4.3, 4.2],
-      skills: [
-        { name: 'Familiar Footwork', tag: 'insight', rank: 4 },
-        { name: 'Rogue Resolve', tag: 'power', rank: 3 },
-      ],
-      ultimate: {
-        name: 'Severed Bond Flash',
-        role: 'attack',
-        scope: 'single',
-        rankVal: 4.8,
-        cost: 28,
-        desc: 'A bitter high-speed strike forged after abandoning the village.',
-      },
-      motive: 'Prove that cutting ties with the village was the only road to strength.',
-      originHint: `Uses the exact combat cadence your old Jonin Sensei taught Team ${state.team!.number}.`,
-      persona: buildShinobiPersona('hunter', rogueMate.traits, 'rogue_s'),
-      longGoal: 'dominate',
-      shortGoal: 'strike_apex',
-      planTargetId: 'player',
-      allyId: null,
-      hp: 100,
-      cp: 100,
-      fort: 18,
-      alive: true,
-      intel: 80,
-      ultimateSeen: false,
-      skillsRevealed: false,
-      knowPlayer: 45,
-      kills: 0,
-      survivedOnce: false,
-      isExTeammateRogue: true,
+    state.team?.members.find((m) => {
+      const p = getPerson(state, m.personId);
+      return m.role === 'teammate' && Boolean(p && p.identity.alive && p.identity.specialStatus === 'missing_nin');
     });
+  if (rogueMate && rng.chance(0.55)) {
+    const roguePerson = getPerson(state, rogueMate.personId);
+    if (roguePerson) {
+      roguePerson.identity.specialStatus = 'missing_nin';
+      excludedPersonIds.add(roguePerson.identity.id);
+      enemies.push(
+        competitorFromPerson(state, roguePerson, 8, {
+          id: `en_rogue_${roguePerson.identity.id}`,
+          epithet: 'Former Squadmate (Missing-Nin)',
+          tactic: 'hunter',
+          formerShinobi: true,
+          longGoal: 'dominate',
+          shortGoal: 'strike_apex',
+          planTargetId: 'player',
+          fort: 18,
+          intel: 80,
+          knowPlayer: 45,
+          isExTeammateRogue: true,
+        }),
+      );
+    }
   } else if (isCrisisWar || rng.chance(0.15)) {
-    const sPool = ROSTER.filter((r) => r.archetype === 'rogue_s' && !fallenSet.has(r.id));
-    const fallbackS = ROSTER.filter((r) => r.archetype === 'rogue_s');
-    const chosenS = rng.pick(sPool.length > 0 ? sPool : fallbackS);
-    const comp = createCompetitorFromRoster(chosenS, 8);
+    const existingS = (state.worldSim?.npcs ?? []).filter(
+      (n) =>
+        n.identity.alive &&
+        n.identity.archetype === 'rogue_s' &&
+        !excludedPersonIds.has(n.identity.id) &&
+        !familyIds.has(n.identity.id),
+    );
+    const sPerson =
+      existingS.length > 0
+        ? rng.pick(existingS)
+        : (() => {
+            const originV = foreignVillages.length > 0 ? rng.pick(foreignVillages) : VILLAGE_MAP[state.villageId];
+            return generateCharacter(
+              state,
+              {
+                villageId: originV.id,
+                occupation: originV.id === 'iron' ? 'samurai' : 'shinobi',
+                age: Math.max(22, state.age + rng.int(4, 18)),
+                rank: 'jonin',
+                specialStatus: 'missing_nin',
+                archetype: 'rogue_s',
+                lodTier: 'L1',
+                observed: true,
+              },
+              rng,
+            );
+          })();
+    const comp = competitorFromPerson(state, sPerson, 8);
     if (isCrisisWar && state.world.crisisClues > 0) {
       addEnemyIntel(comp, Math.min(80, state.world.crisisClues * 16));
     }
+    excludedPersonIds.add(sPerson.identity.id);
     enemies.push(comp);
   }
 
   // Ensure at least 1 same-village comrade is deployed when player serves a village (village-vs-village war)
   if (state.specialStatus !== 'missing_nin') {
     const loyalRival =
-      state.rivalId && state.rivalId !== partner.teamMemberId
-        ? state.team?.members.find((m) => m.id === state.rivalId && m.alive && m.specialStatus !== 'missing_nin')
+      state.rivalId && state.rivalId !== partner.personId
+        ? state.team?.members.find((m) => {
+            const p = getPerson(state, m.personId);
+            return m.personId === state.rivalId && Boolean(p && p.identity.alive && p.identity.specialStatus !== 'missing_nin');
+          })
         : undefined;
     const hasSameVillage = enemies.some((e) => !e.isExTeammateRogue && e.villageId === state.villageId);
     if ((loyalRival || !hasSameVillage) && enemies.length > 0) {
-      const swapIdx = enemies.findIndex((e) => !fatedDef || e.rosterId !== fatedDef.id);
-      if (swapIdx >= 0 && loyalRival && !enemies.some((e) => e.id === `en_rival_${loyalRival.id}`)) {
-        const v = VILLAGE_MAP[state.villageId];
-        const base = enemies[swapIdx];
-        enemies[swapIdx] = {
-          ...base,
-          id: `en_rival_${loyalRival.id}`,
-          rosterId: `rival_ally_${loyalRival.id}`,
-          name: loyalRival.name,
-          epithet: `Sworn Rival of ${v.name}`,
-          villageId: state.villageId,
-          element: v.dominantElement,
-          officialRank:
-            loyalRival.rank === 'jonin'
-              ? 'jonin'
-              : loyalRival.rank === 'chunin'
-                ? 'chunin'
-                : 'genin',
-          formerShinobi: false,
-          threatClass: base.threatClass,
-          tactic: 'proud',
-          persona: buildShinobiPersona('proud', loyalRival.traits, base.archetype),
-          motive: `Fight beside ${state.name} for ${v.name} and settle your rivalry alive.`,
-          originHint: `Your sworn rival from Team ${state.team?.number ?? ''}.`,
-        };
-      } else if (swapIdx >= 0 && !hasSameVillage) {
-        const sameVillageRoster = ROSTER.filter(
-          (r) =>
-            r.villageId === state.villageId &&
-            r.archetype !== 'rogue_s' &&
-            !excludedRoster.has(r.id) &&
-            !enemies.some((e) => e.rosterId === r.id),
-        );
-        if (sameVillageRoster.length > 0) {
-          const picked = sameVillageRoster[Math.abs(state.rng.seed) % sameVillageRoster.length];
-          enemies[swapIdx] = createCompetitorFromRoster(picked, swapIdx + 1);
-        } else {
+      const swapIdx = 0;
+      if (loyalRival) {
+        const rivalPerson = getPerson(state, loyalRival.personId);
+        if (rivalPerson && !excludedPersonIds.has(rivalPerson.identity.id) && !enemies.some((e) => e.personId === rivalPerson.identity.id)) {
           const v = VILLAGE_MAP[state.villageId];
-          const first = v.maleNames[Math.abs(state.rng.seed) % v.maleNames.length];
-          const last = v.surnames[Math.abs(state.rng.seed + 3) % v.surnames.length];
-          const base = enemies[swapIdx];
-          enemies[swapIdx] = {
-            ...base,
-            id: `en_ally_${state.villageId}_${swapIdx + 1}`,
-            rosterId: `village_comrade_${state.villageId}`,
-            name: `${first} ${last}`,
-            epithet: `${v.name} Vanguard`,
-            villageId: state.villageId,
-            element: v.dominantElement,
-            officialRank: 'chunin',
+          excludedPersonIds.add(rivalPerson.identity.id);
+          enemies[swapIdx] = competitorFromPerson(state, rivalPerson, swapIdx + 1, {
+            id: `en_rival_${rivalPerson.identity.id}`,
+            epithet: `Sworn Rival of ${v.name}`,
+            tactic: 'proud',
             formerShinobi: false,
-            threatClass: 'B',
-            tactic: 'defensive',
-            persona: buildShinobiPersona('defensive', ['loyalty', 'honor'], base.archetype),
-            motive: `Defend ${v.name} alongside fellow village shinobi.`,
-            originHint: `Wears the forehead protector of ${v.name}.`,
-          };
+          });
         }
+      } else if (!hasSameVillage) {
+        const v = VILLAGE_MAP[state.villageId];
+        const existingComrade = state.worldSim?.npcs.find(
+          (n) =>
+            n.identity.alive &&
+            (n.identity.occupation === 'shinobi' || n.identity.occupation === 'samurai') &&
+            n.identity.age >= 16 &&
+            (n.identity.rank === 'chunin' || n.identity.rank === 'jonin') &&
+            n.identity.specialStatus !== 'kage' &&
+            n.identity.specialStatus !== 'missing_nin' &&
+            n.identity.villageId === state.villageId &&
+            !excludedPersonIds.has(n.identity.id) &&
+            !familyIds.has(n.identity.id) &&
+            !enemies.some((e) => e.personId === n.identity.id),
+        );
+        const comradePerson =
+          existingComrade ??
+          generateCharacter(
+            state,
+            {
+              age: Math.max(17, state.age + rng.int(1, 7)),
+              villageId: state.villageId,
+              occupation: state.villageId === 'iron' ? 'samurai' : 'shinobi',
+              rank: 'chunin',
+              roleTitle: `${v.name} Vanguard`,
+              archetype: enemies[swapIdx].archetype === 'rogue_s' ? 'vanguard' : enemies[swapIdx].archetype,
+              lodTier: 'L1',
+              observed: true,
+            },
+            rng,
+          );
+        excludedPersonIds.add(comradePerson.identity.id);
+        enemies[swapIdx] = competitorFromPerson(state, comradePerson, swapIdx + 1, {
+          id: `en_ally_${comradePerson.identity.id}`,
+          tactic: 'defensive',
+          formerShinobi: false,
+        });
       }
     }
   }
@@ -808,7 +819,11 @@ export function buildWarDayDecision(state: GameState): PendingDecision {
   const living = getLivingEnemies(war).length;
   const hasMedical = state.disciplines.some((d) => d.id === 'medical');
   const hasSquadNearby = Boolean(
-    state.team && state.team.members.some((m) => m.alive && m.specialStatus !== 'missing_nin'),
+    state.team &&
+      state.team.members.some((m) => {
+        const p = getPerson(state, m.personId);
+        return Boolean(p && p.identity.alive && p.identity.specialStatus !== 'missing_nin');
+      }),
   );
   const onStrategicDay = war.day === war.strategicDay;
 
@@ -1164,7 +1179,7 @@ export function startWarBattle(
     });
   }
 
-  const rosterDef = ROSTER_MAP[enemy.rosterId];
+  const lines = getCompetitorLines(state, enemy);
   const archLabel = ARCHETYPE_LABELS[enemy.archetype];
   const sceneLine = opts.isFinal
     ? `Day ${war.day} Final Night. Moonlit smoke drifts across the central valley as the last rival stands in your path.`
@@ -1182,7 +1197,7 @@ export function startWarBattle(
     proud: '"Draw your blade properly. Let our jutsu speak."',
     desperate: '"Only one of us walks out of this valley alive!"',
   };
-  const rawQuip = rosterDef?.lines.meet?.trim();
+  const rawQuip = lines.meet?.trim();
   const enemyQuip = rawQuip ? (rawQuip.startsWith('"') ? rawQuip : `"${rawQuip}"`) : fallbackQuips[enemy.tactic];
 
   war.beatQueue = [];
@@ -1228,7 +1243,7 @@ export function startWarBattle(
   pushLog(
     state,
     opts.isFinal ? 'crisis' : 'war',
-    `${opts.isFinal ? 'FINAL NIGHT CLASH' : opts.isDefense ? 'CAMP RAID' : 'NIGHT ENGAGEMENT'} against ${label}! ${rosterDef ? rosterDef.lines.meet : ''}`,
+    `${opts.isFinal ? 'FINAL NIGHT CLASH' : opts.isDefense ? 'CAMP RAID' : 'NIGHT ENGAGEMENT'} against ${label}! ${lines.meet}`,
     { title: opts.isFinal ? `Final Night Duel (Day ${war.day})` : `Battle on Night ${war.day}` },
   );
   state.pending = buildBattleRoundDecision(state);
@@ -1855,7 +1870,7 @@ export function concludeWar(
   }
 
   const chronicle = generateWarChronicle(state, war, outcome);
-  syncFallenFromWar(state, war);
+  applyWarResultsToPeople(state, war);
   syncPartnerBackToState(state, war.partner);
 
   const wear = Math.max(0, Math.round((100 - war.hp) * 0.28));
@@ -1957,7 +1972,7 @@ export function handleWarDecision(
     }
     if (res === 'player_dead') {
       const bossName = war.crisis?.bossName ?? 'the Crisis';
-      syncFallenFromWar(state, war);
+      applyWarResultsToPeople(state, war);
       state.warHistory.push({
         warNumber: war.warNumber,
         ageAtStart: state.age,
@@ -2088,8 +2103,9 @@ export function handleWarDecision(
       return;
     }
     if (res === 'opponent_won_dead') {
+      const oppName = personName(state, conv.opponentPersonId);
       const chronicle = generateWarChronicle(state, war, 'dead');
-      syncFallenFromWar(state, war);
+      applyWarResultsToPeople(state, war);
       state.warHistory.push({
         warNumber: war.warNumber,
         ageAtStart: state.age,
@@ -2099,11 +2115,11 @@ export function handleWarDecision(
         outcome: 'dead',
         title: chronicle.title,
         fieldPromoted: false,
-        summary: `Fell at the Valley of the End against ${conv.opponentName} after War #${war.warNumber}.`,
+        summary: `Fell at the Valley of the End against ${oppName} after War #${war.warNumber}.`,
         narrativeArcs: chronicle.arcs,
       });
       state.war = null;
-      killCharacter(state, `felled by ${conv.opponentName} in the Final Valley Ideological Duel`);
+      killCharacter(state, `felled by ${oppName} in the Final Valley Ideological Duel`);
       return;
     }
     concludeWar(state, rng, convOutcome, true);
@@ -2188,7 +2204,7 @@ export function handleWarDecision(
       if (opt.cpDelta) war.cp = clamp(war.cp + opt.cpDelta, 0, 100);
       if (opt.id === 'campfire_drill') war.nextBattleBonus += 4;
       if (opt.switchTrack && partner.relTrack !== 'mentorship') {
-        const hasSpouse = state.family.some((f) => f.relation === 'spouse' && f.alive);
+        const hasSpouse = state.family.some((f) => f.relation === 'spouse' && isPersonAlive(state, f.personId));
         if (opt.switchTrack !== 'romance' || !hasSpouse) {
           partner.relTrack = opt.switchTrack;
         }
@@ -2258,7 +2274,7 @@ export function handleWarDecision(
         }
       }
       if (opt.squadTrustDelta && state.team) {
-        state.team.members.forEach((m) => m.alive && m.id !== war.partner?.teamMemberId && adjustMemberTrust(state, m, opt.squadTrustDelta!));
+        state.team.members.forEach((m) => isPersonAlive(state, m.personId) && m.personId !== war.partner?.personId && adjustMemberTrust(state, m, opt.squadTrustDelta!));
       }
       if (opt.stats) {
         for (const [k, v] of Object.entries(opt.stats) as [StatKey, number][]) {
@@ -2287,7 +2303,7 @@ export function handleWarDecision(
       if (optionId === 'rescue_fight' && enemy) {
         state.stats.will += 4;
         clampStats(state);
-        if (state.team) state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 6));
+        if (state.team) state.team.members.forEach((m) => isPersonAlive(state, m.personId) && adjustMemberTrust(state, m, 6));
         startWarBattle(state, enemy.id, { isFinal: false, isAmbush: false, isDefense: false, startedInPhase: 'day' });
         return;
       }
@@ -2472,7 +2488,10 @@ export function handleWarDecision(
           `You share a quiet daylight patrol and rations with ${war.partner.name} (Trust ${gained >= 0 ? `+${gained}` : gained}, +4 HP, +14 Intel, +3 Exposure).`,
         );
       } else if (state.team) {
-        const ally = state.team.members.find((m) => m.alive && m.specialStatus !== 'missing_nin');
+        const ally = state.team.members.find((m) => {
+          const p = getPerson(state, m.personId);
+          return Boolean(p && p.identity.alive && p.identity.specialStatus !== 'missing_nin');
+        });
         if (ally) {
           adjustMemberTrust(state, ally, 5);
           war.hp = clamp(war.hp + 4, 0, 100);
@@ -2480,7 +2499,7 @@ export function handleWarDecision(
             const target = rng.pick(living);
             addEnemyIntel(target, 14);
           }
-          pushLog(state, 'bond', `You meet ${ally.name} briefly behind a cedar ridge, trading supplies and sector notes (+4 HP, +14 Intel).`);
+          pushLog(state, 'bond', `You meet ${personName(state, ally.personId)} briefly behind a cedar ridge, trading supplies and sector notes (+4 HP, +14 Intel).`);
         }
       }
     }
@@ -2755,7 +2774,7 @@ export function handleWarDecision(
       state.stats.bonds += 8;
       state.stats.will += 6;
       if (state.team) {
-        state.team.members.forEach((m) => m.alive && adjustMemberTrust(state, m, 8));
+        state.team.members.forEach((m) => isPersonAlive(state, m.personId) && adjustMemberTrust(state, m, 8));
       }
       pushLog(
         state,
@@ -2777,7 +2796,7 @@ export function handleWarDecision(
       recordMemory(state, 'promotion', `Won formal council endorsement for ${leader} after War #${war.warNumber}.`);
     } else if (optionId === 'wish_vengeance') {
       const target = war.enemies.find((e) => e.alive) ?? war.enemies[0];
-      state.world.vengeanceTargetId = target?.rosterId ?? null;
+      state.world.vengeanceTargetId = target?.personId ?? null;
       state.stats.chakra += 6;
       state.stats.will += 6;
       state.stats.ryo += 12;
@@ -2906,7 +2925,7 @@ export function handleWarDecision(
 
     if (status === 'player_dead') {
       const chronicle = generateWarChronicle(state, war, 'dead');
-      syncFallenFromWar(state, war);
+      applyWarResultsToPeople(state, war);
       state.warHistory.push({
         warNumber: war.warNumber,
         ageAtStart: state.age,
@@ -2936,7 +2955,7 @@ export function handleWarDecision(
       pushLog(state, g8.died ? 'danger' : 'crisis', g8.note, { title: 'Aftermath of the Eighth Gate' });
       if (g8.died) {
         const chronicle = generateWarChronicle(state, war, 'dead');
-        syncFallenFromWar(state, war);
+        applyWarResultsToPeople(state, war);
         state.warHistory.push({
           warNumber: war.warNumber,
           ageAtStart: state.age,

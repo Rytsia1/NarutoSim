@@ -20,6 +20,7 @@ import {
   computeAffinityWeights,
   selectWarPartner,
 } from '../src/sim/partner';
+import { personName } from '../src/sim/people';
 import { promoteRank } from '../src/sim/ranks';
 import { SeededRng } from '../src/sim/rng';
 import { concludeWar, ensureWarClockDefaults, handleWarDecision, initWarState, startWarBattle } from '../src/sim/war';
@@ -61,7 +62,7 @@ describe('Mechanics Overhaul K1-K6: War Partner, Kuchiyose Od, Finale & Content 
     const war = state.war;
     const partner = war.partner!;
     expect(partner).not.toBeNull();
-    expect(war.enemies.some((e) => e.rosterId === partner.rosterId && partner.rosterId !== undefined)).toBe(false);
+    expect(war.enemies.some((e) => e.personId === partner.personId)).toBe(false);
 
     // Tier < 35: trust gain is halved
     partner.trust = 25;
@@ -193,7 +194,8 @@ describe('Mechanics Overhaul K1-K6: War Partner, Kuchiyose Od, Finale & Content 
     // Choose "Stay With Me"
     handleWarDecision(state, 'wish_stay_with_me', rng);
     expect(state.permanentPartner).not.toBeNull();
-    expect(state.permanentPartner!.name).toBe(partnerName);
+    expect(state.permanentPartner!.personId).toBe(partner.personId);
+    expect(personName(state, state.permanentPartner!.personId)).toBe(partnerName);
     expect(state.phase).toBe('life');
 
     // Next war automatically brings back the exact same permanent partner!

@@ -18,6 +18,7 @@ import { kageTitle, VILLAGE_MAP } from '../../data/villages';
 import { getSenseiBiasLabel } from '../../sim/academy';
 import { getBranchLabel } from '../../sim/clan-heritage';
 import { canEnterRetirement } from '../../sim/epilogue';
+import { resolveFamilyMemberView, resolveSquadMemberView } from '../../sim/people';
 import { computeCombatProjection, getChakraCap, XP_NEED_FOR_NEXT } from '../../sim/powers';
 import { deriveRelArchetype } from '../../sim/relationships';
 import { getRelStageLabel, getTrustTier } from '../../sim/team';
@@ -642,44 +643,47 @@ export function GameScreen({
                       ? 'Active squadmates train beside you until you or a teammate earn Chunin rank.'
                       : 'Your Genin cell has disbanded, yet your Kizuna persists as each former member walks their own path.'}
                   </p>
-                  {state.team.members.map((m) => (
-                    <article key={m.id} className={`squad-card ${!m.alive ? 'fallen' : ''}`}>
-                      <div className="disc-head">
-                        <span>
-                          {m.name} ({m.role === 'sensei' ? 'Jonin Sensei' : m.id === state.rivalId ? 'Sworn Rival' : 'Squadmate'})
-                        </span>
-                        <span className="status-tag">
-                          {!m.alive
-                            ? 'Fallen'
-                            : m.specialStatus === 'missing_nin'
-                              ? 'Missing-Nin'
-                              : t(`rank.${m.rank}`)}
-                        </span>
-                      </div>
-                      <div className="disc-sub tabular">
-                        Age {m.age} | {m.archetype} | Specialty: {DISCIPLINE_MAP[m.specialty]?.name ?? m.specialty}
-                      </div>
-                      <div className="disc-sub tabular">
-                        Trust: {m.trust}/100 ({getTrustTier(m.trust)}) | Live Fit: {m.fit}% | Stage:{' '}
-                        {getRelStageLabel(m)}
-                        {m.promiseMade ? ' | Oath Kept' : ''}
-                      </div>
-                      {m.rel6 && (
-                        <div className="chip-row tabular" style={{ marginTop: 4, marginBottom: 4 }}>
-                          <span className="chip pos">{deriveRelArchetype(m.rel6, m.playerFeelings)}</span>
-                          <span className="chip">Aff {m.rel6.affection}</span>
-                          <span className="chip">Resp {m.rel6.respect}</span>
-                          <span className="chip">Riv {m.rel6.rivalry}</span>
-                          {m.rel6.fear >= 25 && <span className="chip">Fear {m.rel6.fear}</span>}
-                          {m.rel6.resentment >= 25 && <span className="chip neg">Resent {m.rel6.resentment}</span>}
+                  {state.team.members.map((m) => {
+                    const vm = resolveSquadMemberView(state, m);
+                    return (
+                      <article key={vm.personId} className={`squad-card ${!vm.alive ? 'fallen' : ''}`}>
+                        <div className="disc-head">
+                          <span>
+                            {vm.name} ({vm.role === 'sensei' ? 'Jonin Sensei' : vm.personId === state.rivalId ? 'Sworn Rival' : 'Squadmate'})
+                          </span>
+                          <span className="status-tag">
+                            {!vm.alive
+                              ? 'Fallen'
+                              : vm.specialStatus === 'missing_nin'
+                                ? 'Missing-Nin'
+                                : t(`rank.${vm.rank}`)}
+                          </span>
                         </div>
-                      )}
-                      <div className="bar-track">
-                        <div className="bar-fill health" style={{ width: `${m.trust}%` }} />
-                      </div>
-                      <div className="disc-sub">{m.fateNote}</div>
-                    </article>
-                  ))}
+                        <div className="disc-sub tabular">
+                          Age {vm.age} | {vm.archetype} | Specialty: {DISCIPLINE_MAP[vm.specialty]?.name ?? vm.specialty}
+                        </div>
+                        <div className="disc-sub tabular">
+                          Trust: {vm.trust}/100 ({getTrustTier(vm.trust)}) | Live Fit: {vm.fit}% | Stage:{' '}
+                          {getRelStageLabel(m)}
+                          {vm.promiseMade ? ' | Oath Kept' : ''}
+                        </div>
+                        {vm.rel6 && (
+                          <div className="chip-row tabular" style={{ marginTop: 4, marginBottom: 4 }}>
+                            <span className="chip pos">{deriveRelArchetype(vm.rel6, vm.playerFeelings)}</span>
+                            <span className="chip">Aff {vm.rel6.affection}</span>
+                            <span className="chip">Resp {vm.rel6.respect}</span>
+                            <span className="chip">Riv {vm.rel6.rivalry}</span>
+                            {vm.rel6.fear >= 25 && <span className="chip">Fear {vm.rel6.fear}</span>}
+                            {vm.rel6.resentment >= 25 && <span className="chip neg">Resent {vm.rel6.resentment}</span>}
+                          </div>
+                        )}
+                        <div className="bar-track">
+                          <div className="bar-fill health" style={{ width: `${vm.trust}%` }} />
+                        </div>
+                        <div className="disc-sub">{vm.fateNote}</div>
+                      </article>
+                    );
+                  })}
                 </div>
               )}
 
@@ -691,18 +695,21 @@ export function GameScreen({
                   <p className="history-sub">Raised without immediate family.</p>
                 ) : (
                   <div className="stat-list">
-                    {state.family.map((f, idx) => (
-                      <div key={`${f.name}_${idx}`} className="disc-item">
-                        <div className="disc-head">
-                          <span>
-                            {f.name} ({f.relation})
-                          </span>
-                          <span className="disc-sub tabular">
-                            {f.alive ? `Age ${f.age}` : `Deceased (Age ${f.age})`}
-                          </span>
+                    {state.family.map((f, idx) => {
+                      const vf = resolveFamilyMemberView(state, f);
+                      return (
+                        <div key={`${vf.personId}_${idx}`} className="disc-item">
+                          <div className="disc-head">
+                            <span>
+                              {vf.name} ({vf.relation})
+                            </span>
+                            <span className="disc-sub tabular">
+                              {vf.alive ? `Age ${vf.age}` : `Deceased (Age ${vf.deathAge ?? vf.age})`}
+                            </span>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>

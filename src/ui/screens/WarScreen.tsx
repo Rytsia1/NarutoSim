@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { t } from '../../data/i18n';
 import { ELEMENT_KANJI, ELEMENT_NAMES, RANK_KANJI } from '../../data/powers';
-import { ARCHETYPE_LABELS } from '../../data/roster';
+import { ARCHETYPE_LABELS } from '../../data/characters';
 import { VILLAGE_MAP } from '../../data/villages';
 import { getRel, SHORT_GOAL_LABELS } from '../../sim/ai';
 import { getHealthConditionLabel, getPlayerRanks } from '../../sim/combat';
 import { getMastermindDivisor } from '../../sim/crises';
 import { detectWarArcs } from '../../sim/narrative';
 import { getPartnerRelStageLabel, getPartnerTrustTier } from '../../sim/partner';
+import { getPersonMotive, getPersonOriginHint, personName } from '../../sim/people';
 import { rankValueToGrade } from '../../sim/powers';
 import type { GameState } from '../../sim/types';
 import { getLivingEnemies } from '../../sim/war';
@@ -310,12 +311,12 @@ export function WarScreen({
                   Extreme Conviction: {war.conviction.wishTitle}
                 </strong>
                 <span className="status-tag tension-high">
-                  {war.conviction.opponentName} Resolve: {war.conviction.resolveR}/100
+                  {personName(state, war.conviction.opponentPersonId)} Resolve: {war.conviction.resolveR}/100
                 </span>
               </div>
               {war.conviction.inDuel && (
                 <div className="disc-sub tabular" style={{ marginTop: 6 }}>
-                  Final Valley Duel (Round {war.conviction.round}): {war.conviction.opponentName} HP{' '}
+                  Final Valley Duel (Round {war.conviction.round}): {personName(state, war.conviction.opponentPersonId)} HP{' '}
                   {war.conviction.opponentHp}/100
                 </div>
               )}
@@ -558,8 +559,21 @@ export function WarScreen({
                           </div>
                         </>
                       )}
-                      {e.intel >= 50 && <div className="disc-sub">Motive: {e.motive}</div>}
-                      {e.intel >= 60 && e.intel < 80 && <div className="disc-sub">Hint: {e.originHint}</div>}
+                      {e.intel >= 50 && (
+                        <div className="disc-sub">
+                          Motive: {getPersonMotive(state, e.personId, e.archetype)}
+                        </div>
+                      )}
+                      {e.intel >= 60 && e.weakness && (
+                        <div className="disc-sub" style={{ color: 'var(--accent-gold)' }}>
+                          Weakness: {e.weakness}
+                        </div>
+                      )}
+                      {e.intel >= 60 && e.intel < 80 && (
+                        <div className="disc-sub">
+                          Hint: {getPersonOriginHint(state, e.personId, e.archetype)}
+                        </div>
+                      )}
                       {e.skillsRevealed && (
                         <div className="chip-row">
                           {e.skills.map((sk) => (

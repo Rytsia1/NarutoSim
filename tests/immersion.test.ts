@@ -11,6 +11,7 @@ import {
   createNewLife,
   resolvePendingDecision,
 } from '../src/sim/life';
+import { personName } from '../src/sim/people';
 import { buildChuninExamStage, buildGraduationExamDecision, promoteRank } from '../src/sim/ranks';
 import { SeededRng } from '../src/sim/rng';
 import { formGeninTeam } from '../src/sim/team';
@@ -82,7 +83,7 @@ describe('Naruto Immersion Plan Verification (Fases 0-5)', () => {
 
     resolvePendingDecision(state, 'chakra_form');
     expect(state.rank).toBe('genin');
-    expect(state.rivalId).toBe(state.team!.members[1].id);
+    expect(state.rivalId).toBe(state.team!.members[1].personId);
     expect(state.pending?.kind).toBe('bell_test');
 
     // Bell Test -> queues Nindo choice
@@ -95,7 +96,7 @@ describe('Naruto Immersion Plan Verification (Fases 0-5)', () => {
 
     // Chunin Arena Finals (Stage 6) names the permanent rival
     const finals = buildChuninExamStage(state, 6);
-    expect(finals.title).toContain(state.team!.members[1].name);
+    expect(finals.title).toContain(personName(state, state.team!.members[1].personId));
 
     // Valley of the End picks the permanent rival even if another squadmate has higher trust
     state.team!.members[0].trust = 99;
@@ -103,7 +104,7 @@ describe('Naruto Immersion Plan Verification (Fases 0-5)', () => {
     state.leanings.ambition = 9;
     state.war = initWarState(state, new SeededRng(123), false, 'front');
     startConvictionRoute(state, state.war);
-    expect(state.war.conviction!.opponentId).toBe(state.rivalId);
+    expect(state.war.conviction!.opponentPersonId).toBe(state.rivalId);
 
     // Kage Succession triggers at Jonin + Age 30+ + Bonds + S-Rank missions
     state.war = null;

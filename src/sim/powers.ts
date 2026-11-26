@@ -8,6 +8,7 @@ import {
   DISCIPLINE_TIER_NAMES,
 } from '../data/powers';
 import { ORIGIN_MAP } from '../data/origins';
+import { getPerson, isPersonAlive } from './people';
 import { hashRand, type SeededRng } from './rng';
 import type {
   BloodlineState,
@@ -297,7 +298,7 @@ export function hasActiveTeacher(state: GameState): boolean {
   if (state.flags.has_teacher) return true;
   if (state.rank === 'academy') return true;
   if (state.team?.active) {
-    const sensei = state.team.members.find((m) => m.role === 'sensei' && m.alive);
+    const sensei = state.team.members.find((m) => m.role === 'sensei' && isPersonAlive(state, m.personId));
     if (sensei) return true;
   }
   return false;
@@ -316,11 +317,12 @@ export function awardYearlyDisciplineXp(state: GameState): void {
 
     // Bonus XP if active Sensei shares a discipline you already know
     const sensei = state.team?.active
-      ? state.team.members.find((m) => m.role === 'sensei' && m.alive)
+      ? state.team.members.find((m) => m.role === 'sensei' && isPersonAlive(state, m.personId))
       : undefined;
+    const senseiSpec = sensei ? getPerson(state, sensei.personId)?.identity.specialty : undefined;
     for (const d of state.disciplines) {
       if (d.id !== main.id && state.focus === 'training') {
-        d.xp += sensei && sensei.specialty === d.id ? 2 : 1;
+        d.xp += senseiSpec && senseiSpec === d.id ? 2 : 1;
       }
     }
   }
@@ -569,9 +571,10 @@ export function tryDisciplineEvent(state: GameState, rng: SeededRng): PendingDec
     const learnProb = state.focus === 'training' || state.focus === 'body' ? 0.18 : 0.08;
     if (hashRand(state.rng.seed, state.age, 'disc_learn_roll') < learnProb) {
       const owned = new Set(state.disciplines.map((d) => d.id));
-      const senseiSpec = state.team?.active
-        ? state.team.members.find((m) => m.role === 'sensei' && m.alive)?.specialty
+      const activeSensei = state.team?.active
+        ? state.team.members.find((m) => m.role === 'sensei' && isPersonAlive(state, m.personId))
         : undefined;
+      const senseiSpec = activeSensei ? getPerson(state, activeSensei.personId)?.identity.specialty : undefined;
 
       const candidates = DISCIPLINES.filter((def) => {
         if (owned.has(def.id)) return false;

@@ -9,11 +9,12 @@ import {
   type JutsuDefinition,
 } from '../data/jutsu';
 import { BLOODLINE_MAP, DISCIPLINE_MAP, ELEMENT_NAMES } from '../data/powers';
-import { ARCHETYPE_AVG, ELEMENT_BEATS, ROSTER_MAP } from '../data/roster';
+import { ARCHETYPE_AVG, ELEMENT_BEATS } from '../data/characters';
 import { getSummonPowerTier, SUMMON_CLAN_MAP } from '../data/summons';
 import { modRel } from './ai';
 import { recordWarFact } from './narrative';
 import { applyResolvePartnerReaction, syncPartnerBackToState } from './partner';
+import { getCompetitorLines, getPerson, personName } from './people';
 import { clamp, computeCombatProjection } from './powers';
 import type { SeededRng } from './rng';
 import type {
@@ -2232,14 +2233,12 @@ export function resolveBattleRound(
     }
   }
 
-  // Wire roster clash (Round 1) & win lines deterministically without touching RNG
-  const rosterDef = ROSTER_MAP[enemy.rosterId];
-  if (rosterDef) {
-    if (battle.round === 1 && rosterDef.lines.clash) {
-      narrative += ` ${rosterDef.lines.clash}`;
-    } else if (outcome === 'lose' && rosterDef.lines.win) {
-      narrative += ` ${rosterDef.lines.win}`;
-    }
+  // Wire character/archetype clash (Round 1) & win lines deterministically without touching RNG
+  const lines = getCompetitorLines(state, enemy);
+  if (battle.round === 1 && lines.clash) {
+    narrative += ` ${lines.clash}`;
+  } else if (outcome === 'lose' && lines.win) {
+    narrative += ` ${lines.win}`;
   }
 
   war.hp = Math.max(0, war.hp - pTaken);
@@ -2380,9 +2379,9 @@ function resolveNonCombatLethalCheck(
   }
   const foe = war.enemies.find((e) => e.id === battle.enemyId)!;
   if (war.hp <= 0) {
-    const rosterDef = ROSTER_MAP[foe.rosterId];
-    if (rosterDef?.lines.win && !summary.narrative.includes(rosterDef.lines.win)) {
-      summary.narrative += ` ${rosterDef.lines.win}`;
+    const lines = getCompetitorLines(state, foe);
+    if (lines.win && !summary.narrative.includes(lines.win)) {
+      summary.narrative += ` ${lines.win}`;
     }
     return { status: 'player_dead', summary };
   }
@@ -2404,11 +2403,15 @@ export function checkLoyalInterception(
   if (summary.playerDmgTaken < 14 && war.hp >= 30) return false;
 
   const candidates = state.team.members
-    .filter((m) => m.alive && m.specialStatus !== 'missing_nin' && m.trust >= 65)
+    .filter((m) => {
+      const p = getPerson(state, m.personId);
+      return Boolean(p && p.identity.alive && p.identity.specialStatus !== 'missing_nin' && m.trust >= 65);
+    })
     .sort((a, b) => b.trust - a.trust);
   if (candidates.length === 0) return false;
 
   const protector = candidates[0];
+  const protectorName = personName(state, protector.personId);
   const prob = clamp(0.38 + (protector.trust - 65) * 0.014, 0.38, 0.85);
   if (!rng.chance(prob)) return false;
 
@@ -2417,11 +2420,11 @@ export function checkLoyalInterception(
   summary.playerDmgTaken = Math.max(0, summary.playerDmgTaken - saved);
   war.loyalInterceptUsed = true;
   state.flags.had_loyal_intercept = true;
-  summary.narrative += ` KIZUNA INTERCEPTION! ${protector.name} flash-steps between you and the lethal blow, absorbing ${saved} damage!`;
+  summary.narrative += ` KIZUNA INTERCEPTION! ${protectorName} flash-steps between you and the lethal blow, absorbing ${saved} damage!`;
   recordWarFact(war, {
     type: 'squad_protect',
-    actorId: protector.id,
-    actorName: protector.name,
+    actorId: protector.personId,
+    actorName: protectorName,
     targetId: 'player',
     targetName: state.name,
     detail: `Shielded ${state.name} from a heavy strike (${saved} damage blocked)`,
@@ -2478,9 +2481,9 @@ function finalizeCombatOutcomes(
   }
 
   if (war.hp <= 0) {
-    const rosterDef = ROSTER_MAP[enemy.rosterId];
-    if (rosterDef?.lines.win && !summary.narrative.includes(rosterDef.lines.win)) {
-      summary.narrative += ` ${rosterDef.lines.win}`;
+    const lines = getCompetitorLines(state, enemy);
+    if (lines.win && !summary.narrative.includes(lines.win)) {
+      summary.narrative += ` ${lines.win}`;
     }
     return { status: 'player_dead', summary };
   }
@@ -2506,9 +2509,9 @@ function finalizeCombatOutcomes(
       targetName: enemy.name,
       detail: `Eliminated ${enemy.name} (${enemy.epithet})`,
     });
-    const rosterDef = ROSTER_MAP[enemy.rosterId];
-    if (rosterDef) {
-      summary.narrative += ` ${rosterDef.lines.fall}`;
+    const lines = getCompetitorLines(state, enemy);
+    if (lines.fall) {
+      summary.narrative += ` ${lines.fall}`;
     }
     return { status: 'player_won', summary };
   }

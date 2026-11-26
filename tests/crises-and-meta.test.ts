@@ -86,7 +86,7 @@ describe('Endgame Crisis Bosses, Extreme Conviction Route, Custom Builder & Meta
     expect(canTriggerConvictionRoute(state, state.war)).toBe(true);
     const beat1 = startConvictionRoute(state, state.war);
     expect(beat1.kind).toBe('war_conviction');
-    expect(state.war.conviction!.opponentName).toBe(state.team.members[1].name);
+    expect(state.war.conviction!.opponentPersonId).toBe(state.team.members[1].personId);
 
     // Push conviction through 3 beats into Final Valley Duel
     state.war.conviction!.resolveR = 70;
@@ -143,20 +143,22 @@ describe('Endgame Crisis Bosses, Extreme Conviction Route, Custom Builder & Meta
     expect(overBudgetFree.valid).toBe(true);
   });
 
-  it('updates Bingo Book Codex and unlocks Achievements idempotently', () => {
-    const state = createNewLife(9004, { fatedRosterId: 'ros_kenji_kirigiri' });
+  it('updates Codex Encounter Statistics and unlocks Achievements idempotently', () => {
+    const state = createNewLife(9004);
     state.age = 20;
     promoteRank(state, 'jonin');
     state.war = initWarState(state, new SeededRng(404), false, 'front');
-    expect(state.war.enemies.some((e) => e.rosterId === 'ros_kenji_kirigiri')).toBe(true);
+    expect(state.war.enemies.length).toBeGreaterThanOrEqual(7);
 
     const meta0 = createDefaultMeta();
     const res1 = updateMetaFromState(meta0, state);
     expect(res1.newlyUnlocked).toContain('ach_jonin');
-    expect(Object.keys(res1.meta.codexRoster).length).toBeGreaterThanOrEqual(7);
+    expect(res1.meta.codexStats.totalEncountered).toBeGreaterThanOrEqual(7);
+    expect(Object.keys(res1.meta.codexStats.byArchetype).length).toBeGreaterThanOrEqual(7);
 
-    // Re-running yields 0 duplicate unlocks
+    // Re-running yields 0 duplicate unlocks and identical encounter totals
     const res2 = updateMetaFromState(res1.meta, state);
     expect(res2.newlyUnlocked).toHaveLength(0);
+    expect(res2.meta.codexStats.totalEncountered).toBe(res1.meta.codexStats.totalEncountered);
   });
 });

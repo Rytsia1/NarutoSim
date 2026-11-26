@@ -27,8 +27,6 @@ import type {
 } from '../../sim/types';
 
 interface CustomBuilderPanelProps {
-  fatedRosterName?: string | null;
-  onClearFated?: () => void;
   onStartCustom: (build: CustomBuildConfig, crisisOverride: 'natural' | CrisisId) => void;
 }
 
@@ -78,8 +76,6 @@ function getDefaultDirectStats(originId: OriginId, capacity: 1 | 2 | 3 | 4 | 5):
 }
 
 export function CustomBuilderPanel({
-  fatedRosterName,
-  onClearFated,
   onStartCustom,
 }: CustomBuilderPanelProps) {
   const [mode, setMode] = useState<'points' | 'free'>('points');
@@ -486,17 +482,6 @@ export function CustomBuilderPanel({
           <option value="mastermind">Seed Akatsuki Conspiracy</option>
         </select>
       </div>
-
-      {fatedRosterName && (
-        <div className="chip-row" style={{ marginBottom: 14 }}>
-          <span className="chip pos">Active Fated Thread: {fatedRosterName}</span>
-          {onClearFated && (
-            <button type="button" className="btn btn-sm btn-ghost" onClick={onClearFated}>
-              Clear Fated Thread
-            </button>
-          )}
-        </div>
-      )}
 
       {validation.errors.length > 0 && (
         <div className="disc-item" style={{ borderColor: 'var(--accent-crimson)', marginBottom: 14 }}>

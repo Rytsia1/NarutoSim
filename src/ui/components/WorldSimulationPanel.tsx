@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { OCCUPATION_MAP } from '../../data/characters';
 import { CLAN_MAP } from '../../data/clans';
 import { GOVERNANCE_ACTIONS, type GovernanceActionId } from '../../data/events-politics';
 import { t } from '../../data/i18n';
@@ -10,6 +11,7 @@ import {
   getWorldPopulationSummary,
 } from '../../sim/npc/lod-population';
 import { getPrimaryPersonalityTags, getScheduleLabel } from '../../sim/npc-sim';
+import { getLifeBingoBookEntries } from '../../sim/people';
 import { canAccessGovernance, canRunGovernanceAction } from '../../sim/politics';
 import { deriveRelArchetype, getRelVector } from '../../sim/relationships';
 import { CHANNEL_LABELS } from '../../sim/timeline';
@@ -24,7 +26,7 @@ interface WorldSimulationPanelProps {
 }
 
 type SubView = 'timeline' | 'village' | 'world' | 'npcs';
-type NpcFilter = 'my_village' | 'l1_detailed' | 'leaders' | 'all_living' | 'missing_nin' | 'fallen';
+type NpcFilter = 'my_village' | 'bingo_book' | 'l1_detailed' | 'leaders' | 'all_living' | 'missing_nin' | 'fallen';
 
 function diplomacyClass(status: string): string {
   if (status === 'allied' || status === 'treaty') return 'pos';
@@ -71,23 +73,27 @@ export function WorldSimulationPanel({
     .reverse();
   const hiddenCount = (worldSim.timeline ?? []).filter((ev) => !ev.knownByPlayer).length;
 
-  const filteredNpcs = worldSim.npcs
-    .filter((n) => {
-      if (npcFilter === 'fallen') return !n.identity.alive;
-      if (!n.identity.alive) return false;
-      if (npcFilter === 'my_village') return n.identity.villageId === state.villageId;
-      if (npcFilter === 'l1_detailed') return n.cognition?.lodTier === 'L1';
-      if (npcFilter === 'leaders')
-        return n.identity.specialStatus === 'kage' || n.identity.roleTitle.includes('Head') || n.identity.specialStatus === 'anbu';
-      if (npcFilter === 'missing_nin') return n.identity.specialStatus === 'missing_nin';
-      return true;
-    })
-    .sort((a, b) => {
-      const aKnown = a.relationships.player ? 1 : 0;
-      const bKnown = b.relationships.player ? 1 : 0;
-      if (aKnown !== bKnown) return bKnown - aKnown;
-      return b.identity.powerScore - a.identity.powerScore;
-    });
+  const bingoBookNpcs = getLifeBingoBookEntries(state);
+  const filteredNpcs =
+    npcFilter === 'bingo_book'
+      ? bingoBookNpcs
+      : worldSim.npcs
+          .filter((n) => {
+            if (npcFilter === 'fallen') return !n.identity.alive;
+            if (!n.identity.alive) return false;
+            if (npcFilter === 'my_village') return n.identity.villageId === state.villageId;
+            if (npcFilter === 'l1_detailed') return n.cognition?.lodTier === 'L1';
+            if (npcFilter === 'leaders')
+              return n.identity.specialStatus === 'kage' || n.identity.roleTitle.includes('Head') || n.identity.specialStatus === 'anbu';
+            if (npcFilter === 'missing_nin') return n.identity.specialStatus === 'missing_nin';
+            return true;
+          })
+          .sort((a, b) => {
+            const aKnown = a.relationships.player ? 1 : 0;
+            const bKnown = b.relationships.player ? 1 : 0;
+            if (aKnown !== bKnown) return bKnown - aKnown;
+            return b.identity.powerScore - a.identity.powerScore;
+          });
 
   const villageChoices: VillageId[] = [
     ...GREAT_VILLAGES.map((v) => v.id),
@@ -511,6 +517,7 @@ export function WorldSimulationPanel({
             {(
               [
                 ['my_village', 'My Village'],
+                ['bingo_book', `Bingo Book (${bingoBookNpcs.length})`],
                 ['l1_detailed', `L1 Detailed (${worldPopSummary.l1NpcCount})`],
                 ['leaders', 'Kage & Leaders'],
                 ['all_living', 'All Living'],
@@ -550,6 +557,7 @@ export function WorldSimulationPanel({
                     <div className="disc-head">
                       <span>
                         {identity.name}
+                        {identity.epithet ? `, "${identity.epithet}"` : ''}
                         {arch ? ` (${arch})` : ''}
                       </span>
                       <span
@@ -563,7 +571,9 @@ export function WorldSimulationPanel({
                             ? 'Missing-Nin'
                             : identity.specialStatus === 'kage'
                               ? VILLAGE_MAP[identity.villageId].kageTitle
-                              : t(`rank.${identity.rank}`)}
+                              : identity.occupation !== 'shinobi' && identity.occupation !== 'samurai'
+                                ? OCCUPATION_MAP[identity.occupation]?.label ?? identity.roleTitle
+                                : t(`rank.${identity.rank}`)}
                       </span>
                     </div>
                     <div className="disc-sub tabular">

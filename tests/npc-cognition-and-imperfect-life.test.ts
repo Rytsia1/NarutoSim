@@ -29,7 +29,6 @@ import {
 import { adjustBidirectionalPlayerRel } from '../src/sim/relationships';
 import { SeededRng } from '../src/sim/rng';
 import { formGeninTeam } from '../src/sim/team';
-import { syncTeamMembersToWorldNpcs } from '../src/sim/npc-sim';
 
 describe('Deterministic NPC Intelligence (Utility AI + GOAP + Memory + 3-Tier LOD)', () => {
   it('evaluates U(a) = w_g*G + w_p*P + w_r*R + w_m*M accurately for Renji sick-sibling dilemma', () => {
@@ -238,7 +237,6 @@ describe('Player Agency & Imperfect Shinobi Lives (Scenarios A-E + Quiet Heroism
     sC.rank = 'genin';
     sC.world.tension = 55;
     sC.team = formGeninTeam(sC, new SeededRng(92003));
-    syncTeamMembersToWorldNpcs(sC, new SeededRng(92003));
     const decC = buildAbandonedSquadDecision(sC);
     expect(decC?.eventId).toBe('abandoned_squad');
     sC.pending = decC;

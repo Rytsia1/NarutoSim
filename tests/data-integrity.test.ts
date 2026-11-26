@@ -16,7 +16,17 @@ import {
 import { EN_DICT } from '../src/data/i18n';
 import { ORIGINS } from '../src/data/origins';
 import { BLOODLINES, DISCIPLINES } from '../src/data/powers';
-import { ROSTER } from '../src/data/roster';
+import {
+  ARCHETYPE_PROFILES,
+  EPITHET_PARTS,
+  LINE_POOL,
+  MOTIVE_POOL,
+  OCCUPATIONS,
+  ORIGIN_POOL,
+  SKILL_POOL,
+  ULTIMATE_POOL,
+  WEAKNESS_LABELS,
+} from '../src/data/characters';
 import { VILLAGES } from '../src/data/villages';
 
 function assertUniqueIds(label: string, items: readonly { id: string }[]): void {
@@ -48,7 +58,8 @@ describe('Content pack data integrity', () => {
     assertUniqueIds('TEAM_EVENTS', TEAM_EVENTS);
     assertUniqueIds('CRISIS_WHISPERS', CRISIS_WHISPERS);
     assertUniqueIds('RETIREMENT_EVENTS', RETIREMENT_EVENTS);
-    assertUniqueIds('ROSTER', ROSTER);
+    assertUniqueIds('OCCUPATIONS', OCCUPATIONS);
+    assertUniqueIds('ARCHETYPE_PROFILES', ARCHETYPE_PROFILES);
     assertUniqueIds('WAR_CROSSROADS', WAR_CROSSROADS);
     assertUniqueIds('ACHIEVEMENTS', ACHIEVEMENTS);
   });
@@ -93,8 +104,8 @@ describe('Content pack data integrity', () => {
       ...CRISIS_WHISPERS.flatMap((e) => [e.title, e.body]),
       ...RETIREMENT_EVENTS.flatMap((e) => [e.title, e.body]),
       ...WAR_CROSSROADS.flatMap((c) => [c.title, c.body, ...c.options.flatMap((o) => [o.label, o.resultText])]),
-      ...ROSTER.flatMap((r) => [
-        r.name,
+      ...OCCUPATIONS.flatMap((o) => [o.label, ...o.roleTitles]),
+      ...ARCHETYPE_PROFILES.flatMap((r) => [
         r.epithet,
         r.motive,
         r.originHint,
@@ -105,6 +116,21 @@ describe('Content pack data integrity', () => {
         r.lines.win,
         r.lines.fall,
       ]),
+      ...Object.values(SKILL_POOL).flatMap((byEl) =>
+        Object.values(byEl).flatMap((list) => (list ?? []).map((s) => s.name)),
+      ),
+      ...Object.values(ULTIMATE_POOL).flatMap((byEl) =>
+        Object.values(byEl).flatMap((list) => (list ?? []).flatMap((u) => [u.name, u.desc])),
+      ),
+      ...Object.values(LINE_POOL).flatMap((byTac) =>
+        Object.values(byTac).flatMap((list) => (list ?? []).flatMap((l) => [l.meet, l.clash, l.win, l.fall])),
+      ),
+      ...Object.values(MOTIVE_POOL).flat(),
+      ...Object.values(ORIGIN_POOL).flat(),
+      ...Object.values(EPITHET_PARTS.elementPrefix).flat(),
+      ...Object.values(EPITHET_PARTS.villagePrefix).flat(),
+      ...Object.values(EPITHET_PARTS.archetypeSuffix).flat(),
+      ...WEAKNESS_LABELS,
     ];
 
     for (const s of allStrings) {

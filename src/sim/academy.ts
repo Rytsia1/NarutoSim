@@ -1,6 +1,6 @@
 import { getClansForVillage } from '../data/clans';
-import { VILLAGE_MAP } from '../data/villages';
-import { addNpcMemory, createWorldNpc } from './npc-sim';
+import { addNpcMemory } from './npc-sim';
+import { generateCharacter, generateUniquePersonName, personName } from './people';
 import { clamp } from './powers';
 import { adjustBidirectionalPlayerRel } from './relationships';
 import type { SeededRng } from './rng';
@@ -29,26 +29,26 @@ export function getSenseiBiasLabel(bias: SenseiBias): string {
 
 export function initAcademyState(state: GameState, rng: SeededRng): AcademyState {
   const worldSim = state.worldSim;
-  const year = state.birthYear + state.age;
   const villageClans = getClansForVillage(state.villageId);
   const usedNames = new Set<string>([
     state.name,
-    ...state.family.map((f) => f.name),
+    ...state.family.map((f) => personName(state, f.personId)),
     ...(worldSim?.npcs.map((n) => n.identity.name) ?? []),
   ]);
 
   let senseiNpcId = 'acad_sensei_local';
-  let senseiName = `${rng.pick(VILLAGE_MAP[state.villageId].maleNames)} ${rng.pick(VILLAGE_MAP[state.villageId].surnames)}`;
+  let senseiName = generateUniquePersonName(state.villageId, null, 'M', usedNames, rng);
   const senseiBias = rng.pick(SENSEI_BIASES);
 
   const classmateNpcIds: string[] = [];
   if (worldSim) {
-    // Create Academy Sensei as real WorldNpc
-    const senseiNpc = createWorldNpc(
-      worldSim,
+    // Create Academy Sensei as real WorldNpc (observed & persistent)
+    const senseiNpc = generateCharacter(
+      state,
       {
         villageId: state.villageId,
         clanId: null,
+        occupation: state.villageId === 'iron' ? 'samurai' : 'shinobi',
         age: rng.int(24, 38),
         rank: 'chunin',
         specialStatus: 'none',
@@ -59,12 +59,12 @@ export function initAcademyState(state: GameState, rng: SeededRng): AcademyState
           cautious: 12,
           cruel: senseiBias === 'strict_drill' ? 14 : -10,
         },
-        birthYear: year,
+        lodTier: 'L1',
+        observed: true,
+        usedNames,
       },
-      usedNames,
       rng,
     );
-    worldSim.npcs.push(senseiNpc);
     senseiNpcId = senseiNpc.identity.id;
     senseiName = senseiNpc.identity.name;
     adjustBidirectionalPlayerRel(
@@ -75,11 +75,12 @@ export function initAcademyState(state: GameState, rng: SeededRng): AcademyState
       'mentor',
     );
 
-    // Seed 5 real Academy Classmates (reusing existing same-age youth NPCs if any, then creating the rest)
+    // Seed 5 real Academy Classmates (reusing existing same-age combatant youth NPCs if any, then creating the rest)
     const existingYouths = worldSim.npcs.filter(
       (n) =>
         n.identity.alive &&
         n.identity.villageId === state.villageId &&
+        (n.identity.occupation === 'shinobi' || n.identity.occupation === 'samurai') &&
         n.identity.age >= state.age - 1 &&
         n.identity.age <= state.age + 2 &&
         n.identity.rank !== 'genin' &&
@@ -89,6 +90,7 @@ export function initAcademyState(state: GameState, rng: SeededRng): AcademyState
     for (const y of existingYouths.slice(0, 2)) {
       y.identity.rank = 'academy';
       y.identity.roleTitle = 'Academy Classmate';
+      y.identity.observed = true;
       classmateNpcIds.push(y.identity.id);
     }
 
@@ -97,28 +99,28 @@ export function initAcademyState(state: GameState, rng: SeededRng): AcademyState
       const clan = idx < 3 && villageClans.length > 0 ? villageClans[idx % villageClans.length] : null;
       const isBullyArch = idx === 2;
       const isRivalArch = idx === 0;
-      const mate = createWorldNpc(
-        worldSim,
+      const mate = generateCharacter(
+        state,
         {
           villageId: state.villageId,
           clanId: clan?.id ?? null,
+          occupation: state.villageId === 'iron' ? 'samurai' : 'shinobi',
           age: state.age,
           rank: 'academy',
           specialStatus: 'none',
           roleTitle: 'Academy Classmate',
           roleBias: 'peer',
-          powerScore: isRivalArch ? rng.int(24, 32) : rng.int(16, 26),
           personalityBias: isBullyArch
             ? { cruel: 22, ambitious: 16, compassionate: -20 }
             : isRivalArch
               ? { ambitious: 25, loyal: 8 }
               : { compassionate: 16, loyal: 14 },
-          birthYear: year,
+          lodTier: 'L1',
+          observed: true,
+          usedNames,
         },
-        usedNames,
         rng,
       );
-      worldSim.npcs.push(mate);
       classmateNpcIds.push(mate.identity.id);
 
       if (isRivalArch) {

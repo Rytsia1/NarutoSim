@@ -1,113 +1,154 @@
-# NarutoSim — Character Database & Population (satu identitas per orang)
+# NarutoSim — Character Generator & Penduduk Dunia (revisi)
 
 ## Context
-`src/data/roster.ts` sekarang adalah "daftar musuh". Di sekitarnya sudah tumbuh populasi NPC (`state.worldSim.npcs`, tipe `WorldNpc`, dengan LOD L1/L2 dan populasi abstrak > 20.000), tetapi **satu manusia masih disimpan dalam banyak bentuk**. Eksplorasi menemukan 11 bentuk "orang" di 5 lokasi:
+Rencana sebelumnya (`docs/people-architecture.md`) memperlakukan 24 karakter tulisan tangan sebagai *template karakter*. Sebagian sudah terimplementasi di working tree:
+- `src/data/characters/` sudah dipisah per desa,
+- `src/sim/people.ts` sudah punya `materializeTemplate`, `createGenericPerson`, `combatProfile`, `competitorFromPerson`, `killPerson`, dan `collectReferencedPersonIds`.
 
-- **Classmate → teammate:** `WorldNpc` + `KizunaMember`, disinkron manual di ±5 tempat (`npc-sim.ts:792-902`, `:917`, `:1023`, `relationships.ts:141`, `imperfect-life.ts:941`).
-- **Teammate → partner perang:** `WarPartnerState` (`partner.ts:112`), lalu `PermanentPartnerRecord` (`partner.ts:461`).
-- **Teammate → musuh perang:** `WarCompetitor` hasil rakitan tangan.
-  - Rogue (`war.ts:247-290`): rank dan jutsu di-hardcode.
-  - Rival (`war.ts:304-334`): rival **memakai stat orang asing**.
-  - Partner yang membelot (`partner.ts:387-431`).
-  - **Kematian rival dan partner yang membelot tidak pernah tercatat balik.**
-- **Romance teammate → pasangan:** `FamilyMember` duplikat tanpa tautan (`life.ts:637-658`). Keluarga tidak punya id, dan saudara serta anak tidak pernah mati.
-- **Peserta Chunin Exam, lawan Valley of the End:** hanya snapshot nama.
-- **Data statis dan dinamis bercampur:** `WarCompetitor` menyimpan motive/ultimate di samping hp/kills; `KizunaMember` menyimpan traits di samping trust/alive.
-- Ada 7 pembuat nama terpisah, dan `state.rivalId` dibandingkan dengan id jenis lain (`lod-population.ts:223`) sehingga cek itu tidak pernah cocok.
+Masukan baru meluruskan arahnya:
+- **Random selection ≠ random generation.** Roster tidak dihapus, tetapi fungsinya berubah menjadi **building blocks untuk generator**.
+- Generator membuat **penduduk dunia**: shinobi *dan* sipil (pedagang, pandai besi, medis, petani, pengrajin, guru, samurai), bukan sekadar musuh.
+- **Field saling berkaitan**: klan → kemampuan dan latar, desa → budaya dan elemen, kepribadian → keputusan, usia → rank, gaya bertarung → jutsu.
+- **Hasil generate harus persisten.** Kaito tetap Kaito sepanjang simulasi dan tidak di-generate ulang.
 
-**Koreksi kecil atas deskripsi awal:** `war.ts` sekarang **tidak** men-scale musuh berdasarkan rank pemain. Komentar di `war.ts:204` menyebut roster muncul "at full unscaled strength". Dengan desain di bawah, kekuatan musuh justru akan mengikuti rank dan usia orang itu sendiri.
+**Keputusan pemain:** sepenuhnya prosedural. 24 karakter dilebur menjadi pool. Codex lintas hidup berubah menjadi statistik, dan Bingo Book hanya per hidup. Progres Codex lama hilang (disetujui).
 
-**Tujuan:** NarutoSim punya *populasi shinobi*, bukan *roster musuh*. Satu orang memiliki satu `personId` sepanjang hidupnya: teman akademi → rekan → sensei → rival → musuh perang → Kage → meninggal.
+### Kondisi kode sekarang (hasil eksplorasi)
+- Ada **3 pembuat orang** dengan aturan berbeda:
+  - `createWorldNpc` (`npc-sim.ts:473`): elemen dari klan → desa, spesialisasi dari klan, kepribadian dibias `politicalBias`.
+  - `createGenericPerson` (`people.ts:340`): **mengabaikan klan**, motivasi dan nindo selalu sama.
+  - `materializeTemplate` (`people.ts:182`).
+- Ada **2 generator nama yang identik**: `npc-sim.ts:233` dan `people.ts:293`. Yang ketiga ada di `life.ts:377`.
+- NPC **tidak menyimpan stat atau jutsu**, hanya `powerScore` datar per rank. `combatProfile` (`people.ts:539`) memberi stat yang sama persis untuk semua NPC generik dengan arketipe + rank yang sama, sementara ujian Chunin memakai `powerScore`. Dua sistem kekuatan berjalan terpisah.
+- **Tidak ada konsep profesi.** Sipil hanya muncul sebagai keluarga. Ada **bug**: semua sipil dewasa otomatis menjadi Genin di tick pertama (`npc-sim.ts:1072`), dan sipil memakai jadwal `border_patrol` (`npc-sim.ts:306`).
+- **Batas persistensi** sekitar 68 orang. NPC L2 yang hidup dihapus saat lewat batas (`npc-sim.ts:1389-1425`), padahal mungkin sudah pernah ditemui pemain.
+- Building blocks yang sudah ada dan dipakai ulang:
+  - Klan `ClanDef`: 30 klan, `signatureDisciplines`, `preferredElement`, `bloodlineId/Chance`, `ethos`, `politicalBias`, `hidenArts`.
+  - Desa: name pool, `dominantElement`, `culture`, `institutions`.
+  - `JUTSU_DB`: 175 jutsu dengan `requires.disciplineId/element/rank/clanId`.
+  - `NINDOS`, `ARCHETYPE_AVG`, `ARCHETYPE_PROFILES`, `SENSEI_ARCHETYPES` / `TEAMMATE_ARCHETYPES`.
+  - `buildPersonality`, `pickMotivationFromPersonality`, `pickNindo` (`npc-sim.ts:257/270/291`).
+  - `rollBirthBloodline` (`powers.ts:137`); aturan elemen pemain (`life.ts:413`).
 
-**Keputusan pemain:**
-- Template ditempatkan **relatif terhadap umur pemain**, bukan memakai kronologi canon.
-- Database tetap berupa **file `.ts`, dipisah per desa**.
+## Tiga lapisan (versi akhir)
 
-## Tiga lapisan
+| Lapisan | Isi | Tempat |
+|---|---|---|
+| **Character Templates** (building blocks, readonly) | Arketipe, profesi, klan, desa, pool skill/ultimate/dialog/motif/julukan | `src/data/characters/`, `clans.ts`, `villages.ts`, `jutsu*.ts` |
+| **Character Instance** (hasil generate, disimpan sekali) | Nama, sex, tanggal lahir, desa, klan, profesi, elemen, bloodline, kepribadian, traits, potensi, bias stat, kelemahan, kit jutsu, latar | field di `WorldNpc`, ditulis **hanya** oleh generator |
+| **Simulation State** (berubah tiap tahun) | Usia, rank, status, alive, cedera, jutsu yang dikuasai, hubungan, memori, goal, cognition | field dinamis `WorldNpc` yang sudah ada |
 
-| Lapisan | Isi | Tempat | Boleh berubah saat main? |
+**CharacterRegistry tidak perlu kelas baru.** Registry = `state.worldSim.npcs` + API di `people.ts` (`getPerson`, `killPerson`, `collectReferencedPersonIds`).
+
+---
+
+## G1 — Roster menjadi building blocks (data)
+- Isi 24 file per desa di `src/data/characters/` dilebur ke **`pools.ts`**:
+  - `SKILL_POOL[archetype][element]` dan `ULTIMATE_POOL[archetype][element]` (diambil dari skill dan ultimate yang ada; isinya memang sudah berwarna arketipe + elemen).
+  - `LINE_POOL[archetype][tactic]` untuk meet / clash / win / fall, `MOTIVE_POOL[motivation]`, `ORIGIN_POOL[archetype]`.
+  - Teks diberi placeholder `{name}`, `{they}`, `{their}`, `{village}` (contoh asli: "her gloved knuckles", "Kusagakure"), lalu dirender oleh satu helper `renderText(person, text)`.
+  - `EPITHET_PARTS`: awalan menurut elemen/desa ("Mist", "Ember") + akhiran menurut arketipe ("Cleaver", "Lance"). Julukan hanya diberikan kepada chunin+ yang punya reputasi.
+- **Baru `occupations.ts`:**
+
+| Profesi | Shinobi? | Bobot default | Catatan |
 |---|---|---|---|
-| **Character Database** | Template: nama, julukan, desa, klan, sex, elemen, arketipe, tactic, traits, peak ranks, skills, ultimate, lore, dialog, `ageOffset`, `rankArc` | `src/data/characters/*.ts` | Tidak (readonly) |
-| **Population** | Membuat orang dari template (canon/OC) atau dari profil arketipe (generik); memberi `personId` | `src/sim/people.ts` (baru) + `npc-sim.ts` / `world-sim.ts` yang sudah ada | — |
-| **Person state** | `WorldNpc`: usia, rank, status, alive, powerScore, hubungan, memori, goal, cognition + `templateId` | `state.worldSim.npcs` (sudah ada) | Ya |
+| shinobi | ya | menurut desa (desa besar tinggi) | jalur rank normal |
+| merchant, blacksmith, farmer, artisan | tidak | sisa populasi | `waves_guild` condong ke merchant |
+| medic (sipil) | tidak | kecil | dipengaruhi `hospitalBaseline` desa |
+| teacher | tidak / mantan | kecil | instruktur akademi |
+| samurai | bukan ninja, tapi petarung | hanya Land of Iron | gaya kenjutsu, klan `iron_samurai_house` |
 
-**Peran = view yang merujuk `personId`**, bukan salinan orang. Squad, partner, keluarga, peserta ujian, lawan duel, dan musuh perang hanya menyimpan data milik peran itu sendiri: trust, tahap hubungan, hp di battle, intel perang. Identitas (nama, usia, alive, rank) selalu dibaca dari person.
+- 24 file karakter per desa dihapus setelah konten berpindah. `ARCHETYPE_PROFILES` (`archetypes.ts`) tetap ada sebagai fallback.
+- Pengecekan em-dash di `tests/data-integrity.test.ts` dipindah ke pool.
 
-## F1 — Character Database (data saja)
-- Pecah `src/data/roster.ts` menjadi `src/data/characters/index.ts` (tipe, registry `CHARACTERS`, `CHARACTER_MAP`) + `konoha.ts`, `kiri.ts`, `kumo.ts`, … (satu file per desa, `satisfies readonly CharacterTemplate[]`).
-- `CharacterTemplate` = `RosterShinobiDef` yang sudah ada (`roster.ts:13`) dengan beberapa perubahan:
-  - `ranks` diganti nama menjadi **`peakRanks`**: potensi di puncak, bukan kondisi saat ini.
-  - Field baru `sex`, `clanId?`, `canon: boolean`.
-  - **`ageOffset: [min, max]`**: selisih umur terhadap pemain (contoh: sebaya `[-1, 2]`, angkatan sensei `[12, 20]`, tetua `[30, 45]`).
-  - **`rankArc`**: usia naik ke genin / chunin / jonin, plus `peakRank`. `officialRank` lama menjadi `peakRank`.
-- **Id `ros_*` dipertahankan**, sehingga Codex dan `meta.codexRoster` tidak perlu migrasi.
-- **Profil arketipe** untuk orang generik (`characters/archetypes.ts`): peak ranks dari `ARCHETYPE_AVG` (`roster.ts:59`) + skill dan ultimate generik. Ini menggantikan stat yang di-hardcode di rogue `war.ts:247-290`. Sensei dan teammate memakai `SENSEI_ARCHETYPES` / `TEAMMATE_ARCHETYPES` yang sudah ada.
-- Semua konsumen `ROSTER` / `ROSTER_MAP` diperbarui: `war.ts`, `partner.ts`, `combat.ts` (dialog), `meta.ts`, `ai.ts`, `CodexPanel.tsx`, `LobbyScreen.tsx`, `WarScreen.tsx`, `BattleDialog.tsx`, dan test. Tanpa alias lama.
+## G2 — `CharacterGenerator` (satu pipeline, field saling terkait)
+File baru `src/sim/character-generator.ts`, fungsi `generateCharacter(state, spec, rng)`. `spec` = `{ villageId, age, occupation?, clanId?, rank?, roleTitle? }`. **Menggantikan ketiga pembuat orang**; `createWorldNpc`, `createGenericPerson`, dan `materializeTemplate` menjadi pembungkus tipis lalu dihapus.
 
-## F2 — Person API & populasi malas (lazy)
-Satu file baru `src/sim/people.ts`. Semua akses ke orang lewat sini:
-- `getPerson(state, id)`, `templateOf(person)`, `personName(state, id)` (`'player'` ditangani).
-- **`materializeTemplate(state, templateId)`**: mengubah template menjadi `WorldNpc` saat pertama kali dibutuhkan (dipilih jadi teammate, sensei, partner, musuh, peserta ujian).
-  - **Deterministik:** offset umur, tanggal lahir, dan nasib awal (rank menurut `rankArc`; meninggal sebelum ditemui atau tidak) dihitung dengan `hashRand(seed, templateId)` (`rng.ts:72`), **bukan** stream RNG utama. Dengan begitu outcome seed lain tidak bergeser, dan hasil materialize selalu sama kapan pun dipanggil.
-  - Sebelum di-materialize, template berstatus "abstrak": tidak tersimpan di save, sama seperti populasi abstrak di `lod-population.ts`. Ukuran save tetap kecil, dan test `ws.npcs.length < 80` tetap relevan.
-- `WorldNpcIdentity.linkedRosterId` (`types.ts:925`, dideklarasi tapi tak pernah diisi) diganti menjadi **`templateId`**: id template untuk orang canon/OC, atau id profil arketipe untuk orang generik.
-- **`killPerson(state, id, age, cause)`**: satu-satunya jalur kematian. Ia mengisi alive/deathAge/deathCause, world history, dan memori orang terdekat, lalu menggantikan semua mirror sinkron.
-- **`combatProfile(state, personId)`** menghasilkan ranks, skills, dan ultimate:
-  - ranks = `peakRanks` × faktor rank (genin 0.70 / chunin 0.85 / jonin–peak 1.0) × faktor usia (−1% per tahun di atas 50).
-  - **Posture B, metrik:** test `power-scaling` tetap hijau untuk orang yang berada di peak rank, dan `sim:balance` menunjukkan tingkat bertahan hidup pemain di perang dalam ±5 pp dari sebelum perubahan. Kalau musuh terlalu lemah → faktor chunin 0.85 → 0.90.
-- **Satu pembuat nama**: `generateUniqueNpcName` (`npc-sim.ts:232`) menggantikan 6 picker lain (`team.ts:9`, `life.ts:359` dan inline, `academy.ts:41`, `partner.ts:224`, `war.ts:349`, `npc/cognition.ts:638`).
-- Culling NPC (`npc-sim.ts:1518`) **tidak boleh** menghapus orang yang masih dirujuk sebuah peran.
+Urutan langkah (tiap langkah membaca hasil langkah sebelumnya):
+1. **Profesi**: bobot desa + usia (anak = academy/sipil).
+2. **Klan**: `getClansForVillage` (`clans.ts:1161`) dengan peluang klan vs tanpa klan; klan samurai/guild hanya untuk profesi yang cocok.
+3. **Nama**: satu `generateUniquePersonName` (gabungan dua salinan; picker di `life.ts:377` juga diarahkan ke sini). Marga dari klan.
+4. **Elemen**: aturan pemain `life.ts:413`, yaitu klan 65% → desa 55% → acak. Ini memperbaiki bug teammate Uchiha yang mendapat elemen desa.
+5. **Bloodline**: logika `rollBirthBloodline` (`powers.ts:137`) dengan `clan.bloodlineChance`. NPC kini bisa punya bloodline.
+6. **Kepribadian**: `buildPersonality` + bias `clan.politicalBias` + bias profesi.
+7. **Traits dari kepribadian**: honor / compassion / loyalty / ambition / freedom diambil dari 2 sumbu tertinggi. Dibutuhkan oleh fit partner dan squad (`team.ts`).
+8. **Motivasi & nindo**: `pickMotivationFromPersonality`, `pickNindo` (di-export).
+9. **Gaya bertarung**: `clan.signatureDisciplines` / spesialisasi profesi → `inferArchetypeFromSpecialty` (`people.ts:108`).
+10. **Potensi & bias stat**: `potential` 0.80–1.20, `statBias` ±0.4 per stat (5 stat). Keduanya **Posture B**, metrik di Verifikasi.
+11. **Kelemahan**: stat terendah setelah bias, diberi label ("kontrol chakra buruk", "stamina rendah"). Dipakai untuk intel "Exploit Weakness".
+12. **Kit jutsu awal**: saring `JUTSU_DB` menurut `requires.disciplineId`, elemen, `rank` ≤ rank orang itu, dan `clanId`; ambil 2–3. Skill dan ultimate diambil dari `SKILL_POOL` / `ULTIMATE_POOL`.
+13. **Latar**: `clan.ethos` + `village.culture` + `ORIGIN_POOL` + `MOTIVE_POOL`, dirender dengan placeholder.
 
-## F3 — Perang memakai orang
-- **`competitorFromPerson(state, personId)`** menggantikan `createCompetitorFromRoster` (`war.ts:161`) dan 4 perakit lain: rogue `war.ts:247`, rival `war.ts:304`, rekan desa `war.ts:336`, pembelot `partner.ts:387`.
-  - `WarCompetitor` mendapat `personId`.
-  - Lore, skill, ultimate, dan dialog **tidak disalin**; semuanya dibaca lewat `templateOf`.
-  - Yang tersimpan hanya data lokal perang: hp, cp, fort, intel, kills, goals, allyId, persona.
-- **Pemilihan musuh:** orang hidup, usia ≥ 16, chunin ke atas, dari desa lain, satu per arketipe. Template di-materialize bila perlu.
-  - Rival dan rogue ex-teammate menjadi **dirinya sendiri** dengan stat dari profilnya, bukan stat orang asing.
-  - Fated Thread menjadi `fatedTemplateId`.
-- **`applyWarResultsToPeople(state, war)`**: satu fungsi di akhir perang untuk kematian (`killPerson`) dan kills. Ini menggantikan `syncFallenFromWar` (`war.ts:111-124`), dan **`fallenRosterIds` dihapus** (diturunkan dari orang yang mati dan punya `templateId`). Codex di `meta.ts:56-78` membaca dari situ.
+Semua hasil disimpan di `WorldNpc` (field instance baru: `occupation`, `traits`, `bloodlineId?`, `potential`, `statBias`, `weakness`, `jutsuIds`, `kit {skills, ultimate}`, `background`, `epithet?`). **Tidak pernah dihitung ulang.**
 
-## F4 — Peran lain merujuk `personId`
-- **Squad** (`team.ts:148-253`): `KizunaMember` → `{ personId, role, trust, fit, relTrack, relStage, relPoints, fragments, promiseMade }`.
-  - Field identitas yang duplikat dibuang: name, age, rank, specialStatus, alive, powerScore, sex.
-  - `syncTeamMembersToWorldNpcs` dan mirror-mirror lainnya dihapus.
-- **Partner:** `WarPartnerState` → `personId` + hp/trust perang. `state.permanentPartner` → `{ personId, trust, rel* }`. Bentuk role bond-nya sama dengan squad, jadi dipakai ulang.
-- **Keluarga** (`life.ts:410-437, 637-671`): tiap anggota menjadi person; `state.family: { personId, relation }[]`.
-  - Pasangan dari romance = **orang yang sama**.
-  - Saudara dan anak ikut menua dan bisa meninggal lewat tick NPC biasa.
-- **Chunin Exam** (`ranks.ts:482-578`) dan **Valley of the End** (`crises.ts:423-453`): `personId` menggantikan snapshot nama.
-- **Fakta naratif** (`WarFact`) menyimpan `personId`; nama di-resolve saat dibaca.
-- **Bug `rivalId`** (`lod-population.ts:223`) hilang dengan sendirinya karena sekarang semuanya `personId`.
+**`combatProfile`** (`people.ts:539`) membaca instance:
+- `ranks = (ARCHETYPE_AVG[arch] + statBias) × potential × faktor rank × faktor usia`.
+- **`powerScore` diturunkan dari ranks yang sama** (`avg × 18`, rumus yang sudah dipakai `materializeTemplate`), sehingga ujian Chunin dan perang memakai satu sumber kekuatan.
 
-## Save & migrasi
-- Tambah `saveVersion: 2` di GameState dan satu langkah di `MigrationRegistry` (`kernel/migrations.ts`, `kernel/bootstrap.ts`).
-- **ASSUMPTION:** save *hidup yang sedang berjalan* dari versi lama tidak dimigrasi. Saat dibuka muncul pesan "Versi baru: mulai hidup baru". **History (40 hidup terakhir) dan meta/Codex tetap aman**, karena id `ros_*` tidak berubah.
-  - IMPACT: pemain kehilangan satu hidup yang sedang berjalan.
-  - IF WRONG (kamu ingin save lama tetap jalan): perlu migrasi penuh yang memetakan KizunaMember/Family/partner ke person. Polanya sudah ada di backfill `world-sim.ts:123-150`, tapi kerjanya jauh lebih besar.
-  - VALIDATE: buka save v1 setelah update → pesan muncul, lobby, history, dan Codex utuh.
+## G3 — Populasi & persistensi
+- **Aturan inti: orang yang sudah pernah "teramati" tidak pernah dihapus.** Teramati berarti:
+  - dirujuk oleh peran (`collectReferencedPersonIds`), atau
+  - punya hubungan/memori dengan pemain, atau
+  - pernah ditemui di perang, ujian, atau misi.
+- Orang L2 yang belum pernah teramati boleh di-cull dan dikembalikan ke hitungan abstrak L3 (`lod-population.ts`). Karena belum pernah dilihat pemain, ini tidak menimbulkan inkonsistensi.
+- Batas instance dinaikkan dari ~68 ke **120** (Posture B). Metrik: save JSON < 1.5 MB dan tick tahunan < 20 ms di akhir hidup terpanjang `sim:stress`. Melewati itu → turunkan ke 90 atau rapatkan memori.
+- **Fix bug sipil:**
+  - Hanya `academy` yang lulus ke genin di usia 12 (`npc-sim.ts:1072`); sipil tetap sipil.
+  - `computeNpcSchedule` (`npc-sim.ts:306`) mendapat cabang sipil `work_trade` / `home`.
+  - Goal sipil memakai domain `family` / `career` yang sudah ada.
+- **Seed dunia** (`npc-sim.ts:574-790`), **akademi** (`academy.ts:47/100`), **peserta ujian** (`ranks.ts:548`), **pengisian ulang** (`npc-sim.ts:1365`), **keluarga** (`life.ts:556-734`), **squad** (`team.ts:202/276`), **perang** (`war.ts:251/376`), dan **partner** (`partner.ts:260/438`) semuanya memanggil `generateCharacter`.
+- **Musuh perang** dipilih dari populasi (chunin+, usia ≥ 16, desa lain, satu per arketipe). Generator hanya dipanggil bila kurang, dan orang hasilnya otomatis teramati.
 
-## Urutan & cara kerja
-0. Simpan rencana ini sebagai `docs/people-architecture.md`.
-1. **F1** → `npm test` hijau (data dan konsumen saja, perilaku sama).
-2. **F2** → test baru untuk materialize dan killPerson.
-3. **F3** → test war dan power-scaling hijau, lalu ukur `sim:balance`.
-4. **F4** → bagian terbesar; test shape squad (`ranks-and-team`, `immersion`, `deep-immersion`) diperbarui ke `personId`.
+## G4 — Progression per orang
+- Saat naik rank atau goal `train`: NPC mempelajari 1 jutsu baru dari pool yang memenuhi syarat (sama seperti langkah 12, dengan rank lebih tinggi).
+- Pertumbuhan tahunan memakai `potential`: kenaikan `statBias` 0–0.1 per tahun di usia ≤ 34, menurun setelah 62. Ini menggantikan powerScore +1–3 acak; powerScore otomatis mengikuti.
+- **Cedera permanen**: kalah duel hunter-nin atau selamat dari perang dengan HP rendah → `potential −0.05`, tercatat di memori.
+- Kematian tetap lewat `killPerson`.
 
-Setiap fase bisa di-commit sendiri.
+## G5 — Codex → statistik, Bingo Book per hidup
+- `meta.codexRoster` diganti **`meta.codexStats`**: jumlah dihadapi/dikalahkan per arketipe, klan, desa, dan bloodline. `CodexPanel.tsx` dan `LobbyScreen.tsx` menampilkan statistik ini.
+- **Bingo Book per hidup**: daftar orang yang ditemui di hidup ini, dibaca langsung dari populasi (nama, julukan, rank, status hidup/mati).
+- Achievement "12 entri codex" (`achievements.ts:294`) diganti menjadi "hadapi 8 arketipe".
+- **Fated Thread dihapus**: pin di `LobbyScreen.tsx:48`, `fatedRosterId` / `fatedTemplateId`, dan resolusinya di `war.ts` / `partner.ts`. Dengan karakter prosedural, tidak ada orang yang sama di hidup berikutnya.
+- Migrasi meta: `codexRoster` lama dibuang di `sanitizeMetaState`.
+
+## Save
+- Naikkan `saveVersion`. Save *hidup yang sedang berjalan* versi lama → pesan "mulai hidup baru". History tetap utuh.
+
+## Urutan kerja
+**Mulai setelah editan yang sedang berjalan di working tree di-commit.** Refactor ini menyentuh `war.ts`, `life.ts`, `combat.ts`, `people.ts`, dan `npc-sim.ts`.
+0. Ganti isi `docs/people-architecture.md` dengan dokumen ini.
+1. **G1** → `npm test` hijau.
+2. **G2** → ganti 3 pembuat orang; test lama diperbarui.
+3. **G3** → bug sipil + persistensi.
+4. **G4** → progression.
+5. **G5** → Codex dan Fated Thread.
+6. Verifikasi penuh.
 
 ## Verifikasi
-- `npm test`, `npm run build`, `npm run sim:stress` (2.000 hidup). Di sim-stress ditambah **cek tidak ada `personId` yang menggantung**: setiap rujukan peran harus menemukan orangnya.
-- Test baru `tests/people.test.ts`:
-  - Template tidak memiliki key dinamis (hp, cp, alive, trust, age).
-  - `materializeTemplate` dua kali pada seed yang sama menghasilkan identitas identik, dan tidak menggeser stream RNG utama.
-  - Teammate membelot → muncul di perang dengan `personId` yang sama → mati → squad view, populasi, dan Codex sama-sama menunjukkan mati.
-  - `personId` pasangan === `personId` teammate romance.
-  - Saudara bisa meninggal.
-- `npm run sim:balance` sebelum dan sesudah F3 (target ±5 pp). Catat jumlah sampel dan tanggal.
-- Manual (`npm run dev`): satu hidup sampai perang. Teman sekelas yang sama muncul sebagai teammate, lalu sebagai partner atau musuh dengan nama, usia, dan rank yang konsisten. Bingo Book lama tetap terisi.
+- `npm test`, `npm run build`, `npm run sim:stress` (2.000 hidup; tanpa NaN, tanpa `personId` menggantung, ukuran save dan waktu tick dicatat).
+- Test baru `tests/character-generator.test.ts`:
+  - **Koherensi**: anggota klan berelemen `preferredElement` ≥ 60%; anak dengan klan ber-bloodline mendapat bloodline sesuai `bloodlineChance` (±5%, 5.000 sampel); jutsu awal selalu memenuhi `requires`; samurai hanya ada di Land of Iron.
+  - **Persistensi**: orang yang ditemui di perang masih ada (nama dan stat sama) 20 tahun kemudian; generator tidak dipanggil ulang untuk id yang sudah ada.
+  - **Sipil**: pedagang dewasa tetap pedagang setelah 10 tick.
+  - **Variasi**: dua chunin generik dengan arketipe sama memiliki ranks yang berbeda.
+- Test yang perlu diubah:
+  - `crises-and-meta.test.ts` (Fated `ros_kenji_kirigiri`),
+  - `power-scaling.test.ts` (pin `ROSTER_MAP` / `ros_s_kurogumo` → batas distribusi),
+  - `war-loop.test.ts` (`fallenRosterIds`),
+  - `partner.test.ts`, `data-integrity.test.ts`.
+- `npm run sim:balance` sebelum/sesudah (Posture B):
+  - Tingkat bertahan hidup pemain di perang dalam ±5 pp. Musuh terlalu kuat → persempit `potential` ke 0.85–1.15.
+  - Tingkat lulus Chunin NPC tetap dalam ±5 pp dari sebelumnya.
+  - Catat jumlah sampel dan tanggal.
+- Manual (`npm run dev`): satu hidup. Cek:
+  - Teman sekelas punya profesi orang tua yang masuk akal.
+  - Ada pedagang atau pandai besi di desa.
+  - Teammate dari klan ber-elemen klan.
+  - Musuh perang yang sama muncul lagi dengan nama, julukan, dan jutsu yang konsisten.
+  - Bingo Book hidup ini terisi, dan statistik Codex bertambah.
 
 ## Dilewati (tambah nanti)
-- Menambah karakter canon/OC baru: setelah fondasi ini selesai, cukup menambah entri di `src/data/characters/{desa}.ts`.
-- Simulasi penuh untuk setiap orang (belajar jutsu, misi individual). Tick NPC + LOD yang ada sudah cukup; template abstrak tidak disimulasikan sampai di-materialize.
-- Migrasi save hidup yang sedang berjalan (lihat ASSUMPTION).
+- Ekonomi dan aktivitas detail untuk sipil (dagang, harga): cukup jadwal + goal dulu.
+- Template dialog per kepribadian yang lebih kaya; pool per arketipe × tactic dulu.
+- Karakter canon: proyek sepenuhnya prosedural.

@@ -1,7 +1,18 @@
 import { DISCIPLINE_MAP } from '../data/powers';
-import { ROSTER, type RosterShinobiDef } from '../data/roster';
+import {
+  combatProfile,
+  competitorFromPerson,
+  generateCharacter,
+  getPerson,
+  getPersonMotive,
+  getPersonOriginHint,
+  getPersonTraits,
+  isPersonAlive,
+  killPerson,
+  markPersonObserved,
+  personName,
+} from './people';
 import { VILLAGE_MAP } from '../data/villages';
-import { buildShinobiPersona } from './ai';
 import { recordWarFact } from './narrative';
 import { clamp } from './powers';
 import type { SeededRng } from './rng';
@@ -13,12 +24,12 @@ import type {
   PermanentPartnerRecord,
   SkillTag,
   TraitId,
-  WarCompetitor,
   WarPartnerState,
   WarState,
+  WorldNpc,
 } from './types';
 
-export interface AffinityCandidate<T extends { traits: TraitId[] }> {
+export interface AffinityCandidate<T extends { traits: readonly TraitId[] }> {
   item: T;
   fit: number;
   weight: number;
@@ -28,13 +39,13 @@ export interface AffinityCandidate<T extends { traits: TraitId[] }> {
  * GDD Ch. 5.1 Affinity Weighting: weight = exp(fitScore / 8).
  * Works for both War Partner selection (K1) and Kuchiyose Clan summoning (K3).
  */
-export function computeAffinityWeights<T extends { traits: TraitId[] }>(
+export function computeAffinityWeights<T extends { traits: readonly TraitId[] }>(
   state: GameState,
   candidates: readonly T[],
   bonusFn?: (candidate: T) => number,
 ): AffinityCandidate<T>[] {
   return candidates.map((item) => {
-    const baseFit = computeLiveFit(state, { traits: item.traits });
+    const baseFit = computeLiveFit(state, { traits: [...item.traits] });
     const bonus = bonusFn ? bonusFn(item) : 0;
     const fit = clamp(Math.round(baseFit + bonus), 15, 99);
     return {
@@ -62,13 +73,19 @@ export function getPartnerRelStageLabel(partner: Pick<WarPartnerState, 'relTrack
   return ['Squadmates', 'Comrades', 'Close Friends', 'Sworn Bond'][partner.relStage];
 }
 
-function buildSkillsForSquadMember(m: KizunaMember): { name: string; tag: SkillTag; rank: number }[] {
-  const specName = DISCIPLINE_MAP[m.specialty]?.name ?? 'Shinobi';
-  const baseRank = m.role === 'sensei' ? 4 : m.rank === 'jonin' ? 4 : m.rank === 'chunin' ? 3 : 2;
+function buildSkillsForSquadMember(
+  state: GameState,
+  m: KizunaMember,
+): { name: string; tag: SkillTag; rank: number }[] {
+  const person = getPerson(state, m.personId);
+  const specialty = person?.identity.specialty ?? 'kenjutsu';
+  const rank = person?.identity.rank ?? (m.role === 'sensei' ? 'jonin' : 'genin');
+  const specName = DISCIPLINE_MAP[specialty]?.name ?? 'Shinobi';
+  const baseRank = m.role === 'sensei' ? 4 : rank === 'jonin' ? 4 : rank === 'chunin' ? 3 : 2;
   const secondTag: SkillTag =
-    m.specialty === 'barrier' || m.specialty === 'earth_release' || m.specialty === 'fuinjutsu'
+    specialty === 'barrier' || specialty === 'earth_release' || specialty === 'fuinjutsu'
       ? 'fort'
-      : m.specialty === 'silent_killing' || m.specialty === 'shurikenjutsu'
+      : specialty === 'silent_killing' || specialty === 'shurikenjutsu'
         ? 'slayer'
         : 'insight';
   return [
@@ -78,29 +95,35 @@ function buildSkillsForSquadMember(m: KizunaMember): { name: string; tag: SkillT
 }
 
 function partnerFromPermanent(state: GameState, rec: PermanentPartnerRecord): WarPartnerState {
-  const fit = computeLiveFit(state, { traits: rec.traits });
+  const person = getPerson(state, rec.personId);
+  markPersonObserved(state, rec.personId);
+  const profile = combatProfile(state, rec.personId);
+  const traits = profile?.traits ?? getPersonTraits(state, rec.personId);
+  const fit = computeLiveFit(state, { traits });
   return {
-    id: rec.id,
+    id: `partner_perm_${rec.personId}`,
+    personId: rec.personId,
     source: 'permanent',
-    rosterId: rec.rosterId,
-    teamMemberId: rec.teamMemberId,
-    name: rec.name,
-    epithet: rec.epithet,
-    villageId: rec.villageId,
-    element: rec.element,
-    archetype: rec.archetype,
+    name: person?.identity.name ?? personName(state, rec.personId),
+    epithet: rec.epithet || profile?.epithet || 'Permanent Partner',
+    villageId: person?.identity.villageId ?? state.villageId,
+    element: person?.identity.element ?? state.element,
+    archetype: profile?.archetype ?? 'vanguard',
     hp: 100,
     maxHp: 100,
     trust: clamp(rec.trust, 10, 100),
     fit,
-    traits: [...rec.traits],
-    skills: rec.skills.map((s) => ({ ...s })),
+    traits,
+    skills: profile?.skills ?? [
+      { name: 'Joint Formation', tag: 'power', rank: 3 },
+      { name: 'Field Cover', tag: 'fort', rank: 2 },
+    ],
     relTrack: rec.relTrack,
     relStage: rec.relStage,
     relPoints: rec.relPoints,
     fragments: rec.fragments,
-    motive: rec.motive,
-    originHint: rec.originHint,
+    motive: getPersonMotive(state, rec.personId, profile?.archetype),
+    originHint: getPersonOriginHint(state, rec.personId, profile?.archetype),
     active: true,
     defected: false,
     died: false,
@@ -110,24 +133,28 @@ function partnerFromPermanent(state: GameState, rec: PermanentPartnerRecord): Wa
 }
 
 function partnerFromSquadMember(state: GameState, m: KizunaMember): WarPartnerState {
-  const fit = computeLiveFit(state, { traits: m.traits });
+  const person = getPerson(state, m.personId);
+  markPersonObserved(state, m.personId);
+  const traits = getPersonTraits(state, m.personId);
+  const fit = computeLiveFit(state, { traits });
   const v = VILLAGE_MAP[state.villageId];
-  const discElem = DISCIPLINE_MAP[m.specialty]?.element ?? v.dominantElement;
+  const specialty = person?.identity.specialty ?? 'kenjutsu';
+  const discElem = DISCIPLINE_MAP[specialty]?.element ?? person?.identity.element ?? v.dominantElement;
   return {
-    id: `partner_squad_${m.id}`,
+    id: `partner_squad_${m.personId}`,
+    personId: m.personId,
     source: 'squad',
-    teamMemberId: m.id,
-    name: m.name,
+    name: person?.identity.name ?? personName(state, m.personId),
     epithet: m.role === 'sensei' ? `Team ${state.team?.number ?? ''} Sensei` : `Team ${state.team?.number ?? ''} Comrade`,
-    villageId: state.villageId,
+    villageId: person?.identity.villageId ?? state.villageId,
     element: discElem,
-    archetype: m.role === 'sensei' ? 'vanguard' : 'skirmisher',
+    archetype: person?.identity.archetype ?? (m.role === 'sensei' ? 'vanguard' : 'skirmisher'),
     hp: 100,
     maxHp: 100,
     trust: clamp(m.trust, 10, 100),
     fit,
-    traits: [...m.traits],
-    skills: buildSkillsForSquadMember(m),
+    traits,
+    skills: buildSkillsForSquadMember(state, m),
     relTrack: m.relTrack,
     relStage: m.relStage,
     relPoints: m.relPoints,
@@ -145,29 +172,36 @@ function partnerFromSquadMember(state: GameState, m: KizunaMember): WarPartnerSt
   };
 }
 
-function partnerFromRoster(def: RosterShinobiDef, fit: number): WarPartnerState {
+function partnerFromWorldPerson(
+  state: GameState,
+  person: WorldNpc,
+  fit: number,
+  source: 'village_roster' | 'village_gen',
+): WarPartnerState {
+  person.identity.observed = true;
+  const profile = combatProfile(state, person)!;
   const startTrust = clamp(Math.round(20 + fit * 0.4 - (fit < 50 ? 5 : 0)), 18, 65);
   return {
-    id: `partner_ros_${def.id}`,
-    source: 'village_roster',
-    rosterId: def.id,
-    name: def.name,
-    epithet: def.epithet,
-    villageId: def.villageId,
-    element: def.element,
-    archetype: def.archetype,
+    id: `partner_${person.identity.id}`,
+    personId: person.identity.id,
+    source,
+    name: profile.name,
+    epithet: profile.epithet,
+    villageId: profile.villageId,
+    element: profile.element,
+    archetype: profile.archetype,
     hp: 100,
     maxHp: 100,
     trust: startTrust,
     fit,
-    traits: [...def.traits],
-    skills: def.skills.map((s) => ({ ...s })),
+    traits: profile.traits,
+    skills: profile.skills,
     relTrack: 'comrades',
     relStage: 0,
     relPoints: 0,
     fragments: 0,
-    motive: def.motive,
-    originHint: def.originHint,
+    motive: profile.motive,
+    originHint: profile.originHint,
     active: true,
     defected: false,
     died: false,
@@ -180,87 +214,96 @@ function partnerFromRoster(def: RosterShinobiDef, fit: number): WarPartnerState 
  * Selects the War Partner for the 14-day war following K1 priority:
  * 1. Living Permanent Partner (from a previous war's "Stay With Me" finale choice)
  * 2. Highest-trust living non-rogue squad member (Team Sensei or Teammate)
- * 3. Affinity-weighted candidate via exp(fit / 8)
+ * 3. Affinity-weighted selection via exp(fit / 8) from living world combatants,
+ *    or a freshly generated village shinobi/samurai combatant via CharacterGenerator
  */
 export function selectWarPartner(
   state: GameState,
   rng: SeededRng,
-  excludedRosterIds: Set<string> = new Set(),
+  excludedPersonIds: Set<string> = new Set(),
 ): WarPartnerState {
   // Priority 1: Permanent Partner from previous war finale
-  if (state.permanentPartner && state.permanentPartner.alive) {
-    return partnerFromPermanent(state, state.permanentPartner);
+  if (state.permanentPartner && isPersonAlive(state, state.permanentPartner.personId)) {
+    const p = getPerson(state, state.permanentPartner.personId);
+    if (!p || p.identity.specialStatus !== 'missing_nin') {
+      return partnerFromPermanent(state, state.permanentPartner);
+    }
   }
 
   // Priority 2: Living squad member with highest trust (not missing_nin)
   if (state.team && state.specialStatus !== 'missing_nin') {
     const livingSquad = state.team.members
-      .filter((m) => m.alive && m.specialStatus !== 'missing_nin')
+      .filter((m) => {
+        const p = getPerson(state, m.personId);
+        return Boolean(p && p.identity.alive && p.identity.specialStatus !== 'missing_nin');
+      })
       .sort((a, b) => b.trust - a.trust || (a.role === 'teammate' ? -1 : 1));
     if (livingSquad.length > 0) {
       return partnerFromSquadMember(state, livingSquad[0]);
     }
   }
 
-  // Priority 3: Affinity-weighted selection via exp(fit / 8)
-  const fallen = new Set(state.fallenRosterIds);
-  const pool = ROSTER.filter(
-    (r) =>
-      r.archetype !== 'rogue_s' &&
-      !fallen.has(r.id) &&
-      !excludedRosterIds.has(r.id) &&
-      r.id !== state.fatedRosterId,
-  );
-  if (pool.length > 0) {
-    const weighted = computeAffinityWeights(state, pool, (c) =>
+  // Priority 3: Affinity-weighted selection via exp(fit / 8) from living world combatants
+  const familyIds = new Set(state.family.map((f) => f.personId));
+  const worldPool = (state.worldSim?.npcs ?? []).filter((n) => {
+    const id = n.identity;
+    if (!id.alive) return false;
+    if (id.occupation !== 'shinobi' && id.occupation !== 'samurai') return false;
+    if (id.rank !== 'chunin' && id.rank !== 'jonin') return false;
+    if (id.specialStatus === 'kage' || id.specialStatus === 'missing_nin') return false;
+    if (id.archetype === 'rogue_s') return false;
+    if (excludedPersonIds.has(id.id) || familyIds.has(id.id) || id.id === state.rivalId) return false;
+    return true;
+  });
+
+  if (worldPool.length > 0) {
+    const wrapped = worldPool.map((npc) => ({
+      npc,
+      villageId: npc.identity.villageId,
+      traits: getPersonTraits(state, npc.identity.id),
+    }));
+    const weighted = computeAffinityWeights(state, wrapped, (c) =>
       c.villageId === state.villageId ? 6 : 0,
     );
     const chosen = rng.weighted(weighted.map((w) => ({ item: w, weight: w.weight })));
-    return partnerFromRoster(chosen.item, chosen.fit);
+    return partnerFromWorldPerson(state, chosen.item.npc, chosen.fit, 'village_roster');
   }
 
-  // Fallback generated village partner if roster is exhausted
+  // Fallback: generate a village shinobi/samurai partner via CharacterGenerator
   const v = VILLAGE_MAP[state.villageId];
-  const first = rng.pick(v.maleNames);
-  const last = rng.pick(v.surnames);
-  const traits: TraitId[] = ['loyalty', 'honor'];
-  const fit = computeLiveFit(state, { traits });
-  const startTrust = clamp(Math.round(20 + fit * 0.4 - (fit < 50 ? 5 : 0)), 18, 65);
-  return {
-    id: `partner_gen_${state.villageId}_${state.world.eraNumber}`,
-    source: 'village_gen',
-    name: `${first} ${last}`,
-    epithet: `${v.name} Flank Partner`,
-    villageId: state.villageId,
-    element: v.dominantElement,
-    archetype: 'vanguard',
-    hp: 100,
-    maxHp: 100,
-    trust: startTrust,
-    fit,
-    traits,
-    skills: [
-      { name: 'Joint Formation', tag: 'power', rank: 3 },
-      { name: 'Field Cover', tag: 'fort', rank: 2 },
-    ],
-    relTrack: 'comrades',
-    relStage: 0,
-    relPoints: 0,
-    fragments: 0,
-    motive: `See the ${v.name} frontier secured before winter.`,
-    originHint: `Assigned from the ${v.name} reserve corps.`,
-    active: true,
-    defected: false,
-    died: false,
-    downHandled: false,
-    freeSurpassUsed: false,
-  };
+  const genPerson = generateCharacter(
+    state,
+    {
+      age: Math.max(16, state.age + rng.int(0, 6)),
+      villageId: state.villageId,
+      occupation: state.villageId === 'iron' ? 'samurai' : 'shinobi',
+      rank: 'chunin',
+      roleTitle: `${v.name} Flank Partner`,
+      lodTier: 'L1',
+      observed: true,
+    },
+    rng,
+  );
+  const fit = computeLiveFit(state, { traits: genPerson.identity.traits });
+  return partnerFromWorldPerson(state, genPerson, fit, 'village_gen');
 }
 
 export function syncPartnerBackToState(state: GameState, partner: WarPartnerState | null): void {
   if (!partner) return;
-  if (partner.teamMemberId && state.team) {
-    const m = state.team.members.find((mem) => mem.id === partner.teamMemberId);
+  const person = getPerson(state, partner.personId);
+  if (partner.died) {
+    killPerson(
+      state,
+      partner.personId,
+      person?.identity.age ?? state.age,
+      `fell protecting ${state.name} in Great Shinobi War #${state.war?.warNumber ?? state.world.eraNumber}`,
+    );
+  } else if (partner.defected && person) {
+    person.identity.specialStatus = 'missing_nin';
+    person.identity.roleTitle = 'Missing-Nin Rogue';
+  }
+  if (state.team) {
+    const m = state.team.members.find((mem) => mem.personId === partner.personId);
     if (m) {
       m.trust = partner.trust;
       m.fit = partner.fit;
@@ -269,31 +312,18 @@ export function syncPartnerBackToState(state: GameState, partner: WarPartnerStat
       m.relPoints = partner.relPoints;
       m.fragments = partner.fragments;
       if (partner.died) {
-        m.alive = false;
-        m.fateNote = `Fell fighting beside you during Great Shinobi War #${state.war?.warNumber ?? state.world.eraNumber} at age ${m.age}.`;
+        m.fateNote = `Fell fighting beside you during Great Shinobi War #${state.war?.warNumber ?? state.world.eraNumber} at age ${person?.identity.age ?? state.age}.`;
       } else if (partner.defected) {
-        m.specialStatus = 'missing_nin';
         m.fateNote = `Defected during Great Shinobi War #${state.war?.warNumber ?? state.world.eraNumber}.`;
       }
     }
   }
-  if (state.permanentPartner && state.permanentPartner.id === partner.id) {
+  if (state.permanentPartner && state.permanentPartner.personId === partner.personId) {
     state.permanentPartner.trust = partner.trust;
     state.permanentPartner.relTrack = partner.relTrack;
     state.permanentPartner.relStage = partner.relStage;
     state.permanentPartner.relPoints = partner.relPoints;
     state.permanentPartner.fragments = partner.fragments;
-    if (partner.died) {
-      state.permanentPartner.alive = false;
-      state.permanentPartner.diedAge = state.age;
-      state.permanentPartner.causeOfDeath = `fell protecting you in Great Shinobi War #${state.war?.warNumber ?? state.world.eraNumber}`;
-    } else if (partner.defected) {
-      state.permanentPartner.alive = false;
-      state.permanentPartner.causeOfDeath = `severed your bond and defected during War #${state.war?.warNumber ?? state.world.eraNumber}`;
-    }
-  }
-  if (partner.died && partner.rosterId && !state.fallenRosterIds.includes(partner.rosterId)) {
-    state.fallenRosterIds.push(partner.rosterId);
   }
 }
 
@@ -386,31 +416,32 @@ export function applyResolvePartnerReaction(
 
       const defectId = `en_defect_${partner.id}`;
       if (!war.enemies.some((e) => e.id === defectId)) {
-        const defectEnemy: WarCompetitor = {
+        const defectPerson =
+          getPerson(state, partner.personId) ??
+          generateCharacter(
+            state,
+            {
+              id: partner.personId,
+              name: partner.name,
+              age: Math.max(16, state.age),
+              villageId: partner.villageId,
+              occupation: partner.villageId === 'iron' ? 'samurai' : 'shinobi',
+              rank: 'chunin',
+              specialStatus: 'missing_nin',
+              roleTitle: `${partner.epithet} (Turncoat)`,
+              element: partner.element,
+              archetype: partner.archetype,
+              traits: partner.traits,
+              lodTier: 'L1',
+              observed: true,
+            },
+            rng,
+          );
+        const defectEnemy = competitorFromPerson(state, defectPerson, war.enemies.length + 1, {
           id: defectId,
-          rosterId: partner.rosterId ?? defectId,
-          name: partner.name,
           epithet: `${partner.epithet} (Turncoat)`,
-          villageId: partner.villageId,
-          archetype: partner.archetype,
           tactic: 'hunter',
-          element: partner.element,
-          officialRank: 'chunin',
           formerShinobi: true,
-          threatClass: 'A',
-          ranks: [3.8, 4.0, 3.6, 3.8, 3.7],
-          skills: partner.skills.map((s) => ({ ...s })),
-          ultimate: {
-            name: 'Severed Pact Flash',
-            role: 'attack',
-            scope: 'single',
-            rankVal: 4.3,
-            cost: 26,
-            desc: 'A ruthless strike turned against a former war partner.',
-          },
-          motive: 'Claim the sector alone after abandoning a spent commander.',
-          originHint: partner.originHint,
-          persona: buildShinobiPersona('hunter', partner.traits, partner.archetype),
           longGoal: 'dominate',
           shortGoal: 'strike_apex',
           planTargetId: 'player',
@@ -418,21 +449,18 @@ export function applyResolvePartnerReaction(
           hp: Math.max(55, partner.hp),
           cp: 90,
           fort: 12,
-          alive: true,
           intel: 100,
           ultimateSeen: true,
           skillsRevealed: true,
           knowPlayer: 65,
-          kills: 0,
-          survivedOnce: false,
-          isExTeammateRogue: Boolean(partner.teamMemberId),
-        };
+          isExTeammateRogue: Boolean(state.team?.members.some((m) => m.personId === partner.personId)),
+        });
         war.enemies.push(defectEnemy);
       }
 
       recordWarFact(war, {
         type: 'partner_defect',
-        actorId: partner.id,
+        actorId: partner.personId,
         actorName: partner.name,
         targetId: 'player',
         targetName: state.name,
@@ -463,24 +491,13 @@ export function createPermanentPartnerFromWar(
   partner: WarPartnerState,
 ): PermanentPartnerRecord {
   return {
-    id: partner.id,
-    rosterId: partner.rosterId,
-    teamMemberId: partner.teamMemberId,
-    name: partner.name,
+    personId: partner.personId,
     epithet: partner.epithet,
-    villageId: partner.villageId,
-    element: partner.element,
-    archetype: partner.archetype,
     trust: partner.trust,
-    traits: [...partner.traits],
-    skills: partner.skills.map((s) => ({ ...s })),
     relTrack: partner.relTrack,
     relStage: partner.relStage,
     relPoints: partner.relPoints,
     fragments: partner.fragments,
-    motive: partner.motive,
-    originHint: partner.originHint,
-    alive: true,
     stayedAge: state.age,
   };
 }

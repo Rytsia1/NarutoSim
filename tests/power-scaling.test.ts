@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { ROSTER_MAP } from '../src/data/roster';
+import { ARCHETYPE_AVG } from '../src/data/characters';
 import {
   getCombatRating,
   getCombatTier,
@@ -9,6 +9,7 @@ import {
   resolveBattleRound,
 } from '../src/sim/combat';
 import { createNewLife } from '../src/sim/life';
+import { getPerson } from '../src/sim/people';
 import { promoteRank } from '../src/sim/ranks';
 import { SeededRng } from '../src/sim/rng';
 import { initWarState, startWarBattle } from '../src/sim/war';
@@ -162,13 +163,17 @@ describe('Phase 1-3 Power Scaling & Asymmetric Gap Acceptance (Monte Carlo 1,000
     const genin = buildFighterState(11001, 'genin');
     const war = initWarState(genin, new SeededRng(11001), false, 'front');
 
-    // Every roster competitor must keep exact ROSTER_MAP ranks with zero rank scaling
+    // Every competitor derives ranks strictly from their own persistent WorldNpc instance (never scaled to player rank)
     for (const enemy of war.enemies) {
-      const def = ROSTER_MAP[enemy.rosterId];
-      if (!def) continue;
-      expect(enemy.ranks).toEqual(def.ranks);
-      expect(enemy.officialRank).toBe(def.officialRank);
-      expect(enemy.threatClass).toBe(def.threatClass);
+      const person = getPerson(genin, enemy.personId);
+      expect(person).not.toBeNull();
+      const base = ARCHETYPE_AVG[enemy.archetype];
+      for (let i = 0; i < 5; i++) {
+        expect(enemy.ranks[i]).toBeGreaterThanOrEqual(1.0);
+        expect(enemy.ranks[i]).toBeLessThanOrEqual(6.0);
+        // Should sit within procedural potential/bias/rankFactor envelope around archetype base
+        expect(enemy.ranks[i]).toBeLessThanOrEqual(Math.min(6.0, (base[i] + 0.5) * 1.35));
+      }
     }
 
     // Tier classification ordering
@@ -179,8 +184,8 @@ describe('Phase 1-3 Power Scaling & Asymmetric Gap Acceptance (Monte Carlo 1,000
     expect(getCombatRating(geninRanks)).toBeLessThan(getCombatRating(eliteRanks));
 
     // Genin vs S-rogue power gap reads Overwhelming
-    const sRogue = ROSTER_MAP.ros_s_kurogumo;
-    const mockRogue = { ...war.enemies[0], ranks: [...sRogue.ranks] as [number, number, number, number, number], archetype: 'rogue_s' as const, threatClass: 'S' as const, intel: 0 };
+    const sRogueRanks: [number, number, number, number, number] = [...ARCHETYPE_AVG.rogue_s];
+    const mockRogue = { ...war.enemies[0], ranks: sRogueRanks, archetype: 'rogue_s' as const, threatClass: 'S' as const, intel: 0 };
     expect(getPowerGapRead(genin, mockRogue).label).toBe('Overwhelming');
 
     // Genin draft probability over 1,000 non-crisis war triggers: 5% - 15%
@@ -213,12 +218,12 @@ describe('Phase 1-3 Power Scaling & Asymmetric Gap Acceptance (Monte Carlo 1,000
     expect(joninCR).toBeGreaterThanOrEqual(3.6);
     expect(eliteCR).toBeGreaterThanOrEqual(4.3);
 
-    // 1. Genin (CR ~2.4) vs S-rogue roster (CR ~4.8) -> exchange win <= 5%, avg HP lost >= 60
-    const sDef = ROSTER_MAP.ros_s_kurogumo;
+    // 1. Genin (CR ~2.4) vs S-rogue (CR ~4.8) -> exchange win <= 5%, avg HP lost >= 60
+    const sRanks: [number, number, number, number, number] = [...ARCHETYPE_AVG.rogue_s];
     const geninVsS = runMonteCarloDuel({
       battles: 1000,
       playerTier: 'genin',
-      enemyRanks: [...sDef.ranks],
+      enemyRanks: sRanks,
       enemySkillPower: 3,
     });
     expect(geninVsS.exchangeWinRate).toBeLessThanOrEqual(0.05);
@@ -255,7 +260,7 @@ describe('Phase 1-3 Power Scaling & Asymmetric Gap Acceptance (Monte Carlo 1,000
     const geninVsSTactical = runMonteCarloDuel({
       battles: 1000,
       playerTier: 'genin',
-      enemyRanks: [...sDef.ranks],
+      enemyRanks: sRanks,
       enemySkillPower: 3,
       tacticalSetup: true,
     });

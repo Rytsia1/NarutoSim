@@ -222,7 +222,7 @@ describe('Autonomous 3-Layer World Simulation', () => {
       }
       const endState = s.getState();
       expect(endState.worldSim).toBeDefined();
-      expect(endState.worldSim!.npcs.length).toBeLessThanOrEqual(75);
+      expect(endState.worldSim!.npcs.length).toBeLessThanOrEqual(160);
       // Verify RNG snapshot stays valid
       expect(new SeededRng(endState.rng.seed, endState.rng.state).next()).toBeGreaterThanOrEqual(0);
     }

@@ -63,8 +63,7 @@ export interface WarCrisisState {
 export interface ConvictionState {
   leaning: LeaningKey;
   wishTitle: string;
-  opponentId: string;
-  opponentName: string;
+  opponentPersonId: string;
   opponentRole: 'sensei' | 'teammate';
   triggerOutcome: 'victor' | 'shared';
   resolveR: number; // 0..100
@@ -96,11 +95,20 @@ export type SummonClanId = 'toad' | 'snake' | 'slug' | 'hound' | 'hawk' | 'ape';
 
 export type PartnerTrustTier = 'distrust' | 'steady' | 'trusted' | 'bond';
 
+export type NpcOccupation =
+  | 'shinobi'
+  | 'merchant'
+  | 'blacksmith'
+  | 'farmer'
+  | 'artisan'
+  | 'medic'
+  | 'teacher'
+  | 'samurai';
+
 export interface WarPartnerState {
   id: string;
+  personId: string;
   source: 'permanent' | 'squad' | 'village_roster' | 'village_gen';
-  rosterId?: string;
-  teamMemberId?: string;
   name: string;
   epithet: string;
   villageId: VillageId;
@@ -126,27 +134,14 @@ export interface WarPartnerState {
 }
 
 export interface PermanentPartnerRecord {
-  id: string;
-  rosterId?: string;
-  teamMemberId?: string;
-  name: string;
+  personId: string;
   epithet: string;
-  villageId: VillageId;
-  element: ChakraElement;
-  archetype: CombatArchetype;
   trust: number;
-  traits: TraitId[];
-  skills: { name: string; tag: SkillTag; rank: number }[];
   relTrack: RelTrack;
   relStage: 0 | 1 | 2 | 3;
   relPoints: number;
   fragments: number;
-  motive: string;
-  originHint: string;
-  alive: boolean;
   stayedAge: number;
-  diedAge?: number;
-  causeOfDeath?: string;
 }
 
 export interface SummonContractState {
@@ -156,10 +151,24 @@ export interface SummonContractState {
   summonUses: number;
 }
 
+export interface CodexStatEntry {
+  encountered: number;
+  defeated: number;
+}
+
+export interface CodexStats {
+  byArchetype: Partial<Record<CombatArchetype, CodexStatEntry>>;
+  byClan: Record<string, CodexStatEntry>;
+  byVillage: Partial<Record<VillageId, CodexStatEntry>>;
+  byBloodline: Record<string, CodexStatEntry>;
+  totalEncountered: number;
+  totalDefeated: number;
+}
+
 export interface MetaState {
   version: number;
   livesPlayed: number;
-  codexRoster: Record<string, { state: 'seen' | 'met' | 'defeated'; encounters: number; defeats: number }>;
+  codexStats: CodexStats;
   codexBloodlines: Record<string, BloodlineStage>;
   codexDisciplines: Record<string, number>;
   codexSummons?: SummonClanId[];
@@ -242,9 +251,9 @@ export type WarFactType =
 export interface WarFact {
   day: number;
   type: WarFactType;
-  actorId: string;
-  actorName: string;
-  targetId?: string;
+  actorId: string; // canonical personId or 'player'
+  actorName?: string;
+  targetId?: string; // canonical personId or 'player'
   targetName?: string;
   detail: string;
 }
@@ -285,7 +294,7 @@ export type PowerGapLabel =
 
 export interface WarCompetitor {
   id: string;
-  rosterId: string;
+  personId: string;
   name: string;
   epithet: string;
   villageId: VillageId;
@@ -296,10 +305,9 @@ export interface WarCompetitor {
   formerShinobi?: boolean;
   threatClass: ThreatClass;
   ranks: [number, number, number, number, number]; // [tai, spd, sta, chk, ins]
+  weakness?: string;
   skills: { name: string; tag: SkillTag; rank: number }[];
   ultimate: UltimateDef;
-  motive: string;
-  originHint: string;
   persona: ShinobiPersona;
   longGoal: LongGoal;
   shortGoal: ShortGoal;
@@ -551,11 +559,8 @@ export interface CombatProjection {
 }
 
 export interface FamilyMember {
+  personId: string;
   relation: 'father' | 'mother' | 'sibling' | 'spouse' | 'child';
-  name: string;
-  sex: 'M' | 'F';
-  age: number;
-  alive: boolean;
   capacity?: number;
   isHeirRival?: boolean;
 }
@@ -585,17 +590,9 @@ export interface BloodlineState {
 }
 
 export interface KizunaMember {
-  id: string;
-  name: string;
-  sex: 'M' | 'F';
-  age: number;
+  personId: string;
   role: 'sensei' | 'teammate';
   archetype: string;
-  rank: ShinobiRank;
-  specialStatus: SpecialStatus;
-  alive: boolean;
-  specialty: string;
-  traits: TraitId[];
   trust: number;
   fit: number;
   relTrack: RelTrack;
@@ -603,10 +600,9 @@ export interface KizunaMember {
   relPoints: number;
   fragments: number;
   promiseMade: boolean;
-  powerScore: number;
   lastUpdateAge: number;
   fateNote: string;
-  /** Relationship Sim 2.0 vectors (mirrored with WorldNpc) */
+  /** Relationship Sim 2.0 vectors (role-local view synced with WorldNpc.relationships.player) */
   rel6?: RelVector6;
   playerFeelings?: RelVector6;
 }
@@ -796,7 +792,9 @@ export type NpcSchedule =
   | 'diplomatic_envoy'
   | 'kage_office'
   | 'forbidden_research'
-  | 'wandering_exile';
+  | 'wandering_exile'
+  | 'work_trade'
+  | 'home';
 
 export type NpcRelationKind =
   | 'family'
@@ -904,6 +902,18 @@ export interface NpcGoal {
   startedAge: number;
 }
 
+export interface NpcKit {
+  skills: { name: string; tag: SkillTag; rank: number }[];
+  ultimate: UltimateDef;
+  tactic: NpcTactic;
+  lines: {
+    meet: string;
+    clash: string;
+    win: string;
+    fall: string;
+  };
+}
+
 export interface WorldNpcIdentity {
   id: string;
   name: string;
@@ -912,17 +922,29 @@ export interface WorldNpcIdentity {
   villageId: VillageId;
   homeVillageId: VillageId;
   clanId: string | null;
+  occupation: NpcOccupation;
   rank: ShinobiRank;
   specialStatus: SpecialStatus;
   roleTitle: string;
+  epithet?: string;
   element: ChakraElement;
   specialty: string;
+  archetype: CombatArchetype;
+  bloodlineId?: string | null;
+  traits: TraitId[];
+  potential: number; // 0.80..1.20 (can decline with permanent injuries)
+  statBias: [number, number, number, number, number]; // per-stat delta around ARCHETYPE_AVG
+  weakness: string;
+  jutsuIds: string[];
+  kit: NpcKit;
+  background: string;
   powerScore: number;
   alive: boolean;
+  observed?: boolean;
+  permanentInjuries?: number;
   deathAge?: number;
   deathCause?: string;
-  linkedTeamMemberId?: string;
-  linkedRosterId?: string;
+  kills?: number;
 }
 
 export type NpcLodTier = 'L1' | 'L2';
@@ -1086,10 +1108,7 @@ export type ChuninParticipantStatus =
   | 'deceased';
 
 export interface ChuninParticipant {
-  npcId: string; // 'player' or WorldNpc id
-  name: string;
-  villageId: VillageId;
-  clanId: string | null;
+  personId: string; // 'player' or WorldNpc id
   powerScore: number;
   isTeammate: boolean;
   isRival: boolean;
@@ -1342,11 +1361,11 @@ export interface ScenarioConfig {
   preferredVillage?: VillageId;
   customName?: string;
   customBuild?: CustomBuildConfig;
-  fatedRosterId?: string;
 }
 
 export interface GameState {
   version: number;
+  saveVersion?: number;
   phase: LifePhase;
   rng: RngSnapshot;
   birthYear: number;
@@ -1409,8 +1428,6 @@ export interface GameState {
   worldSim?: WorldSimState;
   war: WarState | null;
   warHistory: WarSummary[];
-  fallenRosterIds: string[];
-  fatedRosterId: string | null;
 
   usedEvents: string[];
   usedGrowth: string[];

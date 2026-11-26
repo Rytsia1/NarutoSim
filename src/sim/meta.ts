@@ -1,6 +1,14 @@
 import { ACHIEVEMENTS } from '../data/achievements';
-import { ROSTER_MAP } from '../data/roster';
-import type { BloodlineStage, GameState, MetaState } from './types';
+import { getPerson } from './people';
+import type {
+  BloodlineStage,
+  CodexStatEntry,
+  CodexStats,
+  CombatArchetype,
+  GameState,
+  MetaState,
+  VillageId,
+} from './types';
 
 const BLOODLINE_STAGE_RANK: Record<BloodlineStage, number> = {
   latent: 0,
@@ -10,11 +18,22 @@ const BLOODLINE_STAGE_RANK: Record<BloodlineStage, number> = {
   mastered: 4,
 };
 
+export function createEmptyCodexStats(): CodexStats {
+  return {
+    byArchetype: {},
+    byClan: {},
+    byVillage: {},
+    byBloodline: {},
+    totalEncountered: 0,
+    totalDefeated: 0,
+  };
+}
+
 export function createDefaultMeta(): MetaState {
   return {
     version: 1,
     livesPlayed: 0,
-    codexRoster: {},
+    codexStats: createEmptyCodexStats(),
     codexBloodlines: {},
     codexDisciplines: {},
     codexSummons: [],
@@ -24,15 +43,116 @@ export function createDefaultMeta(): MetaState {
   };
 }
 
+function bumpBucket(
+  map: Partial<Record<string, CodexStatEntry>>,
+  key: string | null | undefined,
+  encountered: number,
+  defeated: number,
+  mode: 'max' | 'add',
+): void {
+  if (!key) return;
+  const cur = map[key] ?? { encountered: 0, defeated: 0 };
+  if (mode === 'add') {
+    map[key] = {
+      encountered: cur.encountered + encountered,
+      defeated: cur.defeated + defeated,
+    };
+  } else {
+    map[key] = {
+      encountered: Math.max(cur.encountered, encountered),
+      defeated: Math.max(cur.defeated, defeated),
+    };
+  }
+}
+
+function collectLifeEncounterStats(state: GameState): CodexStats {
+  const stats = createEmptyCodexStats();
+  const seenIds = new Set<string>();
+
+  const recordOne = (
+    personId: string,
+    archetype: CombatArchetype,
+    villageId: VillageId,
+    clanId: string | null | undefined,
+    bloodlineId: string | null | undefined,
+    defeated: boolean,
+  ) => {
+    if (seenIds.has(personId)) return;
+    seenIds.add(personId);
+    const def = defeated ? 1 : 0;
+    stats.totalEncountered += 1;
+    stats.totalDefeated += def;
+    bumpBucket(stats.byArchetype, archetype, 1, def, 'add');
+    bumpBucket(stats.byVillage, villageId, 1, def, 'add');
+    if (clanId) bumpBucket(stats.byClan, clanId, 1, def, 'add');
+    if (bloodlineId) bumpBucket(stats.byBloodline, bloodlineId, 1, def, 'add');
+  };
+
+  if (state.war) {
+    for (const enemy of state.war.enemies) {
+      const person = getPerson(state, enemy.personId);
+      recordOne(
+        enemy.personId,
+        enemy.archetype,
+        enemy.villageId,
+        person?.identity.clanId,
+        person?.identity.bloodlineId,
+        !enemy.alive,
+      );
+    }
+  }
+
+  // Also include any other observed combatant who fought/fell across the life (e.g. earlier wars or Chunin Exam)
+  if (state.worldSim) {
+    for (const npc of state.worldSim.npcs) {
+      const id = npc.identity;
+      if (!id.observed) continue;
+      if (id.occupation !== 'shinobi' && id.occupation !== 'samurai') continue;
+      const isFamilyOrSquad =
+        state.family.some((f) => f.personId === id.id) ||
+        Boolean(state.team?.members.some((m) => m.personId === id.id && id.specialStatus !== 'missing_nin'));
+      if (isFamilyOrSquad) continue;
+      if (id.specialStatus === 'missing_nin' || (!id.alive && id.deathCause?.includes('Great Shinobi War'))) {
+        recordOne(id.id, id.archetype, id.villageId, id.clanId, id.bloodlineId, !id.alive);
+      }
+    }
+  }
+
+  return stats;
+}
+
+function mergeCodexStats(target: CodexStats, life: CodexStats, mode: 'max' | 'add'): void {
+  if (mode === 'add') {
+    target.totalEncountered += life.totalEncountered;
+    target.totalDefeated += life.totalDefeated;
+  } else {
+    target.totalEncountered = Math.max(target.totalEncountered, life.totalEncountered);
+    target.totalDefeated = Math.max(target.totalDefeated, life.totalDefeated);
+  }
+  for (const [k, v] of Object.entries(life.byArchetype)) {
+    if (v) bumpBucket(target.byArchetype, k, v.encountered, v.defeated, mode);
+  }
+  for (const [k, v] of Object.entries(life.byVillage)) {
+    if (v) bumpBucket(target.byVillage, k, v.encountered, v.defeated, mode);
+  }
+  for (const [k, v] of Object.entries(life.byClan)) {
+    if (v) bumpBucket(target.byClan, k, v.encountered, v.defeated, mode);
+  }
+  for (const [k, v] of Object.entries(life.byBloodline)) {
+    if (v) bumpBucket(target.byBloodline, k, v.encountered, v.defeated, mode);
+  }
+}
+
 /**
- * Synchronizes Bingo Book Codex entries and evaluates all 36 Achievements
- * against live GameState + MetaState. Returns newly unlocked achievement IDs.
+ * Synchronizes aggregate Codex statistics and evaluates all Achievements
+ * against live GameState + MetaState. Strictly idempotent for repeated calls on the same life.
  */
 export function updateMetaFromState(
   meta: MetaState,
   state: GameState,
 ): { meta: MetaState; newlyUnlocked: string[] } {
   const next: MetaState = structuredClone(meta);
+  if (!next.codexStats) next.codexStats = createEmptyCodexStats();
 
   // 1. Update Disciplines Codex
   for (const d of state.disciplines) {
@@ -52,30 +172,9 @@ export function updateMetaFromState(
     next.codexSummons.push(state.summonContract.clanId);
   }
 
-  // 3. Update Bingo Book Roster Codex from active war & fallen roster
-  if (state.war) {
-    for (const enemy of state.war.enemies) {
-      if (!ROSTER_MAP[enemy.rosterId]) continue;
-      const cur = next.codexRoster[enemy.rosterId] ?? { state: 'seen', encounters: 0, defeats: 0 };
-      if (!enemy.alive) {
-        cur.state = 'defeated';
-        cur.defeats = Math.max(cur.defeats, 1);
-      } else if (enemy.intel >= 80 && cur.state === 'seen') {
-        cur.state = 'met';
-      }
-      cur.encounters = Math.max(cur.encounters, 1);
-      next.codexRoster[enemy.rosterId] = cur;
-    }
-  }
-
-  for (const fallenId of state.fallenRosterIds) {
-    if (!ROSTER_MAP[fallenId]) continue;
-    const cur = next.codexRoster[fallenId] ?? { state: 'defeated', encounters: 1, defeats: 1 };
-    cur.state = 'defeated';
-    cur.defeats = Math.max(cur.defeats, 1);
-    cur.encounters = Math.max(cur.encounters, 1);
-    next.codexRoster[fallenId] = cur;
-  }
+  // 3. Idempotently synchronize Encounter Statistics from the current life
+  const lifeStats = collectLifeEncounterStats(state);
+  mergeCodexStats(next.codexStats, lifeStats, 'max');
 
   // 4. Crisis & Conviction records (NOTE: crisisCleared count increments once in recordCompletedLifeInMeta!)
   const convEnd = state.war?.conviction?.endingKey;
@@ -111,18 +210,13 @@ export function recordCompletedLifeInMeta(
   state: GameState,
 ): { meta: MetaState; newlyUnlocked: string[] } {
   const bumped: MetaState = structuredClone(meta);
+  if (!bumped.codexStats) bumped.codexStats = createEmptyCodexStats();
   bumped.livesPlayed += 1;
   if (state.world.crisisStage === 3 && state.world.seededCrisis !== 'none') {
     bumped.crisisCleared[state.world.seededCrisis] += 1;
   }
-  // Increment cumulative defeats for roster shinobi slain during this completed life
-  for (const fallenId of state.fallenRosterIds) {
-    if (!ROSTER_MAP[fallenId]) continue;
-    const cur = bumped.codexRoster[fallenId] ?? { state: 'defeated', encounters: 0, defeats: 0 };
-    cur.state = 'defeated';
-    cur.defeats += 1;
-    cur.encounters = Math.max(cur.encounters + 1, cur.defeats);
-    bumped.codexRoster[fallenId] = cur;
-  }
+  // Accumulate encounter statistics across subsequent completed lives without double-counting Life 1
+  const lifeStats = collectLifeEncounterStats(state);
+  mergeCodexStats(bumped.codexStats, lifeStats, bumped.livesPlayed === 1 ? 'max' : 'add');
   return updateMetaFromState(bumped, state);
 }

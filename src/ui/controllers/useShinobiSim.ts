@@ -18,7 +18,7 @@ import {
   clearSavedLife,
   loadMetaState,
   loadPastLives,
-  loadSavedLife,
+  loadSavedLifeWithStatus,
   saveCurrentLife,
   saveMetaState,
 } from '../storage';
@@ -37,7 +37,12 @@ export function useShinobiSim() {
   }
 
   const [view, setView] = useState<ViewMode>('lobby');
-  const [savedLife, setSavedLife] = useState<GameState | null>(() => loadSavedLife());
+  const initialLoadRef = useRef<ReturnType<typeof loadSavedLifeWithStatus> | null>(null);
+  if (!initialLoadRef.current) {
+    initialLoadRef.current = loadSavedLifeWithStatus();
+  }
+  const [savedLife, setSavedLife] = useState<GameState | null>(() => initialLoadRef.current!.state);
+  const [legacyNotice, setLegacyNotice] = useState<string | null>(() => initialLoadRef.current!.notice);
   const [history, setHistory] = useState<LifeRecord[]>(() => loadPastLives());
   const [meta, setMeta] = useState<MetaState>(() => loadMetaState());
   const [settings, setSettings] = useState<UserSettings>(() => loadSettings());
@@ -252,7 +257,9 @@ export function useShinobiSim() {
   ]);
 
   const refreshStorage = useCallback(() => {
-    setSavedLife(loadSavedLife());
+    const res = loadSavedLifeWithStatus();
+    setSavedLife(res.state);
+    if (res.notice) setLegacyNotice(res.notice);
     setHistory(loadPastLives());
     const loadedMeta = loadMetaState();
     metaRef.current = loadedMeta;
@@ -354,6 +361,8 @@ export function useShinobiSim() {
   return {
     view,
     savedLife,
+    legacyNotice,
+    dismissLegacyNotice: () => setLegacyNotice(null),
     history,
     meta,
     settings,

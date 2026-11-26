@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { ShinobiSim } from '../src/sim/engine';
 import { createNewLife, resolvePendingDecision } from '../src/sim/life';
+import { getPerson } from '../src/sim/people';
 import { promoteRank } from '../src/sim/ranks';
 import { SeededRng } from '../src/sim/rng';
 import {
@@ -71,7 +72,7 @@ describe('14-Day Autonomous Shinobi Warfront', () => {
     expect(simA.getState().rng).toEqual(simB.getState().rng);
   });
 
-  it('persists fallen roster enemies into fallenRosterIds after war completion', () => {
+  it('persists fallen roster enemies into canonical dead people after war completion', () => {
     const state = createNewLife(8888, { crisisOverride: 'none' });
     state.age = 22;
     promoteRank(state, 'jonin');
@@ -91,7 +92,7 @@ describe('14-Day Autonomous Shinobi Warfront', () => {
         e.hp = 1;
       }
     });
-    const slainIds = state.war.enemies.slice(1).map((e) => e.rosterId);
+    const slainIds = state.war.enemies.slice(1).map((e) => e.personId);
     state.pending = buildWarDayDecision(state);
     resolvePendingDecision(state, 'day_recover');
     flushWarUntilDecision(state, new SeededRng(43));
@@ -113,8 +114,9 @@ describe('14-Day Autonomous Shinobi Warfront', () => {
     expect(state.phase).toBe('life');
     expect(state.war).toBeNull();
     expect(state.warHistory.length).toBe(1);
-    for (const id of slainIds) {
-      expect(state.fallenRosterIds).toContain(id);
+    for (const personId of slainIds) {
+      const person = getPerson(state, personId);
+      expect(person?.identity.alive).toBe(false);
     }
   });
 });

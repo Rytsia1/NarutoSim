@@ -1,4 +1,4 @@
-import { ARCHETYPE_AVG } from '../data/roster';
+import { ARCHETYPE_AVG } from '../data/characters';
 import { unitBasePower } from './combat';
 import { clamp, computeCombatProjection } from './powers';
 import type { SeededRng } from './rng';

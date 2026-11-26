@@ -1,4 +1,5 @@
 import { VILLAGE_MAP } from '../../data/villages';
+import { generateUniquePersonName } from '../people';
 import { clamp } from '../powers';
 import { applyRel6Delta, getRelVector } from '../relationships';
 import type { SeededRng } from '../rng';
@@ -312,7 +313,8 @@ export function buildNpcGoapPlan(
     });
   }
 
-  // 3. Career domain (Chunin / Jonin / Mastery)
+  // 3. Career domain (Civilians focus on livelihood/socializing; combatants on missions/training/rank)
+  const isCombatant = id.occupation === 'shinobi' || id.occupation === 'samurai';
   const careerUrgency = clamp(
     Math.round(
       42 +
@@ -330,11 +332,16 @@ export function buildNpcGoapPlan(
       domain: 'career',
       goalLabel: npc.currentGoal.label,
       urgency: careerUrgency,
-      steps: [
-        { action: 'take_mission', label: 'Complete high-visibility village mission', completed: false },
-        { action: 'train', label: 'Sharpen signature jutsu', completed: false },
-        { action: 'fight', label: 'Prove combat merit in sparring or field action', completed: false },
-      ],
+      steps: isCombatant
+        ? [
+            { action: 'take_mission', label: 'Complete high-visibility village mission', completed: false },
+            { action: 'train', label: 'Sharpen signature jutsu', completed: false },
+            { action: 'fight', label: 'Prove combat merit in sparring or field action', completed: false },
+          ]
+        : [
+            { action: 'socialize', label: 'Serve village neighbors and build trade ties', completed: false },
+            { action: 'rest', label: 'Tend to household and workshop upkeep', completed: false },
+          ],
       currentStepIndex: 0,
     },
   });
@@ -634,8 +641,9 @@ export function maybeSparkNpcFamilyCrisis(
   const baseChance = 0.03 + (sickness >= 28 ? 0.045 : 0) + (state.worldSim?.economyTrend === 'crisis' ? 0.03 : 0);
   if (!rng.chance(baseChance)) return;
 
-  const vDef = VILLAGE_MAP[npc.identity.villageId];
-  const relName = rng.chance(0.5) ? rng.pick(vDef.femaleNames) : rng.pick(vDef.maleNames);
+  const relSex: 'M' | 'F' = rng.chance(0.5) ? 'F' : 'M';
+  const relFull = generateUniquePersonName(npc.identity.villageId, npc.identity.clanId, relSex, new Set([npc.identity.name]), rng);
+  const relName = relFull.split(' ')[0] ?? relFull;
   const kind: NpcFamilyCrisis['kind'] =
     sickness >= 22 || rng.chance(0.6)
       ? 'sick_sibling'

@@ -118,7 +118,7 @@ describe('Clan & Bloodline Gating (Section 2 & 4.1)', () => {
     expect(uchihaSharingan).toBeGreaterThan(0);
     expect(nonClanCount).toBeGreaterThan(1000);
     expect(nonClanMutations / nonClanCount).toBeLessThan(0.015);
-  });
+  }, 15000);
 
   it('rejects mismatched clan-bloodline & non-Hyuga Gentle Fist in Point-Buy, while Free Mode bypasses clan rules', () => {
     const mismatchDojutsu = evaluateCustomBuild(

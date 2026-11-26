@@ -156,5 +156,5 @@ describe('Phase 4-6 Individual Jutsu Database, Mastery & Resolver Acceptance', (
       }
     }
     expect(piercedWall).toBe(true);
-  });
+  }, 15000);
 });

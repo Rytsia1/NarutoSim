@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createNewLife, resolvePendingDecision } from '../src/sim/life';
+import { getPerson, personName } from '../src/sim/people';
 import {
   buildChuninExamStage,
   buildGraduationExamDecision,
@@ -65,10 +66,10 @@ describe('Shinobi Rank progression & 4-man Genin Squad Kizuna', () => {
     state.stats.intel = 5;
     state.stats.will = 5;
     state.stats.chakra = 5;
-    state.team.members[1].powerScore = 95;
-    state.team.members[2].powerScore = 95;
+    getPerson(state, state.team.members[1].personId)!.identity.powerScore = 95;
+    getPerson(state, state.team.members[2].personId)!.identity.powerScore = 95;
 
-    const decision = disbandGeninTeam(state, 'teammate_chunin', [state.team.members[1].name]);
+    const decision = disbandGeninTeam(state, 'teammate_chunin', [personName(state, state.team.members[1].personId)]);
     state.pending = decision;
 
     expect(state.rank).toBe('genin');

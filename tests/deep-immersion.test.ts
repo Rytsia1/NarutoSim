@@ -95,15 +95,12 @@ describe('6 Deep Immersion Pillars', () => {
     expect(state.academy.henge).toBeGreaterThan(20);
     expect(state.academy.kawarimi).toBeGreaterThan(20);
 
-    // Graduate -> Genin Squad draws from actual Academy classmates!
+    // Graduate -> Genin Squad draws from actual Academy classmates (exact same personId!)
     state.age = 12;
     promoteRank(state, 'genin');
     const team = formGeninTeam(state, rng);
     state.team = team;
-    const acadNames = state.academy.classmateNpcIds.map(
-      (id) => state.worldSim!.npcs.find((n) => n.identity.id === id)!.identity.name,
-    );
-    expect(acadNames).toContain(team.members[1].name);
+    expect(state.academy.classmateNpcIds).toContain(team.members[1].personId);
 
     // Multi-participant Chunin Tournament (14 participants) runs independently even when player fails!
     state.age = 14;

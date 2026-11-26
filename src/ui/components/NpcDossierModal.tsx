@@ -1,7 +1,9 @@
 import { useEffect } from 'react';
+import { OCCUPATION_MAP } from '../../data/characters';
 import { CLAN_MAP } from '../../data/clans';
 import { t } from '../../data/i18n';
-import { DISCIPLINE_MAP, ELEMENT_NAMES } from '../../data/powers';
+import { JUTSU_MAP } from '../../data/jutsu';
+import { BLOODLINE_MAP, DISCIPLINE_MAP, ELEMENT_NAMES } from '../../data/powers';
 import { VILLAGE_MAP } from '../../data/villages';
 import {
   getMotivationLabel,
@@ -92,9 +94,10 @@ export function NpcDossierModal({ npc, onClose, onSelectNpcId }: NpcDossierModal
           <div>
             <h2 id="npc-dossier-title" className="panel-title" style={{ margin: 0 }}>
               {identity.name}
+              {identity.epithet ? ` (${identity.epithet})` : ''}
             </h2>
             <div className="disc-sub tabular">
-              {identity.roleTitle} | {village.name}
+              {OCCUPATION_MAP[identity.occupation]?.label ?? 'Shinobi'} | {identity.roleTitle} | {village.name}
               {identity.homeVillageId !== identity.villageId ? ` (Origin: ${homeVillage.name})` : ''}
               {clan ? ` | ${clan.name}` : ''}
             </div>
@@ -115,12 +118,17 @@ export function NpcDossierModal({ npc, onClose, onSelectNpcId }: NpcDossierModal
                   ? village.kageTitle
                   : identity.specialStatus === 'anbu'
                     ? 'ANBU / Shadow'
-                    : t(`rank.${identity.rank}`)}
+                    : identity.occupation !== 'shinobi' && identity.occupation !== 'samurai'
+                      ? OCCUPATION_MAP[identity.occupation]?.label ?? identity.roleTitle
+                      : t(`rank.${identity.rank}`)}
           </span>
           <span className="chip">Age {identity.age}</span>
           <span className="chip">Power {identity.powerScore}</span>
           <span className="chip">{ELEMENT_NAMES[identity.element]}</span>
           <span className="chip">{DISCIPLINE_MAP[identity.specialty]?.name ?? identity.specialty}</span>
+          {identity.bloodlineId && BLOODLINE_MAP[identity.bloodlineId] && (
+            <span className="chip pos">{BLOODLINE_MAP[identity.bloodlineId].name}</span>
+          )}
           {cognition && (
             <span className={`chip ${cognition.lodTier === 'L1' ? 'pos' : ''}`}>
               {cognition.lodTier === 'L1' ? 'L1 Detailed AI' : 'L2 Periodic AI'}
@@ -132,6 +140,23 @@ export function NpcDossierModal({ npc, onClose, onSelectNpcId }: NpcDossierModal
             </span>
           ))}
         </div>
+
+        {identity.background && (
+          <div className="disc-item" style={{ marginBottom: 10 }}>
+            <div className="disc-sub">{identity.background}</div>
+            {identity.jutsuIds && identity.jutsuIds.length > 0 && (
+              <div className="disc-sub" style={{ marginTop: 4 }}>
+                <strong>Known Jutsu:</strong>{' '}
+                {identity.jutsuIds.map((jid) => JUTSU_MAP[jid]?.name ?? jid).join(', ')}
+              </div>
+            )}
+            {identity.permanentInjuries && identity.permanentInjuries > 0 ? (
+              <div className="disc-sub" style={{ marginTop: 4, color: 'var(--accent-crimson)' }}>
+                Lasting War Injuries: {identity.permanentInjuries}
+              </div>
+            ) : null}
+          </div>
+        )}
 
         {!identity.alive && identity.deathCause && (
           <div className="disc-item" style={{ marginBottom: 10, borderColor: 'var(--accent-crimson)' }}>

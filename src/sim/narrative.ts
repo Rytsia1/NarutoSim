@@ -1,4 +1,14 @@
+import { personName } from './people';
 import type { GameState, NarrativeArc, WarFact, WarFactType, WarState } from './types';
+
+function resolveFactName(state: GameState, personId?: string, fallback?: string): string {
+  if (personId) {
+    if (personId === 'player') return state.name;
+    const resolved = personName(state, personId);
+    if (resolved !== 'Unknown Shinobi') return resolved;
+  }
+  return fallback ?? 'Unknown Shinobi';
+}
 
 export function recordWarFact(
   war: WarState,
@@ -17,7 +27,7 @@ function factsOf(war: WarState, type: WarFactType): WarFact[] {
 
 /**
  * Groups recorded war facts into cohesive Emergent Story Arcs (GDD Ch. 08.5).
- * Fixes Bug B7: properly leverages recorded `kill` and `squad_protect` facts.
+ * Resolves actor/target display names dynamically from canonical `personId`.
  */
 export function detectWarArcs(state: GameState, war: WarState): NarrativeArc[] {
   const arcs: NarrativeArc[] = [];
@@ -25,11 +35,12 @@ export function detectWarArcs(state: GameState, war: WarState): NarrativeArc[] {
   const betrayals = factsOf(war, 'ally_betray');
   if (betrayals.length > 0) {
     const first = betrayals[0];
+    const actor = resolveFactName(state, first.actorId, first.actorName);
     arcs.push({
       id: 'arc_betrayal',
       title: 'Broken Oaths in the Dark',
       tone: 'danger',
-      summary: `An uneasy pact shattered on Day ${first.day} when ${first.actorName} turned on an ally. Trust became the rarest currency of War #${war.warNumber}.`,
+      summary: `An uneasy pact shattered on Day ${first.day} when ${actor} turned on an ally. Trust became the rarest currency of War #${war.warNumber}.`,
     });
   }
 
@@ -41,11 +52,12 @@ export function detectWarArcs(state: GameState, war: WarState): NarrativeArc[] {
 
   if (partnerDefects.length > 0) {
     const first = partnerDefects[0];
+    const actor = resolveFactName(state, first.actorId, first.actorName);
     arcs.push({
       id: 'arc_partner_defect',
       title: 'Turncoat on the Flank',
       tone: 'danger',
-      summary: `When your final Resolve ran dry on Day ${first.day}, ${first.actorName} broke ranks and defected to the enemy front.`,
+      summary: `When your final Resolve ran dry on Day ${first.day}, ${actor} broke ranks and defected to the enemy front.`,
     });
   }
 
@@ -62,12 +74,14 @@ export function detectWarArcs(state: GameState, war: WarState): NarrativeArc[] {
   if (exClashes.length > 0 || protects.length > 0 || partnerIntercepts.length > 0) {
     const teamLabel = state.team ? `Team ${state.team.number}` : 'your old squad';
     const shieldFact = protects[0] ?? partnerIntercepts[0];
+    const shieldActor = shieldFact ? resolveFactName(state, shieldFact.actorId, shieldFact.actorName) : 'a comrade';
+    const exTarget = exClashes[0] ? resolveFactName(state, exClashes[0].targetId, exClashes[0].targetName) : 'a former squadmate';
     const summary =
       exClashes.length > 0 && shieldFact
-        ? `Even as ${exClashes[0].targetName ?? 'a former squadmate'} crossed blades with you as a Missing-Nin, your bonds held firm when ${shieldFact.actorName} stepped into lethal fire to shield you.`
+        ? `Even as ${exTarget} crossed blades with you as a Missing-Nin, your bonds held firm when ${shieldActor} stepped into lethal fire to shield you.`
         : exClashes.length > 0
-          ? `Fate forced you to face former squadmate ${exClashes[0].targetName ?? 'a Missing-Nin'} across the battlefield on Day ${exClashes[0].day}.`
-          : `On Day ${shieldFact.day}, ${shieldFact.actorName} flash-stepped into lethal fire to shield you, proving bonds outlast any warfront.`;
+          ? `Fate forced you to face former squadmate ${exTarget} across the battlefield on Day ${exClashes[0].day}.`
+          : `On Day ${shieldFact.day}, ${shieldActor} flash-stepped into lethal fire to shield you, proving bonds outlast any warfront.`;
     arcs.push({
       id: 'arc_kizuna',
       title: partnerIntercepts.length > 0 && protects.length === 0 ? 'Vigil of the War Partner' : `Shadow of Old ${teamLabel}`,
@@ -110,11 +124,12 @@ export function detectWarArcs(state: GameState, war: WarState): NarrativeArc[] {
 
   const allyHelps = factsOf(war, 'ally_help');
   if (allyHelps.length > 0 && betrayals.length === 0) {
+    const helper = resolveFactName(state, allyHelps[0].actorId, allyHelps[0].actorName);
     arcs.push({
       id: 'arc_pact',
       title: 'An Unbroken Wartime Pact',
       tone: 'bond',
-      summary: `${allyHelps[0].actorName} honored their battlefield oath when night raiders closed in, proving alliances can survive even a shinobi war.`,
+      summary: `${helper} honored their battlefield oath when night raiders closed in, proving alliances can survive even a shinobi war.`,
     });
   }
 

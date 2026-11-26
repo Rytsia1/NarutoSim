@@ -16,6 +16,8 @@ export function App() {
   const {
     view,
     savedLife,
+    legacyNotice,
+    dismissLegacyNotice,
     history,
     meta,
     settings,
@@ -79,6 +81,8 @@ export function App() {
       {view === 'lobby' ? (
         <LobbyScreen
           savedLife={savedLife}
+          legacyNotice={legacyNotice}
+          onDismissLegacyNotice={dismissLegacyNotice}
           history={history}
           meta={meta}
           animateBackdrop={settings.lobbyAnimationEnabled}

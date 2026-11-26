@@ -215,13 +215,14 @@ describe('Full Codebase Audit Regressions', () => {
     const sanitized = sanitizeMetaState({
       livesPlayed: -5,
       achievements: ['ach_academy', 123, null],
-      codexRoster: 'not-an-object',
+      codexStats: 'not-an-object',
       crisisCleared: { calamity: 2, mastermind: 'bad' },
     });
     expect(sanitized.livesPlayed).toBe(0);
     expect(sanitized.achievements).toEqual(['ach_academy']);
     expect(sanitized.crisisCleared).toEqual({ calamity: 2, mastermind: 0 });
-    expect(sanitized.codexRoster).toEqual({});
+    expect(sanitized.codexStats.totalEncountered).toBe(0);
+    expect(sanitized.codexStats.byArchetype).toEqual({});
 
     // wrapLines off-by-one regression: 2nd line must NOT truncate 1 word early!
     const measure = (s: string) => s.length * 10;

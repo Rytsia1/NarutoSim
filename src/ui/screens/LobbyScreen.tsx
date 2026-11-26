@@ -2,7 +2,6 @@ import { useRef, useState } from 'react';
 import { ACHIEVEMENTS } from '../../data/achievements';
 import { getClansForVillage } from '../../data/clans';
 import { t } from '../../data/i18n';
-import { ROSTER, ROSTER_MAP } from '../../data/roster';
 import { getKageTitle, VILLAGES, VILLAGE_MAP } from '../../data/villages';
 import type {
   CrisisId,
@@ -21,6 +20,8 @@ import { buildExportJson, importSaveJson } from '../storage';
 
 interface LobbyScreenProps {
   savedLife: GameState | null;
+  legacyNotice?: string | null;
+  onDismissLegacyNotice?: () => void;
   history: LifeRecord[];
   meta: MetaState;
   animateBackdrop: boolean;
@@ -32,6 +33,8 @@ interface LobbyScreenProps {
 
 export function LobbyScreen({
   savedLife,
+  legacyNotice,
+  onDismissLegacyNotice,
   history,
   meta,
   animateBackdrop,
@@ -45,10 +48,13 @@ export function LobbyScreen({
   const [sex, setSex] = useState<'' | 'M' | 'F'>('');
   const [crisisOverride, setCrisisOverride] = useState<'natural' | CrisisId>('natural');
   const [customName, setCustomName] = useState('');
-  const [fatedRosterId, setFatedRosterId] = useState<string | null>(null);
   const [confirmOverwrite, setConfirmOverwrite] = useState(false);
   const [importFeedback, setImportFeedback] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const archetypesSeen = Object.values(meta.codexStats?.byArchetype ?? {}).filter(
+    (entry) => (entry?.encountered ?? 0) > 0,
+  ).length;
 
   const handleStart = () => {
     if (savedLife && !confirmOverwrite) {
@@ -61,7 +67,6 @@ export function LobbyScreen({
       preferredSex: sex || undefined,
       crisisOverride,
       customName: customName.trim() || undefined,
-      fatedRosterId: fatedRosterId || undefined,
     });
   };
 
@@ -69,7 +74,6 @@ export function LobbyScreen({
     onStartNew({
       crisisOverride: crisis,
       customBuild: build,
-      fatedRosterId: fatedRosterId || undefined,
     });
   };
 
@@ -96,7 +100,7 @@ export function LobbyScreen({
     <div className="lobby-stage">
       <LobbyBackdropCanvas
         livesPlayed={meta.livesPlayed}
-        codexCount={Object.keys(meta.codexRoster).length}
+        codexCount={archetypesSeen}
         animate={animateBackdrop}
       />
       <main className="lobby-wrap">
@@ -114,21 +118,11 @@ export function LobbyScreen({
         <div className="chip-row tabular" style={{ marginTop: 6 }}>
           <span className="chip">Lives Lived: {meta.livesPlayed}</span>
           <span className="chip">
-            Bingo Book: {Object.keys(meta.codexRoster).length}/{ROSTER.length}
+            Archetypes Faced: {archetypesSeen}/8 ({meta.codexStats?.totalEncountered ?? 0} rivals)
           </span>
           <span className="chip">
             Achievements: {meta.achievements.length}/{ACHIEVEMENTS.length}
           </span>
-          {fatedRosterId && ROSTER_MAP[fatedRosterId] && (
-            <button
-              type="button"
-              className="chip pos chip-btn"
-              onClick={() => setFatedRosterId(null)}
-              title="Click to clear Fated Thread"
-            >
-              Fated Thread: {ROSTER_MAP[fatedRosterId].name} ×
-            </button>
-          )}
         </div>
       </header>
 
@@ -158,7 +152,7 @@ export function LobbyScreen({
           className="tab-btn"
           onClick={() => setLobbyTab('codex')}
         >
-          Bingo Book Codex
+          Shinobi Codex
         </button>
         <button
           type="button"
@@ -173,20 +167,10 @@ export function LobbyScreen({
 
       {/* Keep CustomBuilderPanel mounted so switching to Codex never wipes user edits */}
       <div hidden={lobbyTab !== 'custom'}>
-        <CustomBuilderPanel
-          fatedRosterName={fatedRosterId ? ROSTER_MAP[fatedRosterId]?.name ?? null : null}
-          onClearFated={() => setFatedRosterId(null)}
-          onStartCustom={handleStartCustom}
-        />
+        <CustomBuilderPanel onStartCustom={handleStartCustom} />
       </div>
 
-      {lobbyTab === 'codex' && (
-        <CodexPanel
-          meta={meta}
-          selectedFatedId={fatedRosterId}
-          onSelectFated={setFatedRosterId}
-        />
-      )}
+      {lobbyTab === 'codex' && <CodexPanel meta={meta} />}
 
       {lobbyTab === 'achievements' && <AchievementsPanel meta={meta} />}
 
@@ -196,6 +180,20 @@ export function LobbyScreen({
             <h2 id="start-heading" className="panel-title">
               Enter the Shinobi World
             </h2>
+
+            {legacyNotice && (
+              <div className="continue-card" role="status" style={{ marginBottom: 12 }}>
+                <div className="disc-head">
+                  <strong>Save Version Updated (v3)</strong>
+                  {onDismissLegacyNotice && (
+                    <button type="button" className="btn btn-sm btn-ghost" onClick={onDismissLegacyNotice}>
+                      Dismiss
+                    </button>
+                  )}
+                </div>
+                <div className="continue-meta">{legacyNotice}</div>
+              </div>
+            )}
 
             {savedLife && (
               <div className="continue-card">

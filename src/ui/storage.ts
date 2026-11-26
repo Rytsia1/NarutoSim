@@ -1,11 +1,20 @@
 import { VILLAGE_MAP } from '../data/villages';
-import { createDefaultMeta } from '../sim/meta';
-import type { GameState, LifeRecord, MetaState } from '../sim/types';
+import { createDefaultMeta, createEmptyCodexStats } from '../sim/meta';
+import type { CodexStatEntry, CodexStats, GameState, LifeRecord, MetaState } from '../sim/types';
 
 const SAVE_KEY = 'narutosim.save.v1';
 const HISTORY_KEY = 'narutosim.history.v1';
 const META_KEY = 'narutosim.meta.v1';
 const MAX_HISTORY = 40;
+
+export const CURRENT_SAVE_VERSION = 3;
+
+export const LEGACY_SAVE_RESET_NOTICE =
+  'New version (v3): please start a new shinobi life. Your past life history and Hall of Shinobi remain intact.';
+
+export function isLegacySaveVersion(state: Partial<GameState>): boolean {
+  return (state.saveVersion ?? 1) < CURRENT_SAVE_VERSION;
+}
 
 export function isValidGameState(raw: unknown): raw is GameState {
   if (!raw || typeof raw !== 'object') return false;
@@ -21,6 +30,39 @@ export function isValidGameState(raw: unknown): raw is GameState {
   );
 }
 
+function sanitizeStatRecord(raw: unknown): Record<string, CodexStatEntry> {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  const out: Record<string, CodexStatEntry> = {};
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (!v || typeof v !== 'object') continue;
+    const e = v as Partial<CodexStatEntry>;
+    const encountered = typeof e.encountered === 'number' && Number.isFinite(e.encountered) && e.encountered >= 0 ? Math.floor(e.encountered) : 0;
+    const defeated = typeof e.defeated === 'number' && Number.isFinite(e.defeated) && e.defeated >= 0 ? Math.floor(e.defeated) : 0;
+    out[k] = { encountered, defeated };
+  }
+  return out;
+}
+
+function sanitizeCodexStats(raw: unknown): CodexStats {
+  const empty = createEmptyCodexStats();
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return empty;
+  const cs = raw as Partial<CodexStats>;
+  return {
+    byArchetype: sanitizeStatRecord(cs.byArchetype) as CodexStats['byArchetype'],
+    byClan: sanitizeStatRecord(cs.byClan),
+    byVillage: sanitizeStatRecord(cs.byVillage) as CodexStats['byVillage'],
+    byBloodline: sanitizeStatRecord(cs.byBloodline),
+    totalEncountered:
+      typeof cs.totalEncountered === 'number' && Number.isFinite(cs.totalEncountered) && cs.totalEncountered >= 0
+        ? Math.floor(cs.totalEncountered)
+        : 0,
+    totalDefeated:
+      typeof cs.totalDefeated === 'number' && Number.isFinite(cs.totalDefeated) && cs.totalDefeated >= 0
+        ? Math.floor(cs.totalDefeated)
+        : 0,
+  };
+}
+
 export function sanitizeMetaState(raw: unknown): MetaState {
   const base = createDefaultMeta();
   if (!raw || typeof raw !== 'object') return base;
@@ -28,7 +70,7 @@ export function sanitizeMetaState(raw: unknown): MetaState {
   return {
     version: typeof p.version === 'number' ? p.version : base.version,
     livesPlayed: typeof p.livesPlayed === 'number' && p.livesPlayed >= 0 ? p.livesPlayed : base.livesPlayed,
-    codexRoster: p.codexRoster && typeof p.codexRoster === 'object' ? { ...p.codexRoster } : {},
+    codexStats: sanitizeCodexStats(p.codexStats),
     codexBloodlines: p.codexBloodlines && typeof p.codexBloodlines === 'object' ? { ...p.codexBloodlines } : {},
     codexDisciplines: p.codexDisciplines && typeof p.codexDisciplines === 'object' ? { ...p.codexDisciplines } : {},
     codexSummons: Array.isArray(p.codexSummons)
@@ -59,15 +101,36 @@ export function saveCurrentLife(state: GameState): void {
   }
 }
 
-export function loadSavedLife(): GameState | null {
+export interface LoadedLifeResult {
+  state: GameState | null;
+  legacyCleared: boolean;
+  notice: string | null;
+}
+
+export function loadSavedLifeWithStatus(): LoadedLifeResult {
   try {
     const raw = localStorage.getItem(SAVE_KEY);
-    if (!raw) return null;
+    if (!raw) return { state: null, legacyCleared: false, notice: null };
     const parsed: unknown = JSON.parse(raw);
-    return isValidGameState(parsed) ? parsed : null;
+    if (!isValidGameState(parsed)) {
+      return { state: null, legacyCleared: false, notice: null };
+    }
+    if (isLegacySaveVersion(parsed)) {
+      localStorage.removeItem(SAVE_KEY);
+      return {
+        state: null,
+        legacyCleared: true,
+        notice: LEGACY_SAVE_RESET_NOTICE,
+      };
+    }
+    return { state: parsed, legacyCleared: false, notice: null };
   } catch {
-    return null;
+    return { state: null, legacyCleared: false, notice: null };
   }
+}
+
+export function loadSavedLife(): GameState | null {
+  return loadSavedLifeWithStatus().state;
 }
 
 export function clearSavedLife(): void {
@@ -147,13 +210,19 @@ export function importSaveJson(raw: string): { ok: boolean; message: string } {
     if (!parsed || parsed.format !== 'narutosim.export.v1') {
       return { ok: false, message: 'Unsupported save file format.' };
     }
+    let legacySkipped = false;
     if (parsed.currentSave === null) {
       clearSavedLife();
     } else if (parsed.currentSave !== undefined) {
       if (!isValidGameState(parsed.currentSave)) {
         return { ok: false, message: 'Current save payload is malformed or corrupted.' };
       }
-      saveCurrentLife(parsed.currentSave);
+      if (isLegacySaveVersion(parsed.currentSave)) {
+        clearSavedLife();
+        legacySkipped = true;
+      } else {
+        saveCurrentLife(parsed.currentSave);
+      }
     }
     if (Array.isArray(parsed.history)) {
       const validHistory = parsed.history
@@ -167,7 +236,12 @@ export function importSaveJson(raw: string): { ok: boolean; message: string } {
     if (parsed.meta !== undefined) {
       saveMetaState(sanitizeMetaState(parsed.meta));
     }
-    return { ok: true, message: 'Save archive imported cleanly.' };
+    return {
+      ok: true,
+      message: legacySkipped
+        ? 'History & Bingo Book Codex imported. Legacy v1 in-progress life skipped; start a new shinobi life.'
+        : 'Save archive imported cleanly.',
+    };
   } catch {
     return { ok: false, message: 'Could not read JSON file.' };
   }
