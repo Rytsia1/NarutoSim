@@ -653,13 +653,34 @@ function applyCompanionOdAction(
   battle: ActiveBattleState,
   odAction: OdActionId | undefined,
   rng: SeededRng,
-): { prefix: string; bonusEnemyDmg: number; appliedWard: boolean; appliedBuff: boolean; appliedDebuff: boolean } {
+): {
+  prefix: string;
+  bonusEnemyDmg: number;
+  appliedWard: boolean;
+  expireWardThisRound: boolean;
+  appliedBuff: boolean;
+  appliedDebuff: boolean;
+} {
   if (!odAction) {
-    return { prefix: '', bonusEnemyDmg: 0, appliedWard: false, appliedBuff: false, appliedDebuff: false };
+    return {
+      prefix: '',
+      bonusEnemyDmg: 0,
+      appliedWard: false,
+      expireWardThisRound: false,
+      appliedBuff: false,
+      appliedDebuff: false,
+    };
   }
   const available = getAvailableOdActions(state).find((a) => a.id === odAction && !a.disabled);
   if (!available) {
-    return { prefix: '', bonusEnemyDmg: 0, appliedWard: false, appliedBuff: false, appliedDebuff: false };
+    return {
+      prefix: '',
+      bonusEnemyDmg: 0,
+      appliedWard: false,
+      expireWardThisRound: false,
+      appliedBuff: false,
+      appliedDebuff: false,
+    };
   }
 
   battle.od = Math.max(0, battle.od - available.cost);
@@ -674,6 +695,7 @@ function applyCompanionOdAction(
       prefix: '[Od: Mystical Palm +10 HP] ',
       bonusEnemyDmg: 0,
       appliedWard: false,
+      expireWardThisRound: false,
       appliedBuff: false,
       appliedDebuff: false,
     };
@@ -685,6 +707,7 @@ function applyCompanionOdAction(
       prefix: '[Od: Sealing Ward raised] ',
       bonusEnemyDmg: 0,
       appliedWard: false,
+      expireWardThisRound: true,
       appliedBuff: false,
       appliedDebuff: false,
     };
@@ -696,6 +719,7 @@ function applyCompanionOdAction(
       prefix: '[Od: Shadow Clone decoy] ',
       bonusEnemyDmg: 0,
       appliedWard: false,
+      expireWardThisRound: false,
       appliedBuff: false,
       appliedDebuff: false,
     };
@@ -747,6 +771,7 @@ function applyCompanionOdAction(
     prefix: `[Kuchiyose: ${summonName} deals ${dmg} dmg${extraNote}] `,
     bonusEnemyDmg: dmg,
     appliedWard,
+    expireWardThisRound: false,
     appliedBuff,
     appliedDebuff,
   };
@@ -990,7 +1015,7 @@ export function resolveBattleRound(
     return resolveNonCombatLethalCheck(state, war, battle, summary, preCounters, rng);
   }
 
-  // Execute Optional Companion Od Action alongside main attacks (K3 — does not replace attack!)
+  // Execute Optional Companion Od Action alongside main attacks (K3: does not replace attack)
   const isMainAttack =
     optionId === 'taijutsu' ||
     optionId === 'kenjutsu' ||
@@ -999,8 +1024,16 @@ export function resolveBattleRound(
     optionId === 'ultimate';
   const odRes = isMainAttack
     ? applyCompanionOdAction(state, war, enemy, battle, odAction, rng)
-    : { prefix: '', bonusEnemyDmg: 0, appliedWard: false, appliedBuff: false, appliedDebuff: false };
+    : {
+        prefix: '',
+        bonusEnemyDmg: 0,
+        appliedWard: false,
+        expireWardThisRound: false,
+        appliedBuff: false,
+        appliedDebuff: false,
+      };
   if (odRes.appliedWard) preCounters.ward = false;
+  if (odRes.expireWardThisRound) preCounters.ward = true;
   if (odRes.appliedBuff) preCounters.buff = false;
   if (odRes.appliedDebuff) preCounters.debuff = false;
 

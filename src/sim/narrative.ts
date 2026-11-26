@@ -35,17 +35,42 @@ export function detectWarArcs(state: GameState, war: WarState): NarrativeArc[] {
 
   const exClashes = factsOf(war, 'ex_mate_clash');
   const protects = factsOf(war, 'squad_protect');
-  if (exClashes.length > 0 || protects.length > 0) {
+  const partnerIntercepts = factsOf(war, 'partner_intercept');
+  const partnerDefects = factsOf(war, 'partner_defect');
+  const partnerDowns = factsOf(war, 'partner_down');
+
+  if (partnerDefects.length > 0) {
+    const first = partnerDefects[0];
+    arcs.push({
+      id: 'arc_partner_defect',
+      title: 'Turncoat on the Flank',
+      tone: 'danger',
+      summary: `When your final Resolve ran dry on Day ${first.day}, ${first.actorName} broke ranks and defected to the enemy front.`,
+    });
+  }
+
+  if (partnerDowns.length > 0) {
+    const first = partnerDowns[0];
+    arcs.push({
+      id: 'arc_partner_sacrifice',
+      title: 'Shielded Until the End',
+      tone: 'bond',
+      summary: `On Day ${first.day}, ${first.detail}, leaving an indelible mark on the rest of War #${war.warNumber}.`,
+    });
+  }
+
+  if (exClashes.length > 0 || protects.length > 0 || partnerIntercepts.length > 0) {
     const teamLabel = state.team ? `Team ${state.team.number}` : 'your old squad';
+    const shieldFact = protects[0] ?? partnerIntercepts[0];
     const summary =
-      exClashes.length > 0 && protects.length > 0
-        ? `Even as ${exClashes[0].targetName ?? 'a former squadmate'} crossed blades with you as a Missing-Nin, the bonds of ${teamLabel} held firm when ${protects[0].actorName} stepped into lethal fire to shield you.`
+      exClashes.length > 0 && shieldFact
+        ? `Even as ${exClashes[0].targetName ?? 'a former squadmate'} crossed blades with you as a Missing-Nin, your bonds held firm when ${shieldFact.actorName} stepped into lethal fire to shield you.`
         : exClashes.length > 0
           ? `Fate forced you to face former squadmate ${exClashes[0].targetName ?? 'a Missing-Nin'} across the battlefield on Day ${exClashes[0].day}.`
-          : `On Day ${protects[0].day}, ${protects[0].actorName} of ${teamLabel} flash-stepped into lethal fire to save your life, proving Kizuna outlives any squad roster.`;
+          : `On Day ${shieldFact.day}, ${shieldFact.actorName} flash-stepped into lethal fire to shield you, proving bonds outlast any warfront.`;
     arcs.push({
       id: 'arc_kizuna',
-      title: `Shadow of Old ${state.team ? `Team ${state.team.number}` : 'Comrades'}`,
+      title: partnerIntercepts.length > 0 && protects.length === 0 ? 'Vigil of the War Partner' : `Shadow of Old ${teamLabel}`,
       tone: 'bond',
       summary,
     });
@@ -121,6 +146,10 @@ export function generateWarChronicle(
         : `Dawn After the ${war.crisisId === 'calamity' ? 'Calamity' : 'Shadow Conspiracy'}`;
   } else if (outcome === 'shared') {
     title = `The Armistice of Two Survivors (War #${war.warNumber})`;
+  } else if (arcIds.has('arc_partner_defect')) {
+    title = `The War of the Shattered Flank (War #${war.warNumber})`;
+  } else if (arcIds.has('arc_partner_sacrifice')) {
+    title = `The Shield That Never Yielded (War #${war.warNumber})`;
   } else if (arcIds.has('arc_betrayal')) {
     title = `The Season of Broken Oaths (War #${war.warNumber})`;
   } else if (arcIds.has('arc_kizuna')) {

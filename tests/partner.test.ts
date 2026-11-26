@@ -13,6 +13,7 @@ import {
 } from '../src/sim/combat';
 import { buildPosthumousEpilogue, buildRetirementEventDecision } from '../src/sim/epilogue';
 import { createNewLife } from '../src/sim/life';
+import { detectWarArcs, recordWarFact } from '../src/sim/narrative';
 import {
   adjustPartnerTrust,
   applyResolvePartnerReaction,
@@ -21,7 +22,7 @@ import {
 } from '../src/sim/partner';
 import { promoteRank } from '../src/sim/ranks';
 import { SeededRng } from '../src/sim/rng';
-import { concludeWar, handleWarDecision, initWarState, startWarBattle } from '../src/sim/war';
+import { concludeWar, ensureWarClockDefaults, handleWarDecision, initWarState, startWarBattle } from '../src/sim/war';
 
 describe('Mechanics Overhaul K1-K6: War Partner, Kuchiyose Od, Finale & Content Pools', () => {
   it('K1/K3: exp(fit/8) affinity weighting heavily favors high-fit candidates across large seeded samples', () => {
@@ -222,5 +223,65 @@ describe('Mechanics Overhaul K1-K6: War Partner, Kuchiyose Od, Finale & Content 
         expect(opt.reactions && Object.keys(opt.reactions).length > 0, `Missing reactions on ${cr.id}/${opt.id}`).toBe(true);
       }
     }
+  });
+
+  it('regressions: migrates legacy war saves safely, expires od_ward after 1 round, and detects partner war arcs', () => {
+    const state = createNewLife(7199, { crisisOverride: 'none' });
+    state.age = 22;
+    promoteRank(state, 'chunin');
+    state.disciplines.push({
+      id: 'barrier',
+      level: 2,
+      xp: 10,
+      lastLevelAge: 19,
+      quality: 1,
+      isMain: false,
+      declinedUntilAge: 0,
+    });
+    const rng = new SeededRng(9191);
+    state.war = initWarState(state, rng, false, 'front');
+    const enemy = state.war.enemies[0];
+    enemy.hp = 200;
+    startWarBattle(state, enemy.id, { isFinal: false, isAmbush: true, isDefense: false });
+
+    // 1. Simulate legacy save missing K1/K2/K3 fields
+    const rawWar = state.war as unknown as Record<string, unknown>;
+    delete rawWar.usedPartnerScenes;
+    delete rawWar.partner;
+    const rawBattle = state.war.activeBattle as unknown as Record<string, unknown>;
+    delete rawBattle.od;
+    delete rawBattle.odMax;
+    delete rawBattle.odUsedCount;
+    ensureWarClockDefaults(state.war);
+    expect(Array.isArray(state.war.usedPartnerScenes)).toBe(true);
+    expect(state.war.partner).toBeNull();
+    expect(state.war.activeBattle!.od).toBeGreaterThan(0);
+
+    // 2. od_ward applies for the current round and expires cleanly to 0 at end of round
+    state.war.activeBattle!.od = 40;
+    state.war.activeBattle!.playerWardRounds = 0;
+    resolveBattleRound(state, 'taijutsu', rng, 'od_ward');
+    expect(state.war.activeBattle!.playerWardRounds).toBe(0);
+
+    // 3. Partner facts surface in detectWarArcs
+    recordWarFact(state.war, {
+      type: 'partner_intercept',
+      actorId: 'p1',
+      actorName: 'Shun Hatake',
+      targetId: 'player',
+      targetName: state.name,
+      detail: 'Shun Hatake intercepted 12 damage',
+    });
+    recordWarFact(state.war, {
+      type: 'partner_down',
+      actorId: 'p1',
+      actorName: 'Shun Hatake',
+      targetId: 'player',
+      targetName: state.name,
+      detail: 'Shun Hatake fell in action shielding you',
+    });
+    const arcs = detectWarArcs(state, state.war);
+    expect(arcs.some((a) => a.id === 'arc_partner_sacrifice')).toBe(true);
+    expect(arcs.some((a) => a.id === 'arc_kizuna')).toBe(true);
   });
 });

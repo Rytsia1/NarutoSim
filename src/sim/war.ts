@@ -78,6 +78,13 @@ export function ensureWarClockDefaults(war: WarState): void {
   if (typeof war.statusText !== 'string') war.statusText = 'Holding sector perimeter...';
   if (!Array.isArray(war.npcNightActed)) war.npcNightActed = [];
   if (typeof war.npcExtraRaidPressure !== 'number') war.npcExtraRaidPressure = 0;
+  if (!Array.isArray(war.usedPartnerScenes)) war.usedPartnerScenes = [];
+  if (war.partner === undefined) war.partner = null;
+  if (war.activeBattle) {
+    if (typeof war.activeBattle.odMax !== 'number') war.activeBattle.odMax = 24;
+    if (typeof war.activeBattle.od !== 'number') war.activeBattle.od = war.activeBattle.odMax;
+    if (typeof war.activeBattle.odUsedCount !== 'number') war.activeBattle.odUsedCount = 0;
+  }
 }
 
 export function enqueueWarBeat(war: WarState, beat: WarBeat): void {
@@ -843,7 +850,7 @@ export function openDayPhase(state: GameState, rng: SeededRng): void {
     }
   }
 
-  // Priority 6.5: War Partner Bond Scene (K2 — Trust >= 60, up to 2 per war)
+  // Priority 6.5: War Partner Bond Scene (K2: Trust >= 60, up to 2 per war)
   if (
     war.partner &&
     war.partner.active &&
